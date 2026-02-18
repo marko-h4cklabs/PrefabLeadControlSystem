@@ -5,7 +5,7 @@ const {
   conversationRepository,
 } = require('../db/repositories');
 
-const MODEL = 'claude-3-5-sonnet-20241022';
+const MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest';
 
 function buildSystemPrompt(company, fields, parsedFields) {
   const style = company.chatbot_style ?? {};
