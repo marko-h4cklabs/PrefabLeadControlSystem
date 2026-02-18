@@ -3,7 +3,7 @@ const router = express.Router({ mergeParams: true });
 const { leadRepository, conversationRepository } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 
-const VALID_CHANNELS = ['instagram', 'messenger', 'email'];
+const VALID_CHANNELS = ['messenger', 'instagram', 'whatsapp', 'telegram', 'email'];
 
 function normalizeAndValidateChannel(input) {
   const channel = String(input ?? '').trim().toLowerCase();
@@ -35,7 +35,7 @@ router.post('/', async (req, res) => {
     const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
     if (!valid) {
       return res.status(400).json({
-        error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: instagram, messenger, email` : 'channel is required',
+        error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required',
         allowed: [...VALID_CHANNELS],
       });
     }
@@ -163,8 +163,19 @@ router.post('/:leadId/messages', async (req, res) => {
 router.patch('/:leadId', async (req, res) => {
   try {
     const companyId = req.params.id;
-    const { assigned_sales } = req.body;
-    const lead = await leadRepository.update(companyId, req.params.leadId, { assigned_sales });
+    const { assigned_sales, channel: rawChannel } = req.body;
+    const updateData = { assigned_sales };
+    if (rawChannel !== undefined) {
+      const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
+      if (!valid) {
+        return res.status(400).json({
+          error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required',
+          allowed: [...VALID_CHANNELS],
+        });
+      }
+      updateData.channel = normalized;
+    }
+    const lead = await leadRepository.update(companyId, req.params.leadId, updateData);
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
     }
