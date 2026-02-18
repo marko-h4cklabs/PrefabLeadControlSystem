@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
-const { leadRepository } = require('../../../db/repositories');
+const { leadRepository, conversationRepository } = require('../../../db/repositories');
 
 const VALID_CHANNELS = ['instagram', 'messenger', 'email'];
 
@@ -64,11 +64,43 @@ router.get('/:leadId/conversation', async (req, res) => {
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found' });
     }
+    let conversation = await conversationRepository.getByLeadId(leadId);
+    if (!conversation) {
+      conversation = await conversationRepository.createIfNotExists(leadId);
+    }
     res.json({
       lead_id: leadId,
-      messages: [],
-      parsed_fields: {},
-      current_step: 0,
+      messages: conversation.messages,
+      parsed_fields: conversation.parsed_fields,
+      current_step: conversation.current_step,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:leadId/messages', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    const leadId = req.params.leadId;
+    const { role, content } = req.body;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    if (!role || !content) {
+      return res.status(400).json({ error: 'role and content are required' });
+    }
+    let conversation = await conversationRepository.getByLeadId(leadId);
+    if (!conversation) {
+      conversation = await conversationRepository.createIfNotExists(leadId);
+    }
+    conversation = await conversationRepository.appendMessage(leadId, role, content);
+    res.json({
+      lead_id: leadId,
+      messages: conversation.messages,
+      parsed_fields: conversation.parsed_fields,
+      current_step: conversation.current_step,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
