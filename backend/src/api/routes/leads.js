@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
 const { leadRepository, conversationRepository } = require('../../../db/repositories');
+const aiReplyService = require('../../../services/aiReplyService');
 
 const VALID_CHANNELS = ['instagram', 'messenger', 'email'];
 
@@ -75,6 +76,50 @@ router.get('/:leadId/conversation', async (req, res) => {
       current_step: conversation.current_step,
     });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:leadId/ai-reply', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    const leadId = req.params.leadId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    const result = await aiReplyService.generateAiReply(companyId, leadId);
+
+    await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
+
+    let conversation = await conversationRepository.getByLeadId(leadId);
+    const currentParsed = conversation.parsed_fields ?? {};
+    const merged = { ...currentParsed };
+    for (const [key, value] of Object.entries(result.field_updates ?? {})) {
+      const isNonEmpty =
+        value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
+      if (isNonEmpty) {
+        merged[key] = value;
+      }
+    }
+    const hasChanges =
+      Object.keys(merged).length !== Object.keys(currentParsed).length ||
+      JSON.stringify(merged) !== JSON.stringify(currentParsed);
+    if (hasChanges) {
+      await conversationRepository.updateParsedFields(leadId, merged);
+    }
+
+    conversation = await conversationRepository.getByLeadId(leadId);
+    res.json({
+      lead_id: leadId,
+      messages: conversation.messages,
+      parsed_fields: conversation.parsed_fields,
+      current_step: conversation.current_step,
+    });
+  } catch (err) {
+    if (err.message?.includes('Invalid JSON') || err.message?.includes('assistant_message') || err.message?.includes('field_updates')) {
+      return res.status(500).json({ error: 'AI response invalid', details: err.message });
+    }
     res.status(500).json({ error: err.message });
   }
 });
