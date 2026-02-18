@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const authRouter = require('./api/routes/auth');
 const companiesRouter = require('./api/routes/companies');
+const leadsFlatRouter = require('./api/routes/leadsFlat');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -57,6 +58,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authLimiter, authRouter);
 
 app.use('/api/companies', authMiddleware, tenantMiddleware, apiLimiter, companiesRouter);
+app.use('/api/leads', authMiddleware, tenantMiddleware, apiLimiter, leadsFlatRouter);
 
 app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {

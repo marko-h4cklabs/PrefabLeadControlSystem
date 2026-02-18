@@ -3,8 +3,13 @@ const router = express.Router({ mergeParams: true });
 const { leadRepository, conversationRepository } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { errorJson } = require('../middleware/errors');
-
-const VALID_CHANNELS = ['messenger', 'instagram', 'whatsapp', 'telegram', 'email'];
+const {
+  VALID_CHANNELS,
+  VALID_STATUSES,
+  listLeadsQuerySchema,
+  createLeadBodySchema,
+  updateLeadBodySchema,
+} = require('../validators/leadSchemas');
 
 function normalizeAndValidateChannel(input) {
   const channel = String(input ?? '').trim().toLowerCase();
@@ -15,13 +20,23 @@ function normalizeAndValidateChannel(input) {
 
 router.get('/', async (req, res) => {
   try {
-    const { status, limit, offset } = req.query;
+    const parsed = listLeadsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid query parameters',
+          details: parsed.error.flatten().fieldErrors,
+        },
+      });
+    }
+    const { limit, offset, status } = parsed.data;
     const leads = await leadRepository.findAll(req.tenantId, {
-      status: status || undefined,
-      limit: limit ? parseInt(limit, 10) : 50,
-      offset: offset ? parseInt(offset, 10) : 0,
+      status,
+      limit,
+      offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status: status || undefined });
+    const total = await leadRepository.count(req.tenantId, { status });
     res.json({ leads, total });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -30,15 +45,21 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { channel: rawChannel, external_id } = req.body;
-    const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
-    if (!valid) {
-      const msg = normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required';
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg }, allowed: [...VALID_CHANNELS] });
+    const parsed = createLeadBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: err.formErrors?.join?.(' ') || 'Validation failed',
+          details: err.fieldErrors,
+        },
+      });
     }
+    const { channel, external_id } = parsed.data;
     const lead = await leadRepository.create(req.tenantId, {
-      channel: normalized,
-      external_id: external_id ?? null,
+      channel,
+      external_id,
     });
     res.status(201).json(lead);
   } catch (err) {
@@ -155,16 +176,21 @@ router.post('/:leadId/messages', async (req, res) => {
 
 router.patch('/:leadId', async (req, res) => {
   try {
-    const { assigned_sales, channel: rawChannel } = req.body;
-    const updateData = { assigned_sales };
-    if (rawChannel !== undefined) {
-      const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
-      if (!valid) {
-        const msg = normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required';
-        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg }, allowed: [...VALID_CHANNELS] });
-      }
-      updateData.channel = normalized;
+    const parsed = updateLeadBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: err.formErrors?.join?.(' ') || 'Validation failed',
+          details: err.fieldErrors,
+        },
+      });
     }
+    const updateData = {};
+    if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
+    if (parsed.data.assigned_sales !== undefined) updateData.assigned_sales = parsed.data.assigned_sales;
+    if (parsed.data.channel !== undefined) updateData.channel = parsed.data.channel;
     const lead = await leadRepository.update(req.tenantId, req.params.leadId, updateData);
     if (!lead) {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
