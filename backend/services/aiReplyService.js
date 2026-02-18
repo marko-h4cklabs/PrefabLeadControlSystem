@@ -5,7 +5,8 @@ const {
   conversationRepository,
 } = require('../db/repositories');
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+console.log('Anthropic model:', model);
 
 function buildSystemPrompt(company, fields, parsedFields) {
   const style = company.chatbot_style ?? {};
@@ -57,9 +58,6 @@ function buildUserPrompt(messages) {
 }
 
 async function callClaude(systemPrompt, userPrompt) {
-  const model = MODEL;
-  console.log('Using Claude model:', model);
-
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
   });
