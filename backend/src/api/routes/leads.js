@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router({ mergeParams: true });
 const { leadRepository, conversationRepository } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
+const { errorJson } = require('../middleware/errors');
 
 const VALID_CHANNELS = ['messenger', 'instagram', 'whatsapp', 'telegram', 'email'];
 
@@ -14,64 +15,58 @@ function normalizeAndValidateChannel(input) {
 
 router.get('/', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const { status, limit, offset } = req.query;
-    const leads = await leadRepository.findAll(companyId, {
+    const leads = await leadRepository.findAll(req.tenantId, {
       status: status || undefined,
       limit: limit ? parseInt(limit, 10) : 50,
       offset: offset ? parseInt(offset, 10) : 0,
     });
-    const total = await leadRepository.count(companyId, { status: status || undefined });
+    const total = await leadRepository.count(req.tenantId, { status: status || undefined });
     res.json({ leads, total });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.post('/', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const { channel: rawChannel, external_id } = req.body;
     const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
     if (!valid) {
-      return res.status(400).json({
-        error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required',
-        allowed: [...VALID_CHANNELS],
-      });
+      const msg = normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required';
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg }, allowed: [...VALID_CHANNELS] });
     }
-    const lead = await leadRepository.create(companyId, {
+    const lead = await leadRepository.create(req.tenantId, {
       channel: normalized,
       external_id: external_id ?? null,
     });
     res.status(201).json(lead);
   } catch (err) {
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'Lead already exists for this channel/external_id' });
+      return res.status(409).json({ error: { code: 'CONFLICT', message: 'Lead already exists for this channel/external_id' } });
     }
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.get('/:leadId', async (req, res) => {
   try {
-    const companyId = req.params.id;
-    const lead = await leadRepository.findById(companyId, req.params.leadId);
+    const lead = await leadRepository.findById(req.tenantId, req.params.leadId);
     if (!lead) {
-      return res.status(404).json({ error: 'Lead not found' });
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
     res.json(lead);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.get('/:leadId/conversation', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const leadId = req.params.leadId;
-    const lead = await leadRepository.findById(companyId, leadId);
+    const lead = await leadRepository.findById(req.tenantId, leadId);
     if (!lead) {
-      return res.status(404).json({ error: 'Lead not found' });
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
     let conversation = await conversationRepository.getByLeadId(leadId);
     if (!conversation) {
@@ -84,19 +79,18 @@ router.get('/:leadId/conversation', async (req, res) => {
       current_step: conversation.current_step,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.post('/:leadId/ai-reply', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const leadId = req.params.leadId;
-    const lead = await leadRepository.findById(companyId, leadId);
+    const lead = await leadRepository.findById(req.tenantId, leadId);
     if (!lead) {
-      return res.status(404).json({ error: 'Lead not found' });
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
-    const result = await aiReplyService.generateAiReply(companyId, leadId);
+    const result = await aiReplyService.generateAiReply(req.tenantId, leadId);
 
     await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
 
@@ -126,23 +120,22 @@ router.post('/:leadId/ai-reply', async (req, res) => {
     });
   } catch (err) {
     if (err.message?.includes('Invalid JSON') || err.message?.includes('assistant_message') || err.message?.includes('field_updates')) {
-      return res.status(500).json({ error: 'AI response invalid', details: err.message });
+      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'AI response invalid', details: err.message } });
     }
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.post('/:leadId/messages', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const leadId = req.params.leadId;
     const { role, content } = req.body;
-    const lead = await leadRepository.findById(companyId, leadId);
+    const lead = await leadRepository.findById(req.tenantId, leadId);
     if (!lead) {
-      return res.status(404).json({ error: 'Lead not found' });
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
     if (!role || !content) {
-      return res.status(400).json({ error: 'role and content are required' });
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'role and content are required' } });
     }
     let conversation = await conversationRepository.getByLeadId(leadId);
     if (!conversation) {
@@ -156,32 +149,29 @@ router.post('/:leadId/messages', async (req, res) => {
       current_step: conversation.current_step,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
 router.patch('/:leadId', async (req, res) => {
   try {
-    const companyId = req.params.id;
     const { assigned_sales, channel: rawChannel } = req.body;
     const updateData = { assigned_sales };
     if (rawChannel !== undefined) {
       const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
       if (!valid) {
-        return res.status(400).json({
-          error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required',
-          allowed: [...VALID_CHANNELS],
-        });
+        const msg = normalized ? `Invalid channel: "${rawChannel}". Must be one of: messenger, instagram, whatsapp, telegram, email` : 'channel is required';
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg }, allowed: [...VALID_CHANNELS] });
       }
       updateData.channel = normalized;
     }
-    const lead = await leadRepository.update(companyId, req.params.leadId, updateData);
+    const lead = await leadRepository.update(req.tenantId, req.params.leadId, updateData);
     if (!lead) {
-      return res.status(404).json({ error: 'Lead not found' });
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
     res.json(lead);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 

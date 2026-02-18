@@ -1,23 +1,23 @@
-/**
- * MVP tenant context: reads x-company-id header.
- * In production, replace with JWT/session-based auth.
- */
+const { errorResponse } = require('./auth');
+
 function tenantMiddleware(req, res, next) {
-  const companyId = req.headers['x-company-id'];
-  if (!companyId) {
-    return res.status(401).json({ error: 'Missing x-company-id header' });
+  if (!req.user) {
+    return errorResponse(res, 401, 'Authentication required', 'UNAUTHORIZED');
   }
-  req.companyId = companyId;
+  req.tenantId = req.user.companyId;
+  const headerCompanyId = req.headers['x-company-id'];
+  if (headerCompanyId && headerCompanyId.trim() !== '') {
+    if (headerCompanyId.trim() !== req.tenantId) {
+      return errorResponse(res, 403, 'x-company-id does not match authenticated tenant', 'FORBIDDEN');
+    }
+  }
   next();
 }
 
-/**
- * Validates that req.params.id matches tenant context.
- * Use for routes like /api/companies/:id
- */
 function requireCompanyMatch(req, res, next) {
-  if (req.params.id !== req.companyId) {
-    return res.status(403).json({ error: 'Company ID does not match tenant context' });
+  const paramId = req.params.id;
+  if (paramId !== req.tenantId) {
+    return errorResponse(res, 403, 'Company ID does not match authenticated tenant', 'FORBIDDEN');
   }
   next();
 }
