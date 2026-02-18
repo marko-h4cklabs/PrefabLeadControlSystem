@@ -5,6 +5,13 @@ const aiReplyService = require('../../../services/aiReplyService');
 
 const VALID_CHANNELS = ['instagram', 'messenger', 'email'];
 
+function normalizeAndValidateChannel(input) {
+  const channel = String(input ?? '').trim().toLowerCase();
+  if (!channel) return { valid: false, normalized: null };
+  if (!VALID_CHANNELS.includes(channel)) return { valid: false, normalized: channel };
+  return { valid: true, normalized: channel };
+}
+
 router.get('/', async (req, res) => {
   try {
     const companyId = req.params.id;
@@ -24,15 +31,16 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const companyId = req.params.id;
-    const { channel, external_id } = req.body;
-    if (!channel) {
-      return res.status(400).json({ error: 'channel is required' });
-    }
-    if (!VALID_CHANNELS.includes(channel)) {
-      return res.status(400).json({ error: 'channel must be one of: instagram, messenger, email' });
+    const { channel: rawChannel, external_id } = req.body;
+    const { valid, normalized } = normalizeAndValidateChannel(rawChannel);
+    if (!valid) {
+      return res.status(400).json({
+        error: normalized ? `Invalid channel: "${rawChannel}". Must be one of: instagram, messenger, email` : 'channel is required',
+        allowed: [...VALID_CHANNELS],
+      });
     }
     const lead = await leadRepository.create(companyId, {
-      channel,
+      channel: normalized,
       external_id: external_id ?? null,
     });
     res.status(201).json(lead);

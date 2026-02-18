@@ -1,0 +1,19 @@
+---
+description: Auto-commit and push backend changes to backend-dev after coding tasks
+alwaysApply: true
+---
+
+# Backend Auto-Push to GitHub
+
+After completing any task that involves writing or modifying backend code:
+
+1. **Stage** all changed backend files: `git add backend/`
+2. **Commit** with a descriptive message summarizing the changes
+3. **Push** to `origin backend-dev`: `git push origin backend-dev`
+
+Do this automatically at the end of the task—do not wait for the user to ask.
+
+Skip if:
+- The user explicitly says "do not commit" or "do not push"
+- No backend files were actually changed
+- The task was informational only (no code written)
