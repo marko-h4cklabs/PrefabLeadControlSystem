@@ -101,7 +101,7 @@ router.post('/company-info/scrape', async (req, res) => {
     }
     await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
     startScrapeJob(req.tenantId);
-    res.json({ status: 'queued' });
+    res.status(202).json({ status: 'queued' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
