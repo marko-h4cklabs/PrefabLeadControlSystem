@@ -1,17 +1,12 @@
-const PROMPT = `You are a business analyst. Summarize the scraped website content into a structured format.
+const PROMPT = `You are a business analyst. Produce a structured "deep dive" summary from the scraped website content.
 
-Output a JSON object with these keys (use empty string or empty array if not found):
-- company_overview: string (2-4 sentences about the company)
-- services: array of strings (bullet points of services)
-- locations_service_area: string (locations or service area if present)
-- quote_notes: string (anything relevant for quoting/sales)
+Output sections:
+- What the company does (2-4 sentences)
+- Main services/products (bullets)
+- Target customer / geography (bullets if inferable)
+- Quote-relevant notes (bullets)
 
-Then convert to a single formatted paragraph suitable for a chatbot business_description. Use the format:
-Paragraph 1: company_overview.
-Paragraph 2: Services: [bullet list]. [locations if present].
-Paragraph 3: [quote_notes if present].
-
-Output ONLY the final formatted paragraph string, no JSON.`;
+Format as a single cohesive text suitable for a chatbot business_description. Use clear section headers and bullet points where appropriate. Output ONLY the formatted text, no JSON.`;
 
 function fallbackSummary(text) {
   const first = (text || '').slice(0, 2000).trim();

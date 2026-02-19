@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const { startQueue } = require('./queue');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -75,6 +76,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+async function main() {
+  try {
+    await startQueue();
+  } catch (err) {
+    console.error('[queue] Failed to start:', err.message);
+  }
+  app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+  });
+}
+
+main();

@@ -5,7 +5,7 @@ const {
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
 } = require('../../../db/repositories');
-const { startScrapeJob } = require('../../services/scrapeService');
+const { sendScrapeJob } = require('../../queue');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const {
   companyInfoBodySchema,
@@ -100,7 +100,13 @@ router.post('/company-info/scrape', async (req, res) => {
       await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
     }
     await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
-    startScrapeJob(req.tenantId);
+    try {
+      await sendScrapeJob(req.tenantId, normalized);
+    } catch (queueErr) {
+      console.error('[scrape] Queue error, falling back to inline:', queueErr.message);
+      const { startScrapeJob } = require('../../services/scrapeService');
+      startScrapeJob(req.tenantId);
+    }
     res.status(202).json({ status: 'queued' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);

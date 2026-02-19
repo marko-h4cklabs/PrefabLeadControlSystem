@@ -8,6 +8,7 @@ const analyticsSnapshotRepository = require('./analyticsSnapshotRepository');
 const chatbotCompanyInfoRepository = require('./chatbotCompanyInfoRepository');
 const chatbotBehaviorRepository = require('./chatbotBehaviorRepository');
 const chatbotQuoteFieldsRepository = require('./chatbotQuoteFieldsRepository');
+const chatbotScrapedPagesRepository = require('./chatbotScrapedPagesRepository');
 
 module.exports = {
   companyRepository,
@@ -20,4 +21,5 @@ module.exports = {
   chatbotCompanyInfoRepository,
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
+  chatbotScrapedPagesRepository,
 };

@@ -140,7 +140,7 @@ async function setScrapeStatus(companyId, status, opts = {}) {
     updates.push(`business_description = $${i++}`);
     values.push(business_description);
   }
-  if (status === 'done' || status === 'error' || status === 'finished' || status === 'failed') {
+  if (['done', 'error', 'finished', 'failed'].includes(status)) {
     updates.push('scrape_finished_at = NOW()');
   }
   await pool.query(
@@ -162,4 +162,18 @@ async function setScrapeFinished(companyId, scrapedSummary) {
   );
 }
 
-module.exports = { get, upsert, setLastScrapeRequested, appendScrapeNote, setScrapeQueued, setScrapeStatus, setScrapeFinished };
+async function setScrapeDone(companyId, scrapedSummary) {
+  await pool.query(
+    `UPDATE chatbot_company_info SET
+      scrape_status = 'done',
+      scraped_summary = $2,
+      business_description = CASE WHEN COALESCE(TRIM(business_description), '') = '' THEN $2 ELSE business_description END,
+      scrape_finished_at = NOW(),
+      scrape_error = NULL,
+      updated_at = NOW()
+     WHERE company_id = $1`,
+    [companyId, scrapedSummary]
+  );
+}
+
+module.exports = { get, upsert, setLastScrapeRequested, appendScrapeNote, setScrapeQueued, setScrapeStatus, setScrapeFinished, setScrapeDone };
