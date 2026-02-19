@@ -53,16 +53,42 @@ router.put('/company-info', async (req, res) => {
   }
 });
 
+function normalizeAndValidateUrl(raw) {
+  let s = (raw || '').trim();
+  if (!s) return null;
+  if (s.startsWith('//')) s = 'https:' + s;
+  else if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
+  try {
+    new URL(s);
+    return s;
+  } catch {
+    return null;
+  }
+}
+
 router.post('/company-info/scrape', async (req, res) => {
   try {
-    const info = await chatbotCompanyInfoRepository.get(req.tenantId);
-    if (!info.website_url || info.website_url.trim() === '') {
+    let websiteUrl = (req.body?.website_url || '').trim();
+    if (!websiteUrl) {
+      const info = await chatbotCompanyInfoRepository.get(req.tenantId);
+      websiteUrl = (info.website_url || '').trim();
+    }
+    if (!websiteUrl) {
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'website_url is required to trigger scrape' },
       });
     }
+    const normalized = normalizeAndValidateUrl(websiteUrl);
+    if (!normalized) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'website_url must be a valid URL' },
+      });
+    }
+    if (req.body?.website_url != null && String(req.body.website_url).trim() !== '') {
+      await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
+    }
     await chatbotCompanyInfoRepository.appendScrapeNote(req.tenantId);
-    res.json({ status: 'queued' });
+    res.json({ status: 'ok' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
