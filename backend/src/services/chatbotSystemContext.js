@@ -17,7 +17,6 @@ function buildSystemContext(companyInfo, behavior, quoteFields) {
   if (info.additional_notes) {
     parts.push(`Notes: ${info.additional_notes}`);
   }
-  parts.push('Website content (once available) is treated as knowledge base.');
 
   parts.push('\n## Response style');
   parts.push(`Tone: ${beh.tone ?? 'professional'}`);

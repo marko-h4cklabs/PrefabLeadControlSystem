@@ -5,7 +5,6 @@ const {
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
 } = require('../../../db/repositories');
-const { sendScrapeJob } = require('../../queue');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const {
   companyInfoBodySchema,
@@ -26,18 +25,11 @@ function validationError(res, parsed) {
 
 router.get('/company-info', async (req, res) => {
   try {
-    res.set('Cache-Control', 'no-store');
-    res.set('X-Poll-Interval', '5000');
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
     res.json({
       website_url: info.website_url ?? '',
       business_description: info.business_description ?? '',
       additional_notes: info.additional_notes ?? '',
-      scrape_status: info.scrape_status ?? 'idle',
-      scrape_started_at: info.scrape_started_at,
-      scrape_finished_at: info.scrape_finished_at,
-      scrape_error: info.scrape_error,
-      scraped_summary: info.scraped_summary,
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -50,63 +42,12 @@ router.put('/company-info', async (req, res) => {
     if (!parsed.success) {
       return validationError(res, parsed);
     }
-    const data = { ...parsed.data };
-    const inProgress = ['queued', 'running', 'summarizing'];
-    const info = await chatbotCompanyInfoRepository.get(req.tenantId);
-    if (inProgress.includes(info.scrape_status) && data.business_description !== undefined) {
-      delete data.business_description;
-    }
-    const saved = await chatbotCompanyInfoRepository.upsert(req.tenantId, data);
+    const saved = await chatbotCompanyInfoRepository.upsert(req.tenantId, parsed.data);
     res.json({
       website_url: saved.website_url,
       business_description: saved.business_description,
       additional_notes: saved.additional_notes,
     });
-  } catch (err) {
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
-  }
-});
-
-function normalizeAndValidateUrl(raw) {
-  let s = (raw || '').trim();
-  if (!s) return null;
-  if (s.startsWith('//')) s = 'https:' + s;
-  else if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
-  try {
-    new URL(s);
-    return s;
-  } catch {
-    return null;
-  }
-}
-
-router.post('/company-info/scrape', async (req, res) => {
-  try {
-    const websiteUrl = (req.body?.website_url ?? '').trim();
-    if (!websiteUrl) {
-      return res.status(400).json({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'website_url is required. Enter the website URL first, then click Scrape.',
-        },
-      });
-    }
-    const normalized = normalizeAndValidateUrl(websiteUrl);
-    if (!normalized) {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'website_url must be a valid URL' },
-      });
-    }
-    await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
-    await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
-    try {
-      await sendScrapeJob(req.tenantId, normalized);
-    } catch (queueErr) {
-      console.error('[scrape] Queue error, falling back to inline:', queueErr.message);
-      const { startScrapeJob } = require('../../services/scrapeService');
-      startScrapeJob(req.tenantId);
-    }
-    res.status(202).json({ status: 'queued' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
