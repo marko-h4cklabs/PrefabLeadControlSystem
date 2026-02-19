@@ -27,6 +27,7 @@ function validationError(res, parsed) {
 router.get('/company-info', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
+    res.set('X-Poll-Interval', '5000');
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
     res.json({
       website_url: info.website_url ?? '',
@@ -81,14 +82,13 @@ function normalizeAndValidateUrl(raw) {
 
 router.post('/company-info/scrape', async (req, res) => {
   try {
-    let websiteUrl = (req.body?.website_url || '').trim();
-    if (!websiteUrl) {
-      const info = await chatbotCompanyInfoRepository.get(req.tenantId);
-      websiteUrl = (info.website_url || '').trim();
-    }
+    const websiteUrl = (req.body?.website_url ?? '').trim();
     if (!websiteUrl) {
       return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'website_url is required to trigger scrape' },
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'website_url is required. Enter the website URL first, then click Scrape.',
+        },
       });
     }
     const normalized = normalizeAndValidateUrl(websiteUrl);
@@ -97,9 +97,7 @@ router.post('/company-info/scrape', async (req, res) => {
         error: { code: 'VALIDATION_ERROR', message: 'website_url must be a valid URL' },
       });
     }
-    if (req.body?.website_url != null && String(req.body.website_url).trim() !== '') {
-      await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
-    }
+    await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
     await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
     try {
       await sendScrapeJob(req.tenantId);
