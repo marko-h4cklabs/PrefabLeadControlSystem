@@ -4,11 +4,18 @@ const DEFAULTS = {
   website_url: '',
   business_description: '',
   additional_notes: '',
+  scrape_status: 'idle',
+  scrape_started_at: null,
+  scrape_finished_at: null,
+  scrape_error: null,
+  scraped_summary: null,
 };
 
 async function get(companyId) {
   const result = await pool.query(
-    'SELECT website_url, business_description, additional_notes, last_scrape_requested_at FROM chatbot_company_info WHERE company_id = $1',
+    `SELECT website_url, business_description, additional_notes, last_scrape_requested_at,
+      scrape_status, scrape_started_at, scrape_finished_at, scrape_error, scraped_summary
+     FROM chatbot_company_info WHERE company_id = $1`,
     [companyId]
   );
   const row = result.rows[0];
@@ -18,6 +25,11 @@ async function get(companyId) {
     business_description: row.business_description ?? '',
     additional_notes: row.additional_notes ?? '',
     last_scrape_requested_at: row.last_scrape_requested_at,
+    scrape_status: row.scrape_status ?? 'idle',
+    scrape_started_at: row.scrape_started_at,
+    scrape_finished_at: row.scrape_finished_at,
+    scrape_error: row.scrape_error,
+    scraped_summary: row.scraped_summary,
   };
 }
 
@@ -72,4 +84,45 @@ async function appendScrapeNote(companyId) {
   );
 }
 
-module.exports = { get, upsert, setLastScrapeRequested, appendScrapeNote };
+async function setScrapeQueued(companyId, websiteUrl) {
+  await pool.query(
+    `INSERT INTO chatbot_company_info (company_id, website_url, scrape_status, scrape_error, scrape_started_at, scrape_finished_at, updated_at)
+     VALUES ($1, $2, 'queued', NULL, NOW(), NULL, NOW())
+     ON CONFLICT (company_id) DO UPDATE SET
+       website_url = COALESCE($2, chatbot_company_info.website_url),
+       scrape_status = 'queued',
+       scrape_error = NULL,
+       scrape_started_at = NOW(),
+       scrape_finished_at = NULL,
+       updated_at = NOW()`,
+    [companyId, websiteUrl]
+  );
+}
+
+async function setScrapeStatus(companyId, status, opts = {}) {
+  const { scrape_error, scraped_summary, business_description } = opts;
+  const updates = ['scrape_status = $2', 'updated_at = NOW()'];
+  const values = [companyId, status];
+  let i = 3;
+  if (scrape_error !== undefined) {
+    updates.push(`scrape_error = $${i++}`);
+    values.push(scrape_error);
+  }
+  if (scraped_summary !== undefined) {
+    updates.push(`scraped_summary = $${i++}`);
+    values.push(scraped_summary);
+  }
+  if (business_description !== undefined) {
+    updates.push(`business_description = $${i++}`);
+    values.push(business_description);
+  }
+  if (status === 'done' || status === 'error') {
+    updates.push('scrape_finished_at = NOW()');
+  }
+  await pool.query(
+    `UPDATE chatbot_company_info SET ${updates.join(', ')} WHERE company_id = $1`,
+    values
+  );
+}
+
+module.exports = { get, upsert, setLastScrapeRequested, appendScrapeNote, setScrapeQueued, setScrapeStatus };

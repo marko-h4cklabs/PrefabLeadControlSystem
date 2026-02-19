@@ -5,6 +5,7 @@ const {
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
 } = require('../../../db/repositories');
+const { startScrapeJob } = require('../../services/scrapeService');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const {
   companyInfoBodySchema,
@@ -30,6 +31,11 @@ router.get('/company-info', async (req, res) => {
       website_url: info.website_url ?? '',
       business_description: info.business_description ?? '',
       additional_notes: info.additional_notes ?? '',
+      scrape_status: info.scrape_status ?? 'idle',
+      scrape_started_at: info.scrape_started_at,
+      scrape_finished_at: info.scrape_finished_at,
+      scrape_error: info.scrape_error,
+      scraped_summary: info.scraped_summary,
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -42,7 +48,13 @@ router.put('/company-info', async (req, res) => {
     if (!parsed.success) {
       return validationError(res, parsed);
     }
-    const saved = await chatbotCompanyInfoRepository.upsert(req.tenantId, parsed.data);
+    const data = { ...parsed.data };
+    const inProgress = ['queued', 'running', 'summarizing'];
+    const info = await chatbotCompanyInfoRepository.get(req.tenantId);
+    if (inProgress.includes(info.scrape_status) && data.business_description !== undefined) {
+      delete data.business_description;
+    }
+    const saved = await chatbotCompanyInfoRepository.upsert(req.tenantId, data);
     res.json({
       website_url: saved.website_url,
       business_description: saved.business_description,
@@ -87,8 +99,9 @@ router.post('/company-info/scrape', async (req, res) => {
     if (req.body?.website_url != null && String(req.body.website_url).trim() !== '') {
       await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
     }
-    await chatbotCompanyInfoRepository.appendScrapeNote(req.tenantId);
-    res.json({ status: 'ok' });
+    await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
+    startScrapeJob(req.tenantId);
+    res.json({ status: 'queued' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
