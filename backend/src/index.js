@@ -15,7 +15,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
-  .split(',')
+  .split(/[,\s]+/)
   .map((o) => o.trim())
   .filter(Boolean);
 
