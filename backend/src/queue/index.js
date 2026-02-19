@@ -25,11 +25,11 @@ async function startQueue() {
   return boss;
 }
 
-async function sendScrapeJob(companyId, websiteUrl) {
+async function sendScrapeJob(companyId) {
   if (!boss) {
     throw new Error('Queue not initialized');
   }
-  return boss.send(QUEUE_NAME, { companyId, websiteUrl });
+  return boss.send(QUEUE_NAME, { companyId });
 }
 
 async function stopQueue() {

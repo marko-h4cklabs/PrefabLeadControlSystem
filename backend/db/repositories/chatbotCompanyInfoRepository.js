@@ -110,13 +110,13 @@ async function appendScrapeNote(companyId) {
 async function setScrapeQueued(companyId, websiteUrl) {
   await pool.query(
     `INSERT INTO chatbot_company_info (company_id, website_url, last_scrape_requested_at, scrape_status, scrape_error, scrape_started_at, scrape_finished_at, updated_at)
-     VALUES ($1, $2, NOW(), 'queued', NULL, NOW(), NULL, NOW())
+     VALUES ($1, $2, NOW(), 'queued', NULL, NULL, NULL, NOW())
      ON CONFLICT (company_id) DO UPDATE SET
        website_url = COALESCE($2, chatbot_company_info.website_url),
        last_scrape_requested_at = NOW(),
        scrape_status = 'queued',
        scrape_error = NULL,
-       scrape_started_at = NOW(),
+       scrape_started_at = NULL,
        scrape_finished_at = NULL,
        updated_at = NOW()`,
     [companyId, websiteUrl]
@@ -128,6 +128,9 @@ async function setScrapeStatus(companyId, status, opts = {}) {
   const updates = ['scrape_status = $2', 'updated_at = NOW()'];
   const values = [companyId, status];
   let i = 3;
+  if (status === 'running') {
+    updates.push('scrape_started_at = NOW()', 'scrape_error = NULL');
+  }
   if (scrape_error !== undefined) {
     updates.push(`scrape_error = $${i++}`);
     values.push(scrape_error);
@@ -165,7 +168,7 @@ async function setScrapeFinished(companyId, scrapedSummary) {
 async function setScrapeDone(companyId, scrapedSummary) {
   await pool.query(
     `UPDATE chatbot_company_info SET
-      scrape_status = 'done',
+      scrape_status = 'finished',
       scraped_summary = $2,
       business_description = CASE WHEN COALESCE(TRIM(business_description), '') = '' THEN $2 ELSE business_description END,
       scrape_finished_at = NOW(),

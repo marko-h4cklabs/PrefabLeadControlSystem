@@ -26,6 +26,7 @@ function validationError(res, parsed) {
 
 router.get('/company-info', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store');
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
     res.json({
       website_url: info.website_url ?? '',
@@ -101,7 +102,7 @@ router.post('/company-info/scrape', async (req, res) => {
     }
     await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
     try {
-      await sendScrapeJob(req.tenantId, normalized);
+      await sendScrapeJob(req.tenantId);
     } catch (queueErr) {
       console.error('[scrape] Queue error, falling back to inline:', queueErr.message);
       const { startScrapeJob } = require('../../services/scrapeService');

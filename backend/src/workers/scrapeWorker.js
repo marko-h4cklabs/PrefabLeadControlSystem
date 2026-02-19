@@ -19,8 +19,28 @@ function aggregateContent(pages) {
 }
 
 async function handleScrapeJob(job) {
-  const { companyId, websiteUrl } = job.data;
-  console.log('[scrapeWorker] Job start', { companyId, websiteUrl });
+  const { companyId } = job.data;
+  const jobId = job.id;
+  console.log('[scrapeWorker] Job start', { companyId, jobId });
+
+  let info;
+  try {
+    info = await chatbotCompanyInfoRepository.get(companyId);
+  } catch (err) {
+    console.error('[scrapeWorker] Job fail: cannot load company info', { companyId, jobId, error: err.message });
+    throw err;
+  }
+
+  const websiteUrl = (info?.website_url || '').trim();
+  if (!websiteUrl) {
+    const msg = 'website_url is missing for company';
+    console.error('[scrapeWorker] Job fail:', { companyId, jobId, error: msg });
+    await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'failed', {
+      scrape_error: msg,
+      scraped_summary: null,
+    });
+    throw new Error(msg);
+  }
 
   try {
     await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'running');
@@ -32,11 +52,13 @@ async function handleScrapeJob(job) {
 
     const pages = await crawlWebsite(websiteUrl);
     if (!pages || pages.length === 0) {
+      const msg = 'No content returned from crawl API';
       await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'failed', {
-        scrape_error: 'No content returned from crawl API',
+        scrape_error: msg,
+        scraped_summary: null,
       });
-      console.log('[scrapeWorker] Job failed: no content');
-      return;
+      console.error('[scrapeWorker] Job fail: no content', { companyId, jobId });
+      throw new Error(msg);
     }
 
     await chatbotScrapedPagesRepository.upsertMany(companyId, pages);
@@ -45,13 +67,15 @@ async function handleScrapeJob(job) {
     const summary = await summarizeWithLLM(aggregated);
 
     await chatbotCompanyInfoRepository.setScrapeDone(companyId, summary);
-    console.log('[scrapeWorker] Job done', { companyId });
+    console.log('[scrapeWorker] Job finish', { companyId, jobId });
   } catch (err) {
-    console.error('[scrapeWorker] Job error', { companyId, error: err.message });
     const safeMsg = (err?.message || 'Scrape failed').slice(0, 500);
+    console.error('[scrapeWorker] Job fail', { companyId, jobId, error: safeMsg });
     await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'failed', {
       scrape_error: safeMsg,
+      scraped_summary: null,
     });
+    throw err;
   }
 }
 
