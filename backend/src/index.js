@@ -8,6 +8,7 @@ const companiesRouter = require('./api/routes/companies');
 const leadsFlatRouter = require('./api/routes/leadsFlat');
 const integrationsRouter = require('./api/routes/integrations');
 const adminRouter = require('./api/routes/admin');
+const chatbotRouter = require('./api/routes/chatbot');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -65,6 +66,7 @@ app.use('/api/companies', authMiddleware, tenantMiddleware, apiLimiter, companie
 app.use('/api/leads', authMiddleware, tenantMiddleware, apiLimiter, leadsFlatRouter);
 app.use('/api/integrations', apiLimiter, integrationsRouter);
 app.use('/api/admin', authMiddleware, tenantMiddleware, apiLimiter, adminRouter);
+app.use('/api/chatbot', authMiddleware, tenantMiddleware, apiLimiter, chatbotRouter);
 
 app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {
