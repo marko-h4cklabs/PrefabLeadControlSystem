@@ -4,12 +4,14 @@
  * @param {Object} companyInfo - { business_description, additional_notes }
  * @param {Array} quoteFields - Quote field definitions
  * @param {Object} collectedFields - Already collected { [fieldName]: value }
+ * @param {Array} requiredInfos - Missing required fields [{ name, type, units, priority }]
  */
-function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) {
+function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, requiredInfos = []) {
   const beh = behavior ?? {};
   const info = companyInfo ?? {};
   const fields = quoteFields ?? [];
   const collected = collectedFields ?? {};
+  const missing = requiredInfos ?? [];
   const parts = [];
 
   parts.push('You are a helpful sales assistant for a prefab/modular construction company.');
@@ -31,10 +33,17 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) 
     parts.push('');
   }
 
+  if (missing.length > 0) {
+    parts.push('## Required infos (missing - MUST ask for)');
+    parts.push(missing.map((m) => `${m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
+    parts.push('CRITICAL: You MUST ask for the highest priority missing field first. End with ONE direct question for that field.');
+    parts.push('');
+  }
+
   parts.push('## Response rules (MUST follow)');
 
   if (beh.persona_style === 'busy') {
-    parts.push('- Persona: BUSY. No greetings, no apologies, no "Got it"/"Noted"/"Thanks", no filler, no long explanations. Max brevity. One question at a time when collecting fields.');
+    parts.push('- Persona: BUSY. No greetings ("Hi", "Welcome", "Great choice", etc.), no filler ("Gotcha", "Sure", "Happy to help"), no apologies. Max brevity.');
   } else {
     parts.push('- Persona: Explanational. You may explain but still respect response_length.');
   }
@@ -44,7 +53,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) 
 
   const length = beh.response_length ?? 'medium';
   if (length === 'short') {
-    parts.push('- Length: SHORT. 1-2 short sentences max, OR bullet list with max 3 bullets. Never multi-paragraph.');
+    parts.push('- Length: SHORT. Max 2 short sentences OR max 3 bullets. End with ONE direct question for the missing required field.');
   } else if (length === 'medium') {
     parts.push('- Length: MEDIUM. Max 5 sentences.');
   } else {
@@ -56,7 +65,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) 
   }
 
   parts.push('');
-  parts.push('- Always prioritize collecting required quote fields if any are missing before giving long answers.');
+  parts.push('- If required_infos is not empty, the assistant MUST ask for the highest priority missing field.');
   parts.push('- If the user provides info for a quote field, acknowledge briefly and move on.');
 
   return parts.join('\n').trim();

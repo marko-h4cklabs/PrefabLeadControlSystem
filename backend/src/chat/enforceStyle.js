@@ -44,10 +44,24 @@ function enforceForbiddenTopics(text, forbiddenTopics, replacement) {
   return replacement || "I can't help with that. What is your [next required field]?";
 }
 
+function enforceMissingFieldQuestion(text, topMissingField) {
+  if (!text || !topMissingField?.name) return text;
+  const question = `What is your ${topMissingField.name}?`;
+  const lower = text.toLowerCase();
+  const fieldLower = topMissingField.name.toLowerCase();
+  if (lower.includes(fieldLower) && (lower.includes('?') || lower.endsWith('?'))) {
+    return text.trim();
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return question;
+  if (trimmed.endsWith('?')) return trimmed;
+  return `${trimmed} ${question}`;
+}
+
 function enforceStyle(text, behavior, options = {}) {
   let result = text || '';
   const beh = behavior ?? {};
-  const { nextRequiredField, forbiddenReplacement } = options;
+  const { nextRequiredField, topMissingField, forbiddenReplacement } = options;
 
   if (beh.emojis_enabled === false) {
     result = stripEmojis(result);
@@ -68,7 +82,12 @@ function enforceStyle(text, behavior, options = {}) {
     result = enforceForbiddenTopics(result, beh.forbidden_topics, repl);
   }
 
+  const missing = topMissingField ?? (nextRequiredField ? { name: nextRequiredField } : null);
+  if (missing?.name) {
+    result = enforceMissingFieldQuestion(result, missing);
+  }
+
   return result.trim() || text;
 }
 
-module.exports = { enforceStyle, stripEmojis, removeGreetingsAndFiller, limitToShort };
+module.exports = { enforceStyle, stripEmojis, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion };

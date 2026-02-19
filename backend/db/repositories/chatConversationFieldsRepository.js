@@ -25,10 +25,17 @@ async function getFields(conversationId, quoteFields = []) {
   });
 }
 
+function normalizeFieldName(name) {
+  if (name == null) return '';
+  return String(name).trim();
+}
+
 async function upsertField(conversationId, fieldName, fieldType, value) {
   if (value == null || (typeof value === 'string' && value.trim() === '')) {
     return;
   }
+  const name = normalizeFieldName(fieldName);
+  if (!name) return;
   const isNumber = fieldType === 'number';
   const valueText = isNumber ? null : String(value).trim();
   const valueNum = isNumber ? Number(value) : null;
@@ -41,8 +48,28 @@ async function upsertField(conversationId, fieldName, fieldType, value) {
        field_value_text = COALESCE(NULLIF(TRIM(EXCLUDED.field_value_text), ''), chat_conversation_fields.field_value_text),
        field_value_number = COALESCE(EXCLUDED.field_value_number, chat_conversation_fields.field_value_number),
        updated_at = NOW()`,
-    [conversationId, fieldName, valueText, valueNum, fieldType]
+    [conversationId, name, valueText, valueNum, fieldType]
   );
 }
 
-module.exports = { getFields, upsertField };
+/**
+ * Upsert multiple extracted fields. Never overwrite existing value with empty/null/undefined.
+ * @param {string} conversationId
+ * @param {Array} fields - [{ name, value, type, units }]
+ * @param {Object} quoteFieldMeta - { [fieldName]: { type, units } } for type/units lookup
+ */
+async function upsertMany(conversationId, fields, quoteFieldMeta = {}) {
+  const valid = (fields ?? []).filter(
+    (f) => f?.name != null && f?.value != null && String(f.value).trim() !== ''
+  );
+  for (const f of valid) {
+    const name = normalizeFieldName(f.name);
+    if (!name) continue;
+    const meta = quoteFieldMeta[name] ?? {};
+    const fieldType = (f.type ?? meta.type ?? 'text').toLowerCase();
+    const typeSafe = fieldType === 'number' ? 'number' : 'text';
+    await upsertField(conversationId, name, typeSafe, f.value);
+  }
+}
+
+module.exports = { getFields, upsertField, upsertMany };
