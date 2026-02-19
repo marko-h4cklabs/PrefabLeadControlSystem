@@ -39,7 +39,7 @@ async function findByEmail(companyId, email) {
 
 async function findByEmailOnly(email) {
   const result = await pool.query(
-    'SELECT * FROM users WHERE email = $1 LIMIT 1',
+    'SELECT * FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
     [email]
   );
   return toPlainUser(result.rows[0]);

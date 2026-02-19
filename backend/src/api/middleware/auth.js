@@ -17,7 +17,8 @@ async function authMiddleware(req, res, next) {
   }
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const { userId, companyId, role } = payload;
+    const userId = payload.id ?? payload.userId;
+    const { companyId, role } = payload;
     if (!userId || !companyId) {
       return errorResponse(res, 401, 'Invalid token payload', 'UNAUTHORIZED');
     }

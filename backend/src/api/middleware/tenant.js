@@ -5,6 +5,12 @@ function tenantMiddleware(req, res, next) {
     return errorResponse(res, 401, 'Authentication required', 'UNAUTHORIZED');
   }
   req.tenantId = req.user.companyId;
+  const headerCompanyId = req.headers['x-company-id'];
+  if (headerCompanyId != null && String(headerCompanyId).trim() !== '') {
+    if (String(headerCompanyId).trim() !== req.tenantId) {
+      return errorResponse(res, 403, 'x-company-id does not match authenticated tenant', 'FORBIDDEN');
+    }
+  }
   next();
 }
 
