@@ -12,6 +12,7 @@ const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
 const { callLLM } = require('../../chat/chatService');
 const { extractFieldsWithClaude } = require('../../chat/extractService');
+const { enforceStyle } = require('../../chat/enforceStyle');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -139,6 +140,7 @@ router.post('/chat', async (req, res) => {
     ]);
 
     const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    console.info('[chat] loaded quote fields:', orderedQuoteFields.map((f) => ({ name: f.name, type: f.type, required: f.required, priority: f.priority })));
 
     let conversation;
     if (reqConversationId) {
@@ -150,20 +152,22 @@ router.post('/chat', async (req, res) => {
       conversation = await chatConversationRepository.getOrCreateActiveConversation(companyId);
     }
     const conversationId = conversation.id;
+    console.info('[chat] conversation_id:', conversationId);
 
     await chatMessagesRepository.appendMessage(conversationId, 'user', message);
 
-    const extracted = await extractFieldsWithClaude(message, orderedQuoteFields);
-    if (Object.keys(extracted).length > 0) {
-      console.log('[chat] extracted fields:', extracted);
-      for (const [fieldName, obj] of Object.entries(extracted)) {
-        const fieldDef = orderedQuoteFields.find((f) => f.name === fieldName);
-        const fieldType = (obj?.type || fieldDef?.type || 'text').toLowerCase();
-        const fieldTypeSafe = fieldType === 'number' ? 'number' : 'text';
-        const value = obj?.value;
-        if (value != null && fieldDef) {
-          await chatConversationFieldsRepository.upsertField(conversationId, fieldName, fieldTypeSafe, value);
-        }
+    const { extracted: extractedArr } = await extractFieldsWithClaude(message, orderedQuoteFields);
+    console.info('[chat] extractor output:', JSON.stringify(extractedArr));
+
+    for (const item of extractedArr || []) {
+      const fieldName = item?.name;
+      const fieldDef = orderedQuoteFields.find((f) => f.name === fieldName);
+      if (!fieldName || !fieldDef) continue;
+      const fieldType = (item?.type || fieldDef?.type || 'text').toLowerCase();
+      const fieldTypeSafe = fieldType === 'number' ? 'number' : 'text';
+      const value = item?.value;
+      if (value != null && String(value).trim() !== '') {
+        await chatConversationFieldsRepository.upsertField(conversationId, fieldName, fieldTypeSafe, value);
       }
     }
 
@@ -185,15 +189,15 @@ router.post('/chat', async (req, res) => {
       priority: f.priority ?? 100,
     }));
 
+    console.info('[chat] required_infos:', requiredInfos);
+    console.info('[chat] collected_infos:', collectedInfos);
+
     if (missingFields.length > 0) {
-      console.log('[chat] missing fields computed:', missingFields.map((f) => f.name));
       const nextField = missingFields[0];
       let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);
-      if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
-        assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
-      }
+      assistantMessage = enforceStyle(assistantMessage, behavior, { nextRequiredField: nextField.name });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-      console.log('[chat] collector asked for field (no LLM):', nextField.name);
+      console.info('[chat] collector asked for field (no LLM):', nextField.name);
       return res.json({
         assistant_message: assistantMessage,
         conversation_id: conversationId,
@@ -202,12 +206,10 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    console.log('[chat] all fields collected, calling LLM');
+    console.info('[chat] all fields collected, calling LLM');
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
-    if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
-      assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
-    }
+    assistantMessage = enforceStyle(assistantMessage, behavior);
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
 
     return res.json({
@@ -220,6 +222,44 @@ router.post('/chat', async (req, res) => {
     console.error('[chat] error:', err.message);
     return res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: err?.message ?? 'Chat failed' },
+    });
+  }
+});
+
+router.get('/conversation/:id/fields', async (req, res) => {
+  try {
+    const conversationId = req.params.id;
+    const companyId = req.tenantId;
+    const conv = await chatConversationRepository.getConversation(conversationId, companyId);
+    if (!conv) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+    }
+    const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
+    const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const collectedInfos = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
+    const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
+    const requiredFields = orderedQuoteFields.filter((f) => f.required !== false);
+    const missingFields = requiredFields
+      .filter((f) => {
+        const v = collectedMap[f.name];
+        return v == null || String(v).trim() === '';
+      })
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const requiredInfos = missingFields.map((f) => ({
+      name: f.name,
+      type: f.type,
+      units: f.units ?? null,
+      priority: f.priority ?? 100,
+    }));
+    return res.json({
+      conversation_id: conversationId,
+      required_infos: requiredInfos,
+      collected_infos: collectedInfos,
+    });
+  } catch (err) {
+    console.error('[chat] fields error:', err.message);
+    return res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: err?.message ?? 'Failed' },
     });
   }
 });
