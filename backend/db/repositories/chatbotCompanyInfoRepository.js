@@ -1,9 +1,9 @@
 const { pool } = require('../index');
 
 const DEFAULTS = {
-  website_url: null,
-  business_description: null,
-  additional_notes: null,
+  website_url: '',
+  business_description: '',
+  additional_notes: '',
 };
 
 async function get(companyId) {
@@ -12,11 +12,11 @@ async function get(companyId) {
     [companyId]
   );
   const row = result.rows[0];
-  if (!row) return { ...DEFAULTS };
+  if (!row) return { ...DEFAULTS, last_scrape_requested_at: null };
   return {
-    website_url: row.website_url,
-    business_description: row.business_description,
-    additional_notes: row.additional_notes,
+    website_url: row.website_url ?? '',
+    business_description: row.business_description ?? '',
+    additional_notes: row.additional_notes ?? '',
     last_scrape_requested_at: row.last_scrape_requested_at,
   };
 }

@@ -1,18 +1,22 @@
 const { pool } = require('../index');
 
+const VALID_TYPES = ['text', 'number'];
+
 async function list(companyId) {
   const result = await pool.query(
     'SELECT id, name, type, units, priority, required FROM chatbot_quote_fields WHERE company_id = $1 ORDER BY priority ASC, created_at ASC',
     [companyId]
   );
-  return result.rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    type: r.type,
-    units: r.units,
-    priority: r.priority,
-    required: r.required,
-  }));
+  return result.rows
+    .filter((r) => VALID_TYPES.includes(r.type))
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      units: r.units,
+      priority: r.priority,
+      required: r.required,
+    }));
 }
 
 async function replace(companyId, fields) {

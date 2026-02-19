@@ -4,7 +4,7 @@ const DEFAULTS = {
   tone: 'professional',
   response_length: 'medium',
   emojis_enabled: false,
-  persona_style: 'explanational',
+  persona_style: 'busy',
   forbidden_topics: [],
 };
 

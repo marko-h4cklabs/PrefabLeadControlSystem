@@ -3,38 +3,41 @@
  */
 function buildSystemContext(companyInfo, behavior, quoteFields) {
   const parts = [];
+  const info = companyInfo ?? {};
+  const beh = behavior ?? {};
+  const fields = quoteFields ?? [];
 
   parts.push('## Company context');
-  if (companyInfo.website_url) {
-    parts.push(`Website: ${companyInfo.website_url}`);
+  if (info.website_url) {
+    parts.push(`Website: ${info.website_url}`);
   }
-  if (companyInfo.business_description) {
-    parts.push(`Business: ${companyInfo.business_description}`);
+  if (info.business_description) {
+    parts.push(`Business: ${info.business_description}`);
   }
-  if (companyInfo.additional_notes) {
-    parts.push(`Notes: ${companyInfo.additional_notes}`);
+  if (info.additional_notes) {
+    parts.push(`Notes: ${info.additional_notes}`);
   }
   parts.push('Website content (once available) is treated as knowledge base.');
 
   parts.push('\n## Response style');
-  parts.push(`Tone: ${behavior.tone}`);
-  parts.push(`Response length: ${behavior.response_length}`);
-  parts.push(`Emojis: ${behavior.emojis_enabled ? 'enabled' : 'disabled'}`);
-  if (behavior.persona_style === 'busy') {
+  parts.push(`Tone: ${beh.tone ?? 'professional'}`);
+  parts.push(`Response length: ${beh.response_length ?? 'medium'}`);
+  parts.push(`Emojis: ${beh.emojis_enabled ? 'enabled' : 'disabled'}`);
+  if (beh.persona_style === 'busy') {
     parts.push('No fluff, no confirmations like "gotcha" or "noted". Be concise.');
   } else {
     parts.push('Persona: explanatory and helpful.');
   }
 
-  if (behavior.forbidden_topics && behavior.forbidden_topics.length > 0) {
+  if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {
     parts.push('\n## Forbidden topics (do not discuss)');
-    parts.push(behavior.forbidden_topics.join(', '));
+    parts.push(beh.forbidden_topics.join(', '));
   }
 
-  if (quoteFields && quoteFields.length > 0) {
+  if (fields.length > 0) {
     parts.push('\n## Quote requirements');
-    parts.push('Collect these fields in priority order if the user has not provided them:');
-    const sorted = [...quoteFields].sort((a, b) => a.priority - b.priority);
+    parts.push('Required fields must be collected. Collect these fields in priority order if the user has not provided them:');
+    const sorted = [...fields].sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     sorted.forEach((f) => {
       const req = f.required ? ' (required)' : '';
       const units = f.units ? ` [${f.units}]` : '';

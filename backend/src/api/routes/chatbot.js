@@ -27,9 +27,9 @@ router.get('/company-info', async (req, res) => {
   try {
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
     res.json({
-      website_url: info.website_url,
-      business_description: info.business_description,
-      additional_notes: info.additional_notes,
+      website_url: info.website_url ?? '',
+      business_description: info.business_description ?? '',
+      additional_notes: info.additional_notes ?? '',
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -71,7 +71,13 @@ router.post('/company-info/scrape', async (req, res) => {
 router.get('/behavior', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
-    res.json(behavior);
+    res.json({
+      tone: behavior.tone ?? 'professional',
+      response_length: behavior.response_length ?? 'medium',
+      emojis_enabled: behavior.emojis_enabled ?? false,
+      persona_style: behavior.persona_style ?? 'busy',
+      forbidden_topics: behavior.forbidden_topics ?? [],
+    });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -98,7 +104,7 @@ router.put('/behavior', async (req, res) => {
 router.get('/quote-fields', async (req, res) => {
   try {
     const fields = await chatbotQuoteFieldsRepository.list(req.tenantId);
-    res.json({ fields });
+    res.json({ fields: fields ?? [] });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -129,8 +135,12 @@ router.get('/system-context', async (req, res) => {
       chatbotBehaviorRepository.get(req.tenantId),
       chatbotQuoteFieldsRepository.list(req.tenantId),
     ]);
-    const system_context = buildSystemContext(companyInfo, behavior, quoteFields);
-    res.json({ system_context });
+    const ctx = buildSystemContext(
+      companyInfo ?? { website_url: '', business_description: '', additional_notes: '' },
+      behavior ?? { tone: 'professional', response_length: 'medium', emojis_enabled: false, persona_style: 'busy', forbidden_topics: [] },
+      quoteFields ?? []
+    );
+    res.json({ systemContext: ctx, system_context: ctx });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

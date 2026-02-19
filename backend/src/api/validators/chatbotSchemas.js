@@ -33,7 +33,7 @@ const behaviorBodySchema = z.object({
 
 const quoteFieldSchema = z.object({
   name: z.string().trim().min(2).max(64),
-  type: z.enum(['text', 'number', 'select', 'boolean']),
+  type: z.enum(['text', 'number'], { errorMap: () => ({ message: 'type must be "text" or "number" only' }) }),
   units: z.string().trim().max(32).nullable().optional().or(z.literal('')),
   priority: z.number().int().min(0).default(100),
   required: z.boolean().default(true),
