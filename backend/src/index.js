@@ -18,27 +18,47 @@ const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', 1);
 
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
-  .split(/[,\s]+/)
-  .map((o) => o.trim())
-  .filter(Boolean);
+function parseAllowedOrigins() {
+  const raw = process.env.FRONTEND_ORIGIN || '';
+  if (!raw.trim()) return [];
+  return raw
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean)
+    .map((o) => o.replace(/\/+$/, ''));
+}
+
+const allowedOrigins = parseAllowedOrigins();
+
+function normalizeOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return origin;
+  return origin.replace(/\/+$/, '');
+}
+
+const corsOptions = {
+  origin:
+    allowedOrigins.length > 0
+      ? (origin, cb) => {
+          const norm = normalizeOrigin(origin);
+          if (!origin || !norm) {
+            cb(null, true);
+            return;
+          }
+          const allowed = allowedOrigins.some((a) => a === norm);
+          if (allowed) {
+            cb(null, true);
+          } else {
+            console.warn('[cors] blocked origin:', origin);
+            cb(new Error('Not allowed by CORS'));
+          }
+        }
+      : true,
+  credentials: true,
+};
 
 app.use(helmet());
-app.use(
-  cors({
-    origin:
-      allowedOrigins.length > 0
-        ? (origin, cb) => {
-            if (!origin || allowedOrigins.includes(origin)) {
-              cb(null, true);
-            } else {
-              cb(new Error('Not allowed by CORS'));
-            }
-          }
-        : true,
-    credentials: true,
-  })
-);
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const authLimiter = rateLimit({
