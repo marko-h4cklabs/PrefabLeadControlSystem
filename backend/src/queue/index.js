@@ -13,8 +13,10 @@ async function startQueue() {
   }
 
   boss = new PgBoss(connectionString);
+  boss.on('error', (err) => console.error('[queue] pg-boss error:', err));
   await boss.start();
 
+  await boss.createQueue(QUEUE_NAME);
   await boss.work(QUEUE_NAME, async (job) => {
     await handleScrapeJob(job);
   });
