@@ -1,5 +1,19 @@
 const { pool } = require('../index');
 
+async function getOrCreateActiveConversation(companyId) {
+  const existing = await pool.query(
+    `SELECT id, company_id, created_at, updated_at
+     FROM chat_conversations
+     WHERE company_id = $1
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [companyId]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+  const conv = await createConversation(companyId);
+  return conv;
+}
+
 async function createConversation(companyId) {
   const result = await pool.query(
     `INSERT INTO chat_conversations (company_id, updated_at)

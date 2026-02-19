@@ -34,7 +34,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) 
   parts.push('## Response rules (MUST follow)');
 
   if (beh.persona_style === 'busy') {
-    parts.push('- Persona: BUSY. No greetings, no confirmations like "Gotcha" or "Noted". Max brevity. One question at a time when collecting fields.');
+    parts.push('- Persona: BUSY. No greetings, no apologies, no "Got it"/"Noted"/"Thanks", no filler, no long explanations. Max brevity. One question at a time when collecting fields.');
   } else {
     parts.push('- Persona: Explanational. You may explain but still respect response_length.');
   }
@@ -44,7 +44,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields) 
 
   const length = beh.response_length ?? 'medium';
   if (length === 'short') {
-    parts.push('- Length: SHORT. Max 2 sentences OR max 250 characters. Never multi-paragraph.');
+    parts.push('- Length: SHORT. 1-2 short sentences max, OR bullet list with max 3 bullets. Never multi-paragraph.');
   } else if (length === 'medium') {
     parts.push('- Length: MEDIUM. Max 5 sentences.');
   } else {
@@ -90,24 +90,20 @@ function truncateToLimit(text, limit) {
   return cut.trim();
 }
 
-function buildFieldQuestion(fieldName, behavior) {
+function buildFieldQuestion(fieldName, behavior, units = null) {
   const beh = behavior ?? {};
   const tone = beh.tone ?? 'professional';
   const persona = beh.persona_style ?? 'busy';
-  const emojis = beh.emojis_enabled ?? false;
+  const suffix = units ? ` (${units})` : '';
 
   const questions = {
-    busy_professional: `What is the ${fieldName}?`,
-    busy_friendly: `What's your ${fieldName}?`,
-    explanational_professional: `Could you provide the ${fieldName}?`,
-    explanational_friendly: `Could you tell me the ${fieldName}?`,
+    busy_professional: `${fieldName}${suffix}?`,
+    busy_friendly: `${fieldName}${suffix}?`,
+    explanational_professional: `Could you provide the ${fieldName}${suffix}?`,
+    explanational_friendly: `Could you tell me the ${fieldName}${suffix}?`,
   };
   const key = `${persona}_${tone}`;
-  let msg = questions[key] ?? questions.busy_professional;
-  if (emojis) {
-    msg = msg; // keep as-is, or add subtle emoji if desired
-  }
-  return msg;
+  return questions[key] ?? questions.busy_professional;
 }
 
 module.exports = { buildSystemPrompt, getLengthLimit, truncateToLimit, buildFieldQuestion };

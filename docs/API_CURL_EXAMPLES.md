@@ -2,7 +2,11 @@
 
 Replace `BASE_URL` with your API base (e.g. `https://your-railway-app.railway.app`) and `TOKEN` with a valid JWT.
 
-**Migration required:** Run `010_chat_conversation_state.sql` before using the chat endpoint.
+**Migrations required:** Run in order:
+```bash
+psql $DATABASE_URL -f backend/db/migrations/010_chat_conversation_state.sql
+psql $DATABASE_URL -f backend/db/migrations/011_chat_conversation_fields_and_messages.sql
+```
 
 ## Company Info
 
@@ -50,20 +54,28 @@ curl -s -X PUT "$BASE_URL/api/chatbot/quote-fields" \
 ## Chat (live conversation with quote collection)
 
 ```bash
-# POST chat message (creates conversation if conversationId omitted)
+# POST chat message (creates/gets active conversation if conversationId omitted)
 curl -s -X POST "$BASE_URL/api/chatbot/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message":"Hi, I need a quote for a prefab home."}'
 
-# Response: { conversationId, assistantMessage, collectedFields, missingFields }
+# Response:
+# {
+#   "assistant_message": "...",
+#   "conversation_id": "uuid",
+#   "required_infos": [{"name":"location","type":"text","units":null,"priority":10}],
+#   "collected_infos": [{"name":"budget","type":"number","value":12000,"units":"EUR"}]
+# }
 
-# Continue conversation (pass conversationId from first response)
+# Continue (pass conversationId for continuity)
 curl -s -X POST "$BASE_URL/api/chatbot/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message":"Location is Denver.","conversationId":"<uuid>"}'
 ```
+
+**Frontend panel:** Use `required_infos` for "Required infos (missing)" and `collected_infos` for "Collected infos". Update after each message.
 
 ## System Context
 

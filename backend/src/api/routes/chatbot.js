@@ -5,11 +5,13 @@ const {
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
   chatConversationRepository,
+  chatConversationFieldsRepository,
+  chatMessagesRepository,
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
-const { extractQuoteFields } = require('../../chat/quoteExtractor');
 const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
 const { callLLM } = require('../../chat/chatService');
+const { extractFieldsWithClaude } = require('../../chat/extractService');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -130,74 +132,89 @@ router.post('/chat', async (req, res) => {
     const { message, conversationId: reqConversationId } = parsed.data;
     const companyId = req.tenantId;
 
-    let conversationId = reqConversationId;
-    if (!conversationId) {
-      const conv = await chatConversationRepository.createConversation(companyId);
-      conversationId = conv.id;
-    } else {
-      const conv = await chatConversationRepository.getConversation(conversationId, companyId);
-      if (!conv) {
-        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
-      }
-    }
-
-    const [behavior, companyInfo, quoteFields, state] = await Promise.all([
+    const [behavior, companyInfo, quoteFields] = await Promise.all([
       chatbotBehaviorRepository.get(companyId),
       chatbotCompanyInfoRepository.get(companyId),
       chatbotQuoteFieldsRepository.list(companyId),
-      chatConversationRepository.getOrCreateState(conversationId, companyId),
     ]);
 
-    let collectedFields = (state?.collected_fields && typeof state.collected_fields === 'object')
-      ? { ...state.collected_fields }
-      : {};
+    const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-    const extracted = extractQuoteFields(message, quoteFields);
+    let conversation;
+    if (reqConversationId) {
+      conversation = await chatConversationRepository.getConversation(reqConversationId, companyId);
+      if (!conversation) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+      }
+    } else {
+      conversation = await chatConversationRepository.getOrCreateActiveConversation(companyId);
+    }
+    const conversationId = conversation.id;
+
+    await chatMessagesRepository.appendMessage(conversationId, 'user', message);
+
+    const extracted = await extractFieldsWithClaude(message, orderedQuoteFields);
     if (Object.keys(extracted).length > 0) {
       console.log('[chat] extracted fields:', extracted);
-      collectedFields = { ...collectedFields, ...extracted };
-      await chatConversationRepository.updateState(conversationId, companyId, { collected_fields: collectedFields });
+      for (const [fieldName, obj] of Object.entries(extracted)) {
+        const fieldDef = orderedQuoteFields.find((f) => f.name === fieldName);
+        const fieldType = (obj?.type || fieldDef?.type || 'text').toLowerCase();
+        const fieldTypeSafe = fieldType === 'number' ? 'number' : 'text';
+        const value = obj?.value;
+        if (value != null && fieldDef) {
+          await chatConversationFieldsRepository.upsertField(conversationId, fieldName, fieldTypeSafe, value);
+        }
+      }
     }
 
-    const requiredFields = (quoteFields ?? []).filter((f) => f.required);
+    const collectedInfos = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
+    const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
+
+    const requiredFields = orderedQuoteFields.filter((f) => f.required !== false);
     const missingFields = requiredFields
       .filter((f) => {
-        const v = collectedFields[f.name];
+        const v = collectedMap[f.name];
         return v == null || String(v).trim() === '';
       })
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
+    const requiredInfos = missingFields.map((f) => ({
+      name: f.name,
+      type: f.type,
+      units: f.units ?? null,
+      priority: f.priority ?? 100,
+    }));
+
     if (missingFields.length > 0) {
       console.log('[chat] missing fields computed:', missingFields.map((f) => f.name));
       const nextField = missingFields[0];
-      let assistantMessage = buildFieldQuestion(nextField.name, behavior);
+      let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);
       if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
         assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
       }
-      await chatConversationRepository.updateState(conversationId, companyId, {
-        last_asked_field: nextField.name,
-      });
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
       console.log('[chat] collector asked for field (no LLM):', nextField.name);
       return res.json({
-        conversationId,
-        assistantMessage,
-        collectedFields,
-        missingFields: missingFields.map((f) => f.name),
+        assistant_message: assistantMessage,
+        conversation_id: conversationId,
+        required_infos: requiredInfos,
+        collected_infos: collectedInfos,
       });
     }
 
     console.log('[chat] all fields collected, calling LLM');
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields);
+    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
       assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
     }
+    await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
 
     return res.json({
-      conversationId,
-      assistantMessage,
-      collectedFields,
-      missingFields: [],
+      assistant_message: assistantMessage,
+      conversation_id: conversationId,
+      required_infos: [],
+      collected_infos: collectedInfos,
     });
   } catch (err) {
     console.error('[chat] error:', err.message);
