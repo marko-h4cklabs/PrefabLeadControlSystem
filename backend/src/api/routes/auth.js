@@ -72,8 +72,8 @@ router.post('/signup', async (req, res) => {
 
     res.status(201).json({
       token,
-      companyId: company.id,
-      user: { id: user.id, email: user.email, role: user.role },
+      user: { id: user.id, email: user.email, role: user.role, companyId: company.id },
+      company: { id: company.id, name: company.name },
     });
   } catch (err) {
     if (err.code === '23505') {
@@ -121,6 +121,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    const company = await companyRepository.findById(user.company_id);
     const token = jwt.sign(
       { id: user.id, companyId: user.company_id, role: user.role },
       process.env.JWT_SECRET,
@@ -128,8 +129,8 @@ router.post('/login', async (req, res) => {
     );
     res.json({
       token,
-      companyId: user.company_id,
-      user: { id: user.id, email: user.email, role: user.role },
+      user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id },
+      company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
     });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
