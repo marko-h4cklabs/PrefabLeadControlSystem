@@ -22,4 +22,12 @@ async function getRecentMessages(conversationId, limit = 20) {
   return result.rows.reverse();
 }
 
-module.exports = { appendMessage, getRecentMessages };
+async function countByRole(conversationId, role) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM chat_messages WHERE conversation_id = $1 AND role = $2`,
+    [conversationId, role]
+  );
+  return result.rows[0]?.n ?? 0;
+}
+
+module.exports = { appendMessage, getRecentMessages, countByRole };

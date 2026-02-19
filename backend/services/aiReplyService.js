@@ -5,10 +5,11 @@ const {
   chatbotCompanyInfoRepository,
   chatbotQuoteFieldsRepository,
 } = require('../db/repositories');
-const { extractFieldsWithClaude } = require('../src/chat/extractService');
+const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
 const { computeFieldsState } = require('../src/chat/fieldsState');
 const { buildSystemPrompt, buildFieldQuestion } = require('../src/chat/systemPrompt');
 const { enforceStyle } = require('../src/chat/enforceStyle');
+const { shouldGreet, shouldGoodbye, addGreeting, addGoodbye } = require('../src/chat/conversationHelpers');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
@@ -28,12 +29,13 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     });
 }
 
-function mergeParsedFields(current, updates) {
+function mergeParsedFields(current, updates, allowedFieldNames) {
   const merged = { ...current };
+  const allowed = allowedFieldNames ? new Set([...allowedFieldNames].map((s) => String(s).toLowerCase())) : null;
   for (const [key, value] of Object.entries(updates ?? {})) {
-    if (value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '')) {
-      merged[key] = value;
-    }
+    if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) continue;
+    if (allowed && !allowed.has(String(key).toLowerCase())) continue;
+    merged[key] = value;
   }
   return merged;
 }
@@ -98,6 +100,8 @@ async function generateAiReply(companyId, leadId) {
 
   const lastUserMsg = (conversation.messages ?? []).filter((m) => m.role === 'user').pop();
   const userText = lastUserMsg?.content ?? '';
+  const assistantCountBefore = (conversation.messages ?? []).filter((m) => m.role === 'assistant').length;
+  const allowedFieldNames = getAllowedFieldNames(orderedQuoteFields);
 
   let parsedFields = conversation.parsed_fields ?? {};
 
@@ -108,7 +112,7 @@ async function generateAiReply(companyId, leadId) {
       extractedUpdates[e.name] = e.type === 'number' ? Number(e.value) : String(e.value).trim();
     }
   }
-  parsedFields = mergeParsedFields(parsedFields, extractedUpdates);
+  parsedFields = mergeParsedFields(parsedFields, extractedUpdates, allowedFieldNames);
 
   const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
   const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
@@ -143,26 +147,33 @@ async function generateAiReply(companyId, leadId) {
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates);
+    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames);
   } else {
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
     const userPrompt = buildUserPrompt(conversation.messages);
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates);
+    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames);
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {
     nextRequiredField: topMissing?.name,
     topMissingField: topMissing,
+    allowedFieldNames,
   });
+  if (shouldGreet(assistantCountBefore)) {
+    assistantMessage = addGreeting(assistantMessage, behavior);
+  }
 
   const finalCollectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
   const { required_infos: finalRequired, collected_infos: finalCollected } = computeFieldsState(
     orderedQuoteFields,
     finalCollectedFromParsed
   );
+  if (shouldGoodbye(userText, finalRequired)) {
+    assistantMessage = addGoodbye(assistantMessage, behavior);
+  }
 
   return {
     assistant_message: assistantMessage,

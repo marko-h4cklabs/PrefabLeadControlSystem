@@ -11,9 +11,10 @@ const {
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
 const { callLLM } = require('../../chat/chatService');
-const { extractFieldsWithClaude } = require('../../chat/extractService');
+const { extractFieldsWithClaude, getAllowedFieldNames } = require('../../chat/extractService');
 const { enforceStyle } = require('../../chat/enforceStyle');
 const { computeFieldsState } = require('../../chat/fieldsState');
+const { shouldGreet, shouldGoodbye, addGreeting, addGoodbye } = require('../../chat/conversationHelpers');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -153,6 +154,8 @@ router.post('/chat', async (req, res) => {
       conversation = await chatConversationRepository.getOrCreateActiveConversation(companyId);
     }
     const conversationId = conversation.id;
+    const assistantCountBefore = await chatMessagesRepository.countByRole(conversationId, 'assistant');
+    const allowedFieldNames = getAllowedFieldNames(orderedQuoteFields);
 
     await chatMessagesRepository.appendMessage(conversationId, 'user', message);
 
@@ -187,7 +190,11 @@ router.post('/chat', async (req, res) => {
       assistantMessage = enforceStyle(assistantMessage, behavior, {
         nextRequiredField: nextField.name,
         topMissingField: nextField,
+        allowedFieldNames,
       });
+      if (shouldGreet(assistantCountBefore)) {
+        assistantMessage = addGreeting(assistantMessage, behavior);
+      }
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
       return res.json({
         assistant_message: assistantMessage,
@@ -199,7 +206,13 @@ router.post('/chat', async (req, res) => {
 
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
-    assistantMessage = enforceStyle(assistantMessage, behavior);
+    assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
+    if (shouldGreet(assistantCountBefore)) {
+      assistantMessage = addGreeting(assistantMessage, behavior);
+    }
+    if (shouldGoodbye(message, [])) {
+      assistantMessage = addGoodbye(assistantMessage, behavior);
+    }
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
 
     return res.json({

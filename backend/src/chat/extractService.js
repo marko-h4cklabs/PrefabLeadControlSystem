@@ -3,19 +3,22 @@ const Anthropic = require('@anthropic-ai/sdk');
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
 function buildExtractionPrompt(quoteFields) {
-  const requiredFields = (quoteFields || []).filter((f) => f.required !== false);
+  const fieldNames = (quoteFields || []).map((f) => f.name).filter(Boolean);
   const fieldsDesc = (quoteFields || [])
     .map((f) => `- ${f.name}: ${f.type}${f.units ? ` (${f.units})` : ''}${f.required ? ' [required]' : ''}`)
     .join('\n');
   return `You extract quote field values from user messages. Output ONLY valid JSON, no other text.
 
-Fields to look for:
+CONFIGURED FIELDS (you may ONLY extract these - no other fields):
 ${fieldsDesc || '(none)'}
 
+Allowed field names: ${fieldNames.join(', ') || 'none'}
+
 Rules:
+- ONLY output values for the configured fields above. Do NOT extract doors, windows, placement, or any field not in the list.
 - For type "number": extract numeric value. Accept "12000", "12,000", "€12000", "budget 12k", etc.
 - For type "text": extract the value. Accept "location: Zagreb", "in Denver", "city is Berlin", etc.
-- Only include fields where you found a clear value. Use exact field names.
+- Use exact field names from the list.
 - Include confidence 0-1 for each extracted value.
 
 Output format:
@@ -36,8 +39,13 @@ function allRequiredAsMissing(quoteFields) {
     }));
 }
 
+function getAllowedFieldNames(quoteFields) {
+  return new Set((quoteFields ?? []).map((f) => String(f.name ?? '').toLowerCase().trim()).filter(Boolean));
+}
+
 async function extractFieldsWithClaude(userMessage, quoteFields) {
   const missingRequiredFallback = allRequiredAsMissing(quoteFields);
+  const allowedNames = getAllowedFieldNames(quoteFields);
   if (!quoteFields || quoteFields.length === 0) {
     return { extracted: [], missing_required: [] };
   }
@@ -65,7 +73,7 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
         units: e.units ?? null,
         confidence: typeof e.confidence === 'number' ? e.confidence : 0.9,
       }))
-      .filter((e) => e.name !== '');
+      .filter((e) => e.name !== '' && allowedNames.has(e.name.toLowerCase()));
     return {
       extracted: normalized,
       missing_required: [],
@@ -79,4 +87,4 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
   }
 }
 
-module.exports = { extractFieldsWithClaude, allRequiredAsMissing };
+module.exports = { extractFieldsWithClaude, allRequiredAsMissing, getAllowedFieldNames };

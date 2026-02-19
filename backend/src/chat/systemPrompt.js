@@ -33,17 +33,25 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
     parts.push('');
   }
 
+  const configuredNames = fields.map((f) => f.name).filter(Boolean);
+  parts.push('## CONFIGURED FIELDS (scope lock)');
+  parts.push(`You may ONLY ask questions for these fields: ${configuredNames.join(', ') || 'none'}`);
+  parts.push('Do NOT ask about doors, windows, placement, or any topic not in this list.');
+  parts.push('');
+
   if (missing.length > 0) {
     parts.push('## Required infos (missing - MUST ask for)');
     parts.push(missing.map((m) => `${m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
-    parts.push('CRITICAL: You MUST ask for the highest priority missing field first. End with ONE direct question for that field.');
+    const topField = missing[0];
+    const askOne = beh.response_length === 'short' ? 'Ask ONLY for the top priority missing field.' : 'Ask for the top priority missing field; optionally 1 more if medium/long.';
+    parts.push(`CRITICAL: ${askOne} End with ONE direct question for ${topField?.name ?? 'that field'}.`);
     parts.push('');
   }
 
   parts.push('## Response rules (MUST follow)');
 
   if (beh.persona_style === 'busy') {
-    parts.push('- Persona: BUSY. No greetings ("Hi", "Welcome", "Great choice", etc.), no filler ("Gotcha", "Sure", "Happy to help"), no apologies. Max brevity.');
+    parts.push('- Persona: BUSY. No filler ("Gotcha", "Sure", "Happy to help"), no apologies. Max brevity. A short "Hi" at conversation start is allowed.');
   } else {
     parts.push('- Persona: Explanational. You may explain but still respect response_length.');
   }
@@ -66,7 +74,8 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
 
   parts.push('');
   parts.push('- If required_infos is not empty, the assistant MUST ask for the highest priority missing field.');
-  parts.push('- If the user provides info for a quote field, acknowledge briefly and move on.');
+  parts.push('- If the user asks about something outside configured fields (e.g. doors, windows), answer in 1 line max then ask for the next missing required field.');
+  parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then a closing line. Do not ask new questions.');
 
   return parts.join('\n').trim();
 }

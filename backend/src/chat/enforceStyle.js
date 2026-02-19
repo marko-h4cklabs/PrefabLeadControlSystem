@@ -44,6 +44,35 @@ function enforceForbiddenTopics(text, forbiddenTopics, replacement) {
   return replacement || "I can't help with that. What is your [next required field]?";
 }
 
+const NON_CONFIGURED_TOPICS = [
+  'doors', 'windows', 'placement', 'flooring', 'insulation', 'roof', 'delivery', 'timeline',
+  'door', 'window', 'floor', 'insulate', 'deliver',
+];
+
+function lastSentenceAsksNonConfigured(text, allowedFieldNames) {
+  if (!text || !allowedFieldNames || typeof allowedFieldNames !== 'object') return false;
+  const allowed = new Set([...allowedFieldNames].map((s) => String(s).toLowerCase()));
+  const lower = text.toLowerCase();
+  const lastQ = lower.split('?').filter(Boolean).pop();
+  if (!lastQ || !lower.includes('?')) return false;
+  const words = lastQ.split(/\s+/).map((w) => w.replace(/[^a-z]/g, ''));
+  for (const topic of NON_CONFIGURED_TOPICS) {
+    if (allowed.has(topic)) continue;
+    if (words.some((w) => w.includes(topic) || topic.includes(w))) return true;
+    if (lastQ.includes(topic)) return true;
+  }
+  return false;
+}
+
+function enforceScope(text, allowedFieldNames, topMissingField) {
+  if (!text || !topMissingField?.name) return text;
+  const allowed = allowedFieldNames instanceof Set ? allowedFieldNames : new Set([...(allowedFieldNames || [])].map((s) => String(s).toLowerCase()));
+  if (lastSentenceAsksNonConfigured(text, allowed)) {
+    return `What is your ${topMissingField.name}?`;
+  }
+  return text;
+}
+
 function enforceMissingFieldQuestion(text, topMissingField) {
   if (!text || !topMissingField?.name) return text;
   const question = `What is your ${topMissingField.name}?`;
@@ -61,7 +90,7 @@ function enforceMissingFieldQuestion(text, topMissingField) {
 function enforceStyle(text, behavior, options = {}) {
   let result = text || '';
   const beh = behavior ?? {};
-  const { nextRequiredField, topMissingField, forbiddenReplacement } = options;
+  const { nextRequiredField, topMissingField, forbiddenReplacement, allowedFieldNames } = options;
 
   if (beh.emojis_enabled === false) {
     result = stripEmojis(result);
@@ -83,6 +112,9 @@ function enforceStyle(text, behavior, options = {}) {
   }
 
   const missing = topMissingField ?? (nextRequiredField ? { name: nextRequiredField } : null);
+  if (missing?.name && allowedFieldNames) {
+    result = enforceScope(result, allowedFieldNames, missing);
+  }
   if (missing?.name) {
     result = enforceMissingFieldQuestion(result, missing);
   }
@@ -90,4 +122,4 @@ function enforceStyle(text, behavior, options = {}) {
   return result.trim() || text;
 }
 
-module.exports = { enforceStyle, stripEmojis, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion };
+module.exports = { enforceStyle, stripEmojis, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion, enforceScope };
