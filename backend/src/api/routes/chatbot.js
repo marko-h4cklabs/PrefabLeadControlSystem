@@ -100,7 +100,7 @@ router.post('/company-info/scrape', async (req, res) => {
     await chatbotCompanyInfoRepository.upsert(req.tenantId, { website_url: normalized });
     await chatbotCompanyInfoRepository.setScrapeQueued(req.tenantId, normalized);
     try {
-      await sendScrapeJob(req.tenantId);
+      await sendScrapeJob(req.tenantId, normalized);
     } catch (queueErr) {
       console.error('[scrape] Queue error, falling back to inline:', queueErr.message);
       const { startScrapeJob } = require('../../services/scrapeService');

@@ -19,22 +19,17 @@ function aggregateContent(pages) {
 }
 
 async function handleScrapeJob(job) {
-  const { companyId } = job.data;
-  const jobId = job.id;
-  console.log('[scrapeWorker] Job start', { companyId, jobId });
-
-  let info;
-  try {
-    info = await chatbotCompanyInfoRepository.get(companyId);
-  } catch (err) {
-    console.error('[scrapeWorker] Job fail: cannot load company info', { companyId, jobId, error: err.message });
-    throw err;
+  if (!job || !job.data || !job.data.companyId) {
+    throw new Error('Missing job.data.companyId');
   }
+  const { companyId, websiteUrl: payloadUrl } = job.data;
+  const websiteUrl = (payloadUrl || '').trim();
+  const jobId = job.id;
+  console.log('[scrapeWorker] start', { jobId, companyId, websiteUrl });
 
-  const websiteUrl = (info?.website_url || '').trim();
   if (!websiteUrl) {
-    const msg = 'website_url is missing for company';
-    console.error('[scrapeWorker] Job fail:', { companyId, jobId, error: msg });
+    const msg = 'websiteUrl is missing in job.data';
+    console.error('[scrapeWorker] failed', { jobId, companyId, err: msg });
     await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'failed', {
       scrape_error: msg,
       scraped_summary: null,
@@ -57,7 +52,7 @@ async function handleScrapeJob(job) {
         scrape_error: msg,
         scraped_summary: null,
       });
-      console.error('[scrapeWorker] Job fail: no content', { companyId, jobId });
+      console.error('[scrapeWorker] failed', { jobId, companyId, err: msg });
       throw new Error(msg);
     }
 
@@ -67,10 +62,10 @@ async function handleScrapeJob(job) {
     const summary = await summarizeWithLLM(aggregated);
 
     await chatbotCompanyInfoRepository.setScrapeDone(companyId, summary);
-    console.log('[scrapeWorker] Job finish', { companyId, jobId });
+    console.log('[scrapeWorker] success', { jobId, companyId });
   } catch (err) {
     const safeMsg = (err?.message || 'Scrape failed').slice(0, 500);
-    console.error('[scrapeWorker] Job fail', { companyId, jobId, error: safeMsg });
+    console.error('[scrapeWorker] failed', { jobId, companyId, err: safeMsg });
     await chatbotCompanyInfoRepository.setScrapeStatus(companyId, 'failed', {
       scrape_error: safeMsg,
       scraped_summary: null,

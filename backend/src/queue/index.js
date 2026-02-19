@@ -17,19 +17,20 @@ async function startQueue() {
   await boss.start();
 
   await boss.createQueue(QUEUE_NAME);
-  await boss.work(QUEUE_NAME, async (job) => {
-    await handleScrapeJob(job);
+  await boss.work(QUEUE_NAME, async (jobs) => {
+    const job = Array.isArray(jobs) ? jobs[0] : jobs;
+    if (job) await handleScrapeJob(job);
   });
 
   console.log('[queue] Started, worker registered:', QUEUE_NAME);
   return boss;
 }
 
-async function sendScrapeJob(companyId) {
+async function sendScrapeJob(companyId, websiteUrl) {
   if (!boss) {
     throw new Error('Queue not initialized');
   }
-  return boss.send(QUEUE_NAME, { companyId });
+  return boss.send(QUEUE_NAME, { companyId, websiteUrl });
 }
 
 async function stopQueue() {

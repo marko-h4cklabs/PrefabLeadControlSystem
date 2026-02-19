@@ -109,8 +109,8 @@ async function appendScrapeNote(companyId) {
 
 async function setScrapeQueued(companyId, websiteUrl) {
   await pool.query(
-    `INSERT INTO chatbot_company_info (company_id, website_url, last_scrape_requested_at, scrape_status, scrape_error, scrape_started_at, scrape_finished_at, updated_at)
-     VALUES ($1, $2, NOW(), 'queued', NULL, NULL, NULL, NOW())
+    `INSERT INTO chatbot_company_info (company_id, website_url, last_scrape_requested_at, scrape_status, scrape_error, scrape_started_at, scrape_finished_at, scraped_summary, updated_at)
+     VALUES ($1, $2, NOW(), 'queued', NULL, NULL, NULL, NULL, NOW())
      ON CONFLICT (company_id) DO UPDATE SET
        website_url = COALESCE($2, chatbot_company_info.website_url),
        last_scrape_requested_at = NOW(),
@@ -118,6 +118,7 @@ async function setScrapeQueued(companyId, websiteUrl) {
        scrape_error = NULL,
        scrape_started_at = NULL,
        scrape_finished_at = NULL,
+       scraped_summary = NULL,
        updated_at = NOW()`,
     [companyId, websiteUrl]
   );
