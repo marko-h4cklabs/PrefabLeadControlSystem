@@ -29,6 +29,7 @@ async function authMiddleware(req, res, next) {
       id: user.id,
       companyId: user.company_id,
       role: user.role,
+      email: user.email,
     };
     next();
   } catch (err) {

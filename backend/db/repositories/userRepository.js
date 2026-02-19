@@ -37,6 +37,14 @@ async function findByEmail(companyId, email) {
   return toPlainUser(result.rows[0]);
 }
 
+async function findByEmailOnly(email) {
+  const result = await pool.query(
+    'SELECT * FROM users WHERE email = $1 LIMIT 1',
+    [email]
+  );
+  return toPlainUser(result.rows[0]);
+}
+
 async function findAll(companyId) {
   const result = await pool.query(
     'SELECT * FROM users WHERE company_id = $1 ORDER BY email',
@@ -73,6 +81,7 @@ module.exports = {
   findById,
   findByIdOnly,
   findByEmail,
+  findByEmailOnly,
   findAll,
   create,
   update,
