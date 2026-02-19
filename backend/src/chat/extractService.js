@@ -16,9 +16,8 @@ Allowed field names: ${fieldNames.join(', ') || 'none'}
 
 Rules:
 - ONLY output values for the configured fields above. Do NOT extract doors, windows, placement, or any field not in the list.
-- For type "number": extract numeric value. Accept "12000", "12,000", "€12000", "budget 12k", etc.
-- For type "text": extract the value. Accept "location: Zagreb", "in Denver", "city is Berlin", etc.
-- Use exact field names from the list.
+- For type "number": extract numeric value. Accept "12000", "12,000", "€12000", etc.
+- For type "text": extract the value. Use exact field names from the list.
 - Include confidence 0-1 for each extracted value.
 
 Output format:

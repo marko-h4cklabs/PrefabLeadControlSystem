@@ -9,7 +9,14 @@ const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/e
 const { computeFieldsState } = require('../src/chat/fieldsState');
 const { buildSystemPrompt, buildFieldQuestion } = require('../src/chat/systemPrompt');
 const { enforceStyle } = require('../src/chat/enforceStyle');
-const { shouldGreet, shouldGoodbye, addGreeting, addGoodbye } = require('../src/chat/conversationHelpers');
+const {
+  shouldGreet,
+  shouldClose,
+  prependGreeting,
+  appendClosing,
+} = require('../src/chat/conversationHelpers');
+const { generateGreeting, generateClosing } = require('../src/chat/greetingClosingService');
+const { buildHighlights } = require('../src/chat/fieldsState');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
@@ -162,18 +169,24 @@ async function generateAiReply(companyId, leadId) {
     topMissingField: topMissing,
     allowedFieldNames,
   });
-  if (shouldGreet(assistantCountBefore)) {
-    assistantMessage = addGreeting(assistantMessage, behavior);
-  }
 
   const finalCollectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
   const { required_infos: finalRequired, collected_infos: finalCollected } = computeFieldsState(
     orderedQuoteFields,
     finalCollectedFromParsed
   );
-  if (shouldGoodbye(userText, finalRequired)) {
-    assistantMessage = addGoodbye(assistantMessage, behavior);
+
+  if (shouldGreet(assistantCountBefore)) {
+    const greetingWords = await generateGreeting(userText, behavior);
+    assistantMessage = prependGreeting(assistantMessage, greetingWords);
   }
+  if (shouldClose(userText, finalRequired)) {
+    const finalCollectedMap = Object.fromEntries(finalCollected.map((c) => [c.name, c.value]));
+    const closingWords = await generateClosing(userText, finalCollectedMap, behavior);
+    assistantMessage = appendClosing(assistantMessage, closingWords);
+  }
+
+  const highlights = buildHighlights(orderedQuoteFields, finalCollected, finalRequired, behavior);
 
   return {
     assistant_message: assistantMessage,
@@ -182,6 +195,7 @@ async function generateAiReply(companyId, leadId) {
     parsed_fields: parsedFields,
     required_infos: finalRequired,
     collected_infos: finalCollected,
+    highlights,
   };
 }
 

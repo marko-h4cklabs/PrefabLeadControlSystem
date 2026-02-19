@@ -170,6 +170,7 @@ router.post('/:leadId/ai-reply', async (req, res) => {
       current_step: conversation.current_step,
       required_infos: result.required_infos ?? [],
       collected_infos: result.collected_infos ?? [],
+      highlights: result.highlights ?? null,
     });
   } catch (err) {
     if (err.message?.includes('Invalid JSON') || err.message?.includes('assistant_message') || err.message?.includes('field_updates')) {

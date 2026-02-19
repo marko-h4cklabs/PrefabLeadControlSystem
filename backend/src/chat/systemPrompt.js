@@ -61,11 +61,11 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
 
   const length = beh.response_length ?? 'medium';
   if (length === 'short') {
-    parts.push('- Length: SHORT. Max 2 short sentences OR max 3 bullets. End with ONE direct question for the missing required field.');
+    parts.push('- Length: SHORT. Max 1 sentence + 1 question, OR max 3 bullets total. Prefer 1 direct question.');
   } else if (length === 'medium') {
-    parts.push('- Length: MEDIUM. Max 5 sentences.');
+    parts.push('- Length: MEDIUM. Up to 2-3 sentences.');
   } else {
-    parts.push('- Length: LONG. Max 12 sentences.');
+    parts.push('- Length: LONG. Can be longer but still only ask configured fields.');
   }
 
   if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {

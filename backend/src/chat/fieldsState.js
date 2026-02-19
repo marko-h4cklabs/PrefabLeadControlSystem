@@ -42,4 +42,49 @@ function computeFieldsState(quoteFields, collectedFields) {
   return { required_infos, collected_infos };
 }
 
-module.exports = { computeFieldsState };
+/**
+ * Build highlights object for frontend panel.
+ */
+function buildHighlights(quoteFields, collectedInfos, requiredInfos, behavior) {
+  const configured = (quoteFields ?? []).map((f) => ({
+    name: f.name ?? '',
+    type: f.type ?? 'text',
+    units: f.units ?? null,
+    priority: f.priority ?? 100,
+    required: f.required !== false,
+  }));
+  const missing_required = (requiredInfos ?? []).map((f) => ({
+    name: f.name ?? '',
+    type: f.type ?? 'text',
+    units: f.units ?? null,
+    priority: f.priority ?? 100,
+    required: true,
+  }));
+  const collected = (collectedInfos ?? []).map((c) => ({
+    name: c.name,
+    type: c.type ?? 'text',
+    units: c.units ?? null,
+    value: c.value,
+  }));
+  const step_index = collected.length;
+  const is_complete = (requiredInfos ?? []).length === 0;
+  return {
+    settings: {
+      tone: behavior?.tone ?? 'professional',
+      persona_style: behavior?.persona_style ?? 'busy',
+      response_length: behavior?.response_length ?? 'medium',
+      emojis_enabled: behavior?.emojis_enabled ?? false,
+    },
+    fields: {
+      configured,
+      missing_required,
+      collected,
+    },
+    state: {
+      step_index,
+      is_complete,
+    },
+  };
+}
+
+module.exports = { computeFieldsState, buildHighlights };

@@ -1,52 +1,60 @@
 /**
- * Helpers for greeting/goodbye rules in busy+short style.
+ * Helpers for greeting/closing rules. Contextual, 2-3 words.
  */
 
 function shouldGreet(assistantMessageCount) {
   return (assistantMessageCount ?? 0) === 0;
 }
 
-function shouldGoodbye(userText, missingRequiredFields) {
+const CLOSING_PATTERNS = /\b(thanks|thank you|that'?s all|ok bye|bye|that'?s it|done|no more|nothing else|that'?s everything|goodbye|cheers|ok that'?s all)\b/i;
+
+function shouldClose(userText, missingRequiredFields) {
   if (!missingRequiredFields || missingRequiredFields.length === 0) return true;
-  return false;
+  if (!userText || typeof userText !== 'string') return false;
+  return CLOSING_PATTERNS.test(userText.trim());
 }
 
-function hasGoodbyeAlready(text) {
+function shouldGoodbye(userText, missingRequiredFields) {
+  return shouldClose(userText, missingRequiredFields);
+}
+
+function hasClosingAlready(text) {
   if (!text || typeof text !== 'string') return false;
   const lower = text.toLowerCase();
-  return lower.includes("we'll") && (lower.includes('back') || lower.includes('follow'));
+  return (
+    lower.includes("we'll") ||
+    lower.includes('follow up') ||
+    lower.includes('get back') ||
+    lower.includes('thanks') ||
+    lower.includes('bye')
+  );
 }
 
-const BUSY_GREETINGS = [
-  'Hi. Quick details first:',
-  'Hi — need a few details:',
-];
-
-const BUSY_GOODBYES = [
-  "Got it. We'll get back to you.",
-  "Done. We'll follow up shortly.",
-];
-
-function addGreeting(text, behavior) {
+function prependGreeting(text, greetingWords) {
   if (!text || typeof text !== 'string') return text;
-  const beh = behavior ?? {};
-  if (beh.persona_style !== 'busy') return text;
-  const greeting = BUSY_GREETINGS[Math.floor(Math.random() * BUSY_GREETINGS.length)];
+  const g = (greetingWords || '').trim();
+  if (!g) return text;
   const trimmed = text.trim();
   if (trimmed.toLowerCase().startsWith('hi') || trimmed.toLowerCase().startsWith('hello')) {
     return text;
   }
-  return `${greeting} ${trimmed}`;
+  return `${g} ${trimmed}`;
 }
 
-function addGoodbye(text, behavior) {
+function appendClosing(text, closingWords) {
   if (!text || typeof text !== 'string') return text;
-  if (hasGoodbyeAlready(text)) return text;
-  const beh = behavior ?? {};
-  if (beh.persona_style !== 'busy') return text;
-  const goodbye = BUSY_GOODBYES[Math.floor(Math.random() * BUSY_GOODBYES.length)];
+  if (hasClosingAlready(text)) return text;
+  const c = (closingWords || '').trim();
+  if (!c) return text;
   const trimmed = text.trim();
-  return `${trimmed} ${goodbye}`;
+  return `${trimmed} ${c}`;
 }
 
-module.exports = { shouldGreet, shouldGoodbye, addGreeting, addGoodbye, hasGoodbyeAlready };
+module.exports = {
+  shouldGreet,
+  shouldClose,
+  shouldGoodbye,
+  prependGreeting,
+  appendClosing,
+  hasClosingAlready,
+};

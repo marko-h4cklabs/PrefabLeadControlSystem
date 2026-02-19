@@ -13,8 +13,14 @@ const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemProm
 const { callLLM } = require('../../chat/chatService');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../../chat/extractService');
 const { enforceStyle } = require('../../chat/enforceStyle');
-const { computeFieldsState } = require('../../chat/fieldsState');
-const { shouldGreet, shouldGoodbye, addGreeting, addGoodbye } = require('../../chat/conversationHelpers');
+const { computeFieldsState, buildHighlights } = require('../../chat/fieldsState');
+const {
+  shouldGreet,
+  shouldClose,
+  prependGreeting,
+  appendClosing,
+} = require('../../chat/conversationHelpers');
+const { generateGreeting, generateClosing } = require('../../chat/greetingClosingService');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -184,6 +190,8 @@ router.post('/chat', async (req, res) => {
       },
     });
 
+    const highlights = buildHighlights(orderedQuoteFields, collectedInfos, requiredInfos, behavior);
+
     if (missingFields.length > 0) {
       const nextField = missingFields[0];
       let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);
@@ -193,14 +201,14 @@ router.post('/chat', async (req, res) => {
         allowedFieldNames,
       });
       if (shouldGreet(assistantCountBefore)) {
-        assistantMessage = addGreeting(assistantMessage, behavior);
+        const greetingWords = await generateGreeting(message, behavior);
+        assistantMessage = prependGreeting(assistantMessage, greetingWords);
       }
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
       return res.json({
         assistant_message: assistantMessage,
         conversation_id: conversationId,
-        required_infos: requiredInfos,
-        collected_infos: collectedInfos,
+        highlights,
       });
     }
 
@@ -208,18 +216,19 @@ router.post('/chat', async (req, res) => {
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
     if (shouldGreet(assistantCountBefore)) {
-      assistantMessage = addGreeting(assistantMessage, behavior);
+      const greetingWords = await generateGreeting(message, behavior);
+      assistantMessage = prependGreeting(assistantMessage, greetingWords);
     }
-    if (shouldGoodbye(message, [])) {
-      assistantMessage = addGoodbye(assistantMessage, behavior);
+    if (shouldClose(message, [])) {
+      const closingWords = await generateClosing(message, collectedMap, behavior);
+      assistantMessage = appendClosing(assistantMessage, closingWords);
     }
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
 
     return res.json({
       assistant_message: assistantMessage,
       conversation_id: conversationId,
-      required_infos: [],
-      collected_infos: collectedInfos,
+      highlights,
     });
   } catch (err) {
     console.error('[chat] error:', err.message);
@@ -237,17 +246,22 @@ router.get('/conversation/:conversationId/fields', async (req, res) => {
     if (!conv) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
     }
-    const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
+    const [quoteFields, behavior] = await Promise.all([
+      chatbotQuoteFieldsRepository.list(companyId),
+      chatbotBehaviorRepository.get(companyId),
+    ]);
     const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
     const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
       orderedQuoteFields,
       collectedFromDb
     );
+    const highlights = buildHighlights(orderedQuoteFields, collectedInfos, requiredInfos, behavior);
     return res.json({
       conversation_id: conversationId,
       required_infos: requiredInfos,
       collected_infos: collectedInfos,
+      highlights,
     });
   } catch (err) {
     console.error('[chat] fields error:', err.message);

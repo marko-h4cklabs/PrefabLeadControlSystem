@@ -49,4 +49,8 @@ async function replace(companyId, fields) {
   return list(companyId);
 }
 
-module.exports = { list, replace };
+function getFields(companyId) {
+  return list(companyId);
+}
+
+module.exports = { list, replace, getFields };
