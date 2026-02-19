@@ -1,7 +1,8 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const { userRepository, companyRepository } = require('../../../db/repositories');
+const { pool } = require('../../../db');
+const { userRepository } = require('../../../db/repositories');
 
 const router = express.Router();
 
@@ -52,17 +53,33 @@ router.post('/signup', async (req, res) => {
       });
     }
 
-    const company = await companyRepository.create({
-      name: cn,
-      contact_email: emailLower,
-    });
-
     const passwordHash = await bcrypt.hash(password, 10);
-    const user = await userRepository.create(company.id, {
-      email: emailLower,
-      password_hash: passwordHash,
-      role: 'owner',
-    });
+    const client = await pool.connect();
+    let company;
+    let user;
+    try {
+      await client.query('BEGIN');
+      const companyRes = await client.query(
+        `INSERT INTO companies (name, contact_email, contact_phone, chatbot_style, scoring_config, channels_enabled)
+         VALUES ($1, $2, NULL, '{}', '{}', '[]')
+         RETURNING id, name`,
+        [cn, emailLower]
+      );
+      company = companyRes.rows[0];
+      const userRes = await client.query(
+        `INSERT INTO users (company_id, email, password_hash, role)
+         VALUES ($1, $2, $3, 'admin')
+         RETURNING id, email, role`,
+        [company.id, emailLower, passwordHash]
+      );
+      user = userRes.rows[0];
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
 
     const token = jwt.sign(
       { id: user.id, companyId: company.id, role: user.role },
@@ -72,13 +89,18 @@ router.post('/signup', async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, role: user.role, companyId: company.id },
+      user: { id: user.id, email: user.email, role: user.role },
       company: { id: company.id, name: company.name },
     });
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({
         error: { code: 'CONFLICT', message: 'Email already in use' },
+      });
+    }
+    if (err.code === '23514') {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid data' },
       });
     }
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
@@ -100,7 +122,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const user = await userRepository.findByEmailOnly(email.trim());
+    const user = await userRepository.findByEmailOnly(email.trim().toLowerCase());
     if (!user) {
       return res.status(401).json({
         error: { code: 'UNAUTHORIZED', message: 'Invalid credentials' },
@@ -121,7 +143,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const company = await companyRepository.findById(user.company_id);
     const token = jwt.sign(
       { id: user.id, companyId: user.company_id, role: user.role },
       process.env.JWT_SECRET,
@@ -129,8 +150,8 @@ router.post('/login', async (req, res) => {
     );
     res.json({
       token,
-      user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id },
-      company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
+      user: { id: user.id, email: user.email, role: user.role },
+      companyId: user.company_id,
     });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
