@@ -15,6 +15,14 @@ function toPlainLead(row) {
   };
 }
 
+async function findByCompanyChannelExternalId(companyId, channel, externalId) {
+  const result = await pool.query(
+    'SELECT * FROM leads WHERE company_id = $1 AND channel = $2 AND external_id = $3',
+    [companyId, channel, externalId]
+  );
+  return toPlainLead(result.rows[0]);
+}
+
 async function findById(companyId, leadId) {
   const result = await pool.query(
     'SELECT * FROM leads WHERE id = $1 AND company_id = $2',
@@ -104,4 +112,5 @@ module.exports = {
   count,
   create,
   update,
+  findByCompanyChannelExternalId,
 };
