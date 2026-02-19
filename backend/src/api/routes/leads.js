@@ -1,7 +1,12 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
-const { leadRepository, conversationRepository } = require('../../../db/repositories');
+const {
+  leadRepository,
+  conversationRepository,
+  chatbotQuoteFieldsRepository,
+} = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
+const { computeFieldsState } = require('../../chat/fieldsState');
 const { errorJson } = require('../middleware/errors');
 const {
   VALID_CHANNELS,
@@ -82,10 +87,27 @@ router.get('/:leadId', async (req, res) => {
   }
 });
 
+function parsedFieldsToCollected(parsedFields, quoteFields) {
+  const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
+  return Object.entries(parsedFields ?? {})
+    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .map(([name, value]) => {
+      const qf = quoteByName[name];
+      return {
+        name,
+        value,
+        type: qf?.type ?? 'text',
+        units: qf?.units ?? null,
+        priority: qf?.priority ?? 100,
+      };
+    });
+}
+
 router.get('/:leadId/conversation', async (req, res) => {
   try {
     const leadId = req.params.leadId;
-    const lead = await leadRepository.findById(req.tenantId, leadId);
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
     if (!lead) {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
@@ -93,11 +115,19 @@ router.get('/:leadId/conversation', async (req, res) => {
     if (!conversation) {
       conversation = await conversationRepository.createIfNotExists(leadId);
     }
+    const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
+    const orderedQuoteFields = (quoteFields ?? [])
+      .filter((f) => ['text', 'number'].includes(f.type))
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields, orderedQuoteFields);
+    const { required_infos, collected_infos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
     res.json({
       lead_id: leadId,
       messages: conversation.messages,
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
+      required_infos: required_infos ?? [],
+      collected_infos: collected_infos ?? [],
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -138,6 +168,8 @@ router.post('/:leadId/ai-reply', async (req, res) => {
       messages: conversation.messages,
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
+      required_infos: result.required_infos ?? [],
+      collected_infos: result.collected_infos ?? [],
     });
   } catch (err) {
     if (err.message?.includes('Invalid JSON') || err.message?.includes('assistant_message') || err.message?.includes('field_updates')) {
