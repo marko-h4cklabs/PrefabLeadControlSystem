@@ -4,8 +4,12 @@ const {
   chatbotCompanyInfoRepository,
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
+  chatConversationRepository,
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
+const { extractQuoteFields } = require('../../chat/quoteExtractor');
+const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
+const { callLLM } = require('../../chat/chatService');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -110,6 +114,96 @@ router.put('/quote-fields', async (req, res) => {
       });
     }
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+const chatBodySchema = require('../validators/chatSchemas').chatBodySchema;
+
+router.post('/chat', async (req, res) => {
+  try {
+    const parsed = chatBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: parsed.error?.message ?? 'message is required' },
+      });
+    }
+    const { message, conversationId: reqConversationId } = parsed.data;
+    const companyId = req.tenantId;
+
+    let conversationId = reqConversationId;
+    if (!conversationId) {
+      const conv = await chatConversationRepository.createConversation(companyId);
+      conversationId = conv.id;
+    } else {
+      const conv = await chatConversationRepository.getConversation(conversationId, companyId);
+      if (!conv) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Conversation not found' } });
+      }
+    }
+
+    const [behavior, companyInfo, quoteFields, state] = await Promise.all([
+      chatbotBehaviorRepository.get(companyId),
+      chatbotCompanyInfoRepository.get(companyId),
+      chatbotQuoteFieldsRepository.list(companyId),
+      chatConversationRepository.getOrCreateState(conversationId, companyId),
+    ]);
+
+    let collectedFields = (state?.collected_fields && typeof state.collected_fields === 'object')
+      ? { ...state.collected_fields }
+      : {};
+
+    const extracted = extractQuoteFields(message, quoteFields);
+    if (Object.keys(extracted).length > 0) {
+      console.log('[chat] extracted fields:', extracted);
+      collectedFields = { ...collectedFields, ...extracted };
+      await chatConversationRepository.updateState(conversationId, companyId, { collected_fields: collectedFields });
+    }
+
+    const requiredFields = (quoteFields ?? []).filter((f) => f.required);
+    const missingFields = requiredFields
+      .filter((f) => {
+        const v = collectedFields[f.name];
+        return v == null || String(v).trim() === '';
+      })
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+
+    if (missingFields.length > 0) {
+      console.log('[chat] missing fields computed:', missingFields.map((f) => f.name));
+      const nextField = missingFields[0];
+      let assistantMessage = buildFieldQuestion(nextField.name, behavior);
+      if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
+        assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
+      }
+      await chatConversationRepository.updateState(conversationId, companyId, {
+        last_asked_field: nextField.name,
+      });
+      console.log('[chat] collector asked for field (no LLM):', nextField.name);
+      return res.json({
+        conversationId,
+        assistantMessage,
+        collectedFields,
+        missingFields: missingFields.map((f) => f.name),
+      });
+    }
+
+    console.log('[chat] all fields collected, calling LLM');
+    const systemPrompt = buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields);
+    let assistantMessage = await callLLM(systemPrompt, message, behavior);
+    if (!behavior?.emojis_enabled && /[\u{1F300}-\u{1F9FF}]/u.test(assistantMessage)) {
+      assistantMessage = assistantMessage.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
+    }
+
+    return res.json({
+      conversationId,
+      assistantMessage,
+      collectedFields,
+      missingFields: [],
+    });
+  } catch (err) {
+    console.error('[chat] error:', err.message);
+    return res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: err?.message ?? 'Chat failed' },
+    });
   }
 });
 
