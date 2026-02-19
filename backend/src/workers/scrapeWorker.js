@@ -1,6 +1,6 @@
 const { crawlWebsite } = require('../services/crawlApiService');
 const { summarizeWithLLM } = require('../services/scrapeSummarizer');
-const { chatbotCompanyInfoRepository, chatbotScrapedPagesRepository } = require('../db/repositories');
+const { chatbotCompanyInfoRepository, chatbotScrapedPagesRepository } = require('../../db/repositories');
 
 const MAX_CHARS = parseInt(process.env.SCRAPER_MAX_CHARS, 10) || 200000;
 
