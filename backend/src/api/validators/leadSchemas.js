@@ -52,10 +52,29 @@ const updateLeadBodySchema = z.object({
     .optional(),
 });
 
+// Human name: Unicode letters and spaces; allow empty/null
+const nameRegex = /^[\p{L}]+(?:[\s\p{L}]+)*$/u;
+const patchNameBodySchema = z.object({
+  name: z
+    .string()
+    .optional()
+    .transform((v) => (v != null ? String(v).trim() : ''))
+    .refine((v) => v === '' || nameRegex.test(v), {
+      message: 'name must contain only letters and spaces',
+    })
+    .transform((v) => (v === '' ? null : v)),
+});
+
+const patchStatusBodySchema = z.object({
+  status_id: z.string().uuid(),
+});
+
 module.exports = {
   VALID_CHANNELS,
   VALID_STATUSES,
   listLeadsQuerySchema,
   createLeadBodySchema,
   updateLeadBodySchema,
+  patchNameBodySchema,
+  patchStatusBodySchema,
 };

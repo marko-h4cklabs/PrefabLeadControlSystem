@@ -7,6 +7,7 @@ function toPlainLead(row, statusRow = null) {
     company_id: row.company_id,
     channel: row.channel,
     external_id: row.external_id,
+    name: row.name ?? null,
     score: row.score ?? 0,
     status: row.status,
     status_id: row.status_id ?? null,
@@ -48,6 +49,7 @@ async function findById(companyId, leadId) {
       company_id: r.company_id,
       channel: r.channel,
       external_id: r.external_id,
+      name: r.name,
       score: r.score,
       status: r.status,
       status_id: r.status_id,
@@ -92,6 +94,7 @@ async function findAll(companyId, options = {}) {
         company_id: r.company_id,
         channel: r.channel,
         external_id: r.external_id,
+        name: r.name,
         score: r.score,
         status: r.status,
         status_id: r.status_id,
@@ -184,6 +187,10 @@ async function update(companyId, leadId, data) {
     updates.push(`assigned_sales = $${paramIndex++}`);
     params.push(data.assigned_sales);
   }
+  if (data.name !== undefined) {
+    updates.push(`name = $${paramIndex++}`);
+    params.push(data.name);
+  }
   if (updates.length === 0) {
     const existing = await findById(companyId, leadId);
     return existing;
@@ -217,6 +224,20 @@ async function setStatus(companyId, leadId, statusId) {
   return toPlainLead(row, statusRow.rows[0]);
 }
 
+async function setName(companyId, leadId, name) {
+  const result = await pool.query(
+    `UPDATE leads SET name = $1, updated_at = NOW() WHERE id = $2 AND company_id = $3 RETURNING *`,
+    [name, leadId, companyId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const statusRow = row.status_id ? await pool.query(
+    'SELECT id, name FROM company_lead_statuses WHERE id = $1',
+    [row.status_id]
+  ).then((r) => r.rows[0]) : null;
+  return toPlainLead(row, statusRow);
+}
+
 module.exports = {
   findById,
   findAll,
@@ -224,5 +245,6 @@ module.exports = {
   create,
   update,
   setStatus,
+  setName,
   findByCompanyChannelExternalId,
 };

@@ -3,7 +3,6 @@ const router = express.Router({ mergeParams: true });
 const {
   leadRepository,
   conversationRepository,
-  chatbotQuoteFieldsRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
@@ -14,6 +13,8 @@ const {
   listLeadsQuerySchema,
   createLeadBodySchema,
   updateLeadBodySchema,
+  patchNameBodySchema,
+  patchStatusBodySchema,
 } = require('../validators/leadSchemas');
 
 function normalizeAndValidateChannel(input) {
@@ -77,17 +78,15 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.get('/:leadId', async (req, res) => {
-  try {
-    const lead = await leadRepository.findById(req.tenantId, req.params.leadId);
-    if (!lead) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
-    }
-    res.json(lead);
-  } catch (err) {
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
-  }
-});
+function toLeadPublic(lead) {
+  return {
+    channel: lead.channel,
+    name: lead.name ?? null,
+    status: lead.status_name ?? lead.status,
+    created_at: lead.created_at,
+    updated_at: lead.updated_at,
+  };
+}
 
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
@@ -105,6 +104,37 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     });
 }
 
+router.get('/:leadId', async (req, res) => {
+  try {
+    const lead = await leadRepository.findById(req.tenantId, req.params.leadId);
+    if (!lead) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    }
+    const conversation = await conversationRepository.getByLeadId(req.params.leadId);
+    const snapshot = conversation?.quote_snapshot ?? null;
+    const orderedSnapshot = Array.isArray(snapshot) ? snapshot : (snapshot?.fields ? snapshot.fields : []);
+    const parsedFields = conversation?.parsed_fields ?? {};
+    const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
+    const { required_infos, collected_infos } = computeFieldsState(orderedSnapshot, collectedFromParsed);
+    res.json({
+      lead: toLeadPublic(lead),
+      collected_infos: (collected_infos ?? []).map((c) => ({
+        name: c.name,
+        type: c.type ?? 'text',
+        value: c.value,
+        units: c.units ?? null,
+      })),
+      required_infos_missing: (required_infos ?? []).map((f) => ({
+        name: f.name,
+        type: f.type ?? 'text',
+        units: f.units ?? null,
+      })),
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/:leadId/conversation', async (req, res) => {
   try {
     const leadId = req.params.leadId;
@@ -115,11 +145,10 @@ router.get('/:leadId/conversation', async (req, res) => {
     }
     let conversation = await conversationRepository.getByLeadId(leadId);
     if (!conversation) {
-      conversation = await conversationRepository.createIfNotExists(leadId);
+      conversation = await conversationRepository.createIfNotExists(leadId, companyId);
     }
-    const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
-    const orderedQuoteFields = (quoteFields ?? [])
-      .filter((f) => ['text', 'number'].includes(f.type))
+    const orderedQuoteFields = (conversation.quote_snapshot ?? [])
+      .filter((f) => f && ['text', 'number'].includes(f.type))
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields, orderedQuoteFields);
     const { required_infos, collected_infos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
@@ -195,7 +224,7 @@ router.post('/:leadId/messages', async (req, res) => {
     }
     let conversation = await conversationRepository.getByLeadId(leadId);
     if (!conversation) {
-      conversation = await conversationRepository.createIfNotExists(leadId);
+      conversation = await conversationRepository.createIfNotExists(leadId, req.tenantId);
     }
     conversation = await conversationRepository.appendMessage(leadId, role, content);
     res.json({
@@ -204,6 +233,40 @@ router.post('/:leadId/messages', async (req, res) => {
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
     });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.patch('/:leadId/status', async (req, res) => {
+  try {
+    const parsed = patchStatusBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const msg = parsed.error.flatten().formErrors?.join?.(' ') || 'status_id (uuid) is required';
+      return res.status(400).json({ error: msg });
+    }
+    const lead = await leadRepository.setStatus(req.tenantId, req.params.leadId, parsed.data.status_id);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found or status invalid for company' });
+    }
+    res.json(lead);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.patch('/:leadId/name', async (req, res) => {
+  try {
+    const parsed = patchNameBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const msg = parsed.error.flatten().formErrors?.join?.(' ') || 'Invalid name';
+      return res.status(400).json({ error: msg });
+    }
+    const lead = await leadRepository.setName(req.tenantId, req.params.leadId, parsed.data.name);
+    if (!lead) {
+      return res.status(404).json({ error: 'Lead not found' });
+    }
+    res.json(lead);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -224,6 +287,7 @@ router.patch('/:leadId', async (req, res) => {
     }
     const updateData = {};
     if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
+    if (parsed.data.status_id !== undefined) updateData.status_id = parsed.data.status_id;
     if (parsed.data.assigned_sales !== undefined) updateData.assigned_sales = parsed.data.assigned_sales;
     if (parsed.data.channel !== undefined) updateData.channel = parsed.data.channel;
     const lead = await leadRepository.update(req.tenantId, req.params.leadId, updateData);

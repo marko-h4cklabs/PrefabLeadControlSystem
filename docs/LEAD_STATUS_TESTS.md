@@ -5,6 +5,8 @@
 - Run migrations in order:
   - `psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql`
   - `psql $DATABASE_URL -f backend/db/migrations/013_seed_default_company_lead_statuses.sql`
+  - `psql $DATABASE_URL -f backend/db/migrations/014_lead_name_and_conversation_snapshot.sql`
+  - `psql $DATABASE_URL -f backend/db/migrations/015_backfill_company_lead_statuses.sql`
 - Or apply via Railway: connect to Postgres and run the migration SQL
 
 ## Manual Verification Steps
@@ -50,23 +52,43 @@ curl -s -X GET "$BASE/api/leads/statuses" \
   -H "x-company-id: YOUR_COMPANY_ID"
 ```
 
-Expected: `{ "statuses": [ { "id": "...", "name": "New", "sort_order": 10, "is_default": true }, ... ] }`
+Expected: `{ "statuses": [ { "id": "...", "name": "New", "position": 10 }, ... ] }`
 
-### 5. PUT /api/leads/:leadId/status to change to Qualified
+### 5. PATCH /api/leads/:id/status to change to Qualified
 
 ```bash
 # Get lead ID from step 3, get Qualified status ID from step 4
 export LEAD_ID="lead-uuid"
 export QUALIFIED_STATUS_ID="status-uuid"
 
-curl -s -X PUT "$BASE/api/leads/$LEAD_ID/status" \
+curl -s -X PATCH "$BASE/api/leads/$LEAD_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-company-id: YOUR_COMPANY_ID" \
-  -d '{"statusId":"'$QUALIFIED_STATUS_ID'"}'
+  -d '{"status_id":"'$QUALIFIED_STATUS_ID'"}'
 ```
 
-Also accepted: `{"status_id":"<uuid>"}`. Expected: `{ "id": "...", "status_id": "...", "status_name": "Qualified", ... }`
+Expected: Updated lead with `status_id`, `status_name`, etc.
+
+### 5b. PATCH /api/leads/:id/name
+
+```bash
+curl -s -X PATCH "$BASE/api/leads/$LEAD_ID/name" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: YOUR_COMPANY_ID" \
+  -d '{"name":"John Smith"}'
+```
+
+### 5c. GET /api/leads/:id (lead detail with collected info)
+
+```bash
+curl -s -X GET "$BASE/api/leads/$LEAD_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
+```
+
+Expected: `{ "lead": { "channel", "name", "status", "created_at", "updated_at" }, "collected_infos": [...], "required_infos_missing": [...] }`
 
 ### 6. Verify lead list shows updated status and filter by statusId
 
@@ -77,7 +99,7 @@ curl -s -X GET "$BASE/api/leads?limit=10&offset=0" \
   -H "x-company-id: YOUR_COMPANY_ID"
 
 # Filter leads by status UUID
-curl -s -X GET "$BASE/api/leads?limit=10&offset=0&statusId=$QUALIFIED_STATUS_ID" \
+curl -s -X GET "$BASE/api/leads?limit=10&offset=0&status_id=$QUALIFIED_STATUS_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 ```
@@ -89,6 +111,8 @@ Expected: Each lead has `status_id`, `status_name` (and optionally `status_obj`)
 | Endpoint | Method | Query / Body |
 |----------|--------|--------------|
 | List statuses | `GET /api/leads/statuses` | - |
-| List leads | `GET /api/leads` | `?limit=&offset=&statusId=` |
-| Filter by status | `GET /api/leads?statusId=<uuid>` | - |
-| Update lead status | `PUT /api/leads/:leadId/status` | `{ "statusId": "<uuid>" }` |
+| List leads | `GET /api/leads` | `?limit=&offset=&status_id=<uuid>` |
+| Filter by status | `GET /api/leads?status_id=<uuid>` | - |
+| Lead detail | `GET /api/leads/:id` | - |
+| Update lead status | `PATCH /api/leads/:id/status` | `{ "status_id": "<uuid>" }` |
+| Update lead name | `PATCH /api/leads/:id/name` | `{ "name": "First Last" }` |

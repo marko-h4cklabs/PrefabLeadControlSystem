@@ -1,4 +1,5 @@
 const { pool } = require('../index');
+const chatbotQuoteFieldsRepository = require('./chatbotQuoteFieldsRepository');
 
 function toPlainConversation(row) {
   if (!row) return null;
@@ -8,20 +9,27 @@ function toPlainConversation(row) {
     messages: row.messages ?? [],
     current_step: row.current_step ?? 0,
     parsed_fields: row.parsed_fields ?? {},
+    quote_snapshot: row.quote_snapshot ?? null,
     last_updated: row.last_updated,
     created_at: row.created_at,
   };
 }
 
-async function createIfNotExists(leadId) {
+async function createIfNotExists(leadId, companyId = null) {
   const existing = await getByLeadId(leadId);
   if (existing) return existing;
 
+  let quoteSnapshot = null;
+  if (companyId) {
+    const fields = await chatbotQuoteFieldsRepository.list(companyId);
+    quoteSnapshot = (fields ?? []).filter((f) => ['text', 'number'].includes(f.type));
+  }
+
   const result = await pool.query(
-    `INSERT INTO conversations (lead_id)
-     VALUES ($1)
+    `INSERT INTO conversations (lead_id, quote_snapshot)
+     VALUES ($1, $2::jsonb)
      RETURNING *`,
-    [leadId]
+    [leadId, quoteSnapshot ? JSON.stringify(quoteSnapshot) : null]
   );
   return toPlainConversation(result.rows[0]);
 }

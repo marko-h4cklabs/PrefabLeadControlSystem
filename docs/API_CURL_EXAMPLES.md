@@ -8,6 +8,8 @@ psql $DATABASE_URL -f backend/db/migrations/010_chat_conversation_state.sql
 psql $DATABASE_URL -f backend/db/migrations/011_chat_conversation_fields_and_messages.sql
 psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql
 psql $DATABASE_URL -f backend/db/migrations/013_seed_default_company_lead_statuses.sql
+psql $DATABASE_URL -f backend/db/migrations/014_lead_name_and_conversation_snapshot.sql
+psql $DATABASE_URL -f backend/db/migrations/015_backfill_company_lead_statuses.sql
 ```
 
 ## Company Info
@@ -90,24 +92,36 @@ curl -s -X GET "$BASE_URL/api/chatbot/system-context" \
 ## Lead Statuses
 
 ```bash
-# List all statuses for the authenticated company (sorted by sort_order)
+# List all statuses for the authenticated company (sorted by position)
 curl -s -X GET "$BASE_URL/api/leads/statuses" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 
-# List leads with optional filter by status UUID
+# List leads with optional filter by status_id (UUID)
 curl -s -X GET "$BASE_URL/api/leads?limit=10&offset=0" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 
-curl -s -X GET "$BASE_URL/api/leads?limit=10&offset=0&statusId=STATUS_UUID" \
+curl -s -X GET "$BASE_URL/api/leads?limit=10&offset=0&status_id=STATUS_UUID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 
 # Update a lead's status
-curl -s -X PUT "$BASE_URL/api/leads/LEAD_ID/status" \
+curl -s -X PATCH "$BASE_URL/api/leads/LEAD_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-company-id: YOUR_COMPANY_ID" \
-  -d '{"statusId":"STATUS_UUID"}'
+  -d '{"status_id":"STATUS_UUID"}'
+
+# Update a lead's name
+curl -s -X PATCH "$BASE_URL/api/leads/LEAD_ID/name" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: YOUR_COMPANY_ID" \
+  -d '{"name":"John Smith"}'
+
+# Get lead detail with collected_infos and required_infos_missing
+curl -s -X GET "$BASE_URL/api/leads/LEAD_ID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
 ```

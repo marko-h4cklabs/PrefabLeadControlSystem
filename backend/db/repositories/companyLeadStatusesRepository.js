@@ -11,6 +11,7 @@ async function list(companyId) {
   return result.rows.map((r) => ({
     id: r.id,
     name: r.name,
+    position: r.sort_order ?? 0,
     sort_order: r.sort_order,
     is_default: r.is_default ?? false,
     created_at: r.created_at,

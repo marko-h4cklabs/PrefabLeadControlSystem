@@ -3,7 +3,6 @@ const {
   conversationRepository,
   chatbotBehaviorRepository,
   chatbotCompanyInfoRepository,
-  chatbotQuoteFieldsRepository,
 } = require('../db/repositories');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
 const { computeFieldsState } = require('../src/chat/fieldsState');
@@ -90,20 +89,19 @@ function parseClaudeOutput(raw) {
 }
 
 async function generateAiReply(companyId, leadId) {
-  const [behavior, companyInfo, quoteFields] = await Promise.all([
-    chatbotBehaviorRepository.get(companyId),
-    chatbotCompanyInfoRepository.get(companyId),
-    chatbotQuoteFieldsRepository.list(companyId),
-  ]);
-
-  const orderedQuoteFields = (quoteFields ?? [])
-    .filter((f) => ['text', 'number'].includes(f.type))
-    .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-
   let conversation = await conversationRepository.getByLeadId(leadId);
   if (!conversation) {
-    conversation = await conversationRepository.createIfNotExists(leadId);
+    conversation = await conversationRepository.createIfNotExists(leadId, companyId);
   }
+
+  const orderedQuoteFields = (conversation.quote_snapshot ?? [])
+    .filter((f) => f && ['text', 'number'].includes(f.type))
+    .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+
+  const [behavior, companyInfo] = await Promise.all([
+    chatbotBehaviorRepository.get(companyId),
+    chatbotCompanyInfoRepository.get(companyId),
+  ]);
 
   const lastUserMsg = (conversation.messages ?? []).filter((m) => m.role === 'user').pop();
   const userText = lastUserMsg?.content ?? '';
