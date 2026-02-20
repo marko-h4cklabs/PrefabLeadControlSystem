@@ -25,14 +25,14 @@ router.post('/:channel/webhook', webhookAuthMiddleware, async (req, res) => {
     let lead = null;
 
     if (externalId != null && String(externalId).trim() !== '') {
-      const existing = await leadRepository.findByCompanyChannelExternalId(companyId, channel, String(externalId), 'real');
+      const existing = await leadRepository.findByCompanyChannelExternalId(companyId, channel, String(externalId), 'inbox');
       if (existing) {
         lead = await leadRepository.update(companyId, existing.id, {});
       } else {
         lead = await leadRepository.create(companyId, {
           channel,
           external_id: String(externalId),
-          source: 'real',
+          source: 'inbox',
         });
         notifyNewLead(lead, 'webhook');
       }

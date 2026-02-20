@@ -31,7 +31,7 @@ const listLeadsQuerySchema = z.object({
     .transform((v) => (v != null ? String(v).trim() : undefined))
     .refine((v) => !v || v.length <= 80, 'query must be at most 80 characters')
     .transform((v) => (v === '' ? undefined : v)),
-  source: z.enum(['real', 'simulation']).optional(),
+  source: z.enum(['inbox', 'simulation']).optional(),
 });
 
 const createLeadBodySchema = z

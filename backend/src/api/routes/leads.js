@@ -44,7 +44,7 @@ router.get('/', async (req, res) => {
     if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
-    const filterSource = source ?? 'real';
+    const filterSource = source ?? 'inbox';
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
@@ -64,6 +64,7 @@ router.get('/', async (req, res) => {
           status_name: l.status_name ?? l.status ?? null,
           created_at: l.created_at,
           updated_at: l.updated_at,
+          source: l.source ?? 'inbox',
         };
         try {
           base.collected_info = await leadRepository.getCollectedInfoSummary(l.id, 120);
@@ -173,6 +174,7 @@ router.get('/:leadId', async (req, res) => {
       status_name: lead.status_name ?? lead.status ?? null,
       created_at: lead.created_at,
       updated_at: lead.updated_at,
+      source: lead.source ?? 'inbox',
       collected_infos: collectedInfos,
     });
   } catch (err) {

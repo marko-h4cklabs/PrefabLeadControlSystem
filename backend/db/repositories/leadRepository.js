@@ -15,6 +15,7 @@ function toPlainLead(row, statusRow = null) {
     assigned_sales: row.assigned_sales,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    source: row.source ?? 'inbox',
   };
   if (statusRow) {
     lead.status_obj = { id: statusRow.id, name: statusRow.name };
@@ -60,6 +61,7 @@ async function findById(companyId, leadId) {
       assigned_sales: r.assigned_sales,
       created_at: r.created_at,
       updated_at: r.updated_at,
+      source: r.source ?? 'inbox',
     },
     statusRow
   );
@@ -107,7 +109,13 @@ async function findAll(companyId, options = {}) {
   sql += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
   params.push(limit, offset);
 
-  const result = await pool.query(sql, params);
+  let result;
+  try {
+    result = await pool.query(sql, params);
+  } catch (err) {
+    console.error('[leadRepository.findAll] SQL error:', err.message, 'params:', params);
+    throw err;
+  }
   return result.rows.map((r) => {
     const statusRow = r.status_id_join ? { id: r.status_id, name: r.status_name } : null;
     return toPlainLead(
@@ -123,6 +131,7 @@ async function findAll(companyId, options = {}) {
         assigned_sales: r.assigned_sales,
         created_at: r.created_at,
         updated_at: r.updated_at,
+        source: r.source ?? 'inbox',
       },
       statusRow
     );
@@ -152,8 +161,13 @@ async function count(companyId, options = {}) {
       sql += ` AND l.status_id = $${paramIndex++}`;
       params.push(status_id);
     }
-    const result = await pool.query(sql, params);
-    return result.rows[0]?.count ?? 0;
+    try {
+      const result = await pool.query(sql, params);
+      return result.rows[0]?.count ?? 0;
+    } catch (err) {
+      console.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
+      throw err;
+    }
   }
   let sql = 'SELECT COUNT(*)::int FROM leads WHERE company_id = $1';
   const params = [companyId];
@@ -170,8 +184,13 @@ async function count(companyId, options = {}) {
     sql += ` AND status_id = $${paramIndex++}`;
     params.push(status_id);
   }
-  const result = await pool.query(sql, params);
-  return result.rows[0]?.count ?? 0;
+  try {
+    const result = await pool.query(sql, params);
+    return result.rows[0]?.count ?? 0;
+  } catch (err) {
+    console.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
+    throw err;
+  }
 }
 
 async function create(companyId, data) {
@@ -183,7 +202,7 @@ async function create(companyId, data) {
 
   const nameVal = data.name ?? data.external_id ?? null;
   const externalIdVal = data.external_id ?? data.name ?? null;
-  const sourceVal = data.source === 'real' ? 'real' : 'simulation';
+  const sourceVal = data.source === 'inbox' ? 'inbox' : 'simulation';
   const result = await pool.query(
     `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales, source)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

@@ -25,6 +25,7 @@ function toLeadResponse(lead) {
     status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
     updated_at: lead.updated_at,
+    source: lead.source ?? 'inbox',
   };
 }
 
@@ -73,7 +74,7 @@ router.get('/', async (req, res) => {
     if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
-    const filterSource = source ?? 'real';
+    const filterSource = source ?? 'inbox';
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
@@ -94,6 +95,7 @@ router.get('/', async (req, res) => {
           status_name: base.status_name,
           created_at: base.created_at,
           updated_at: base.updated_at,
+          source: base.source ?? 'inbox',
         };
         try {
           out.collected_info = await leadRepository.getCollectedInfoSummary(lead.id, 120);
@@ -108,6 +110,7 @@ router.get('/', async (req, res) => {
       total: typeof total === 'number' ? total : 0,
     });
   } catch (err) {
+    console.error('[leads] list error:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -155,6 +158,7 @@ router.get('/:id', async (req, res) => {
       status_name: lead.status_name ?? lead.status ?? null,
       created_at: lead.created_at,
       updated_at: lead.updated_at,
+      source: lead.source ?? 'inbox',
       collected_infos: collectedInfos,
     });
   } catch (err) {
