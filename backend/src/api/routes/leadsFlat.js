@@ -68,19 +68,21 @@ router.get('/', async (req, res) => {
       const msg = err.formErrors?.join?.(' ') || 'Invalid query parameters';
       return res.status(400).json({ error: msg });
     }
-    const { limit, offset, status, statusId, status_id, query } = parsed.data;
+    const { limit, offset, status, statusId, status_id, query, source } = parsed.data;
     let filterStatusId = statusId || status_id;
     if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
+    const filterSource = source ?? 'real';
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
       query,
+      source: filterSource,
       limit,
       offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId, query });
+    const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId, query, source: filterSource });
     const leadsWithSummary = await Promise.all(
       (Array.isArray(leads) ? leads : []).map(async (lead) => {
         const base = toLeadResponse(lead);
@@ -179,6 +181,7 @@ router.post('/', async (req, res) => {
       channel,
       name: displayValue || undefined,
       external_id: displayValue || external_id || undefined,
+      source: 'simulation',
     });
     res.status(201).json(toLeadResponse(lead));
   } catch (err) {

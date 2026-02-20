@@ -25,11 +25,14 @@ function toPlainLead(row, statusRow = null) {
   return lead;
 }
 
-async function findByCompanyChannelExternalId(companyId, channel, externalId) {
-  const result = await pool.query(
-    'SELECT * FROM leads WHERE company_id = $1 AND channel = $2 AND external_id = $3',
-    [companyId, channel, externalId]
-  );
+async function findByCompanyChannelExternalId(companyId, channel, externalId, source = null) {
+  let sql = 'SELECT * FROM leads WHERE company_id = $1 AND channel = $2 AND external_id = $3';
+  const params = [companyId, channel, externalId];
+  if (source) {
+    sql += ' AND source = $4';
+    params.push(source);
+  }
+  const result = await pool.query(sql, params);
   return toPlainLead(result.rows[0]);
 }
 
@@ -70,7 +73,7 @@ function escapeIlikePattern(s) {
 }
 
 async function findAll(companyId, options = {}) {
-  const { status, status_id, query, limit = 50, offset = 0 } = options;
+  const { status, status_id, query, source, limit = 50, offset = 0 } = options;
   let sql = `SELECT l.*, cls.id AS status_id_join, cls.name AS status_name
     FROM leads l
     LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
@@ -78,6 +81,11 @@ async function findAll(companyId, options = {}) {
   const params = [companyId];
   let paramIndex = 2;
 
+  if (source) {
+    sql += ` AND l.source = $${paramIndex}`;
+    params.push(source);
+    paramIndex++;
+  }
   if (status) {
     sql += ` AND l.status = $${paramIndex}`;
     params.push(status);
@@ -122,7 +130,7 @@ async function findAll(companyId, options = {}) {
 }
 
 async function count(companyId, options = {}) {
-  const { status, status_id, query } = options;
+  const { status, status_id, query, source } = options;
   if (query && query.trim()) {
     const pattern = '%' + escapeIlikePattern(query.trim()) + '%';
     let sql = `SELECT COUNT(*)::int
@@ -132,6 +140,10 @@ async function count(companyId, options = {}) {
         AND (l.name ILIKE $2 OR l.external_id ILIKE $2 OR l.channel ILIKE $2 OR cls.name ILIKE $2)`;
     const params = [companyId, pattern];
     let paramIndex = 3;
+    if (source) {
+      sql += ` AND l.source = $${paramIndex++}`;
+      params.push(source);
+    }
     if (status) {
       sql += ` AND l.status = $${paramIndex++}`;
       params.push(status);
@@ -146,6 +158,10 @@ async function count(companyId, options = {}) {
   let sql = 'SELECT COUNT(*)::int FROM leads WHERE company_id = $1';
   const params = [companyId];
   let paramIndex = 2;
+  if (source) {
+    sql += ` AND source = $${paramIndex++}`;
+    params.push(source);
+  }
   if (status) {
     sql += ` AND status = $${paramIndex++}`;
     params.push(status);
@@ -167,9 +183,10 @@ async function create(companyId, data) {
 
   const nameVal = data.name ?? data.external_id ?? null;
   const externalIdVal = data.external_id ?? data.name ?? null;
+  const sourceVal = data.source === 'real' ? 'real' : 'simulation';
   const result = await pool.query(
-    `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       companyId,
@@ -180,6 +197,7 @@ async function create(companyId, data) {
       data.status ?? 'new',
       data.status_id ?? defaultStatusId,
       data.assigned_sales ?? null,
+      sourceVal,
     ]
   );
   const row = result.rows[0];

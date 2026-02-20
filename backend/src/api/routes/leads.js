@@ -39,19 +39,21 @@ router.get('/', async (req, res) => {
         },
       });
     }
-    const { limit, offset, status, statusId, status_id, query } = parsed.data;
+    const { limit, offset, status, statusId, status_id, query, source } = parsed.data;
     let filterStatusId = statusId || status_id;
     if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
+    const filterSource = source ?? 'real';
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
       query,
+      source: filterSource,
       limit,
       offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId, query });
+    const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId, query, source: filterSource });
     const leadsWithSummary = await Promise.all(
       (leads ?? []).map(async (l) => {
         const base = {
@@ -96,6 +98,7 @@ router.post('/', async (req, res) => {
       channel,
       name: displayValue || undefined,
       external_id: displayValue || external_id || undefined,
+      source: 'simulation',
     });
     const out = {
       id: lead.id,
