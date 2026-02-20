@@ -65,9 +65,21 @@ const presetUpdateSchema = z.object({
   return true;
 }, { message: 'Invalid config for preset', path: ['config'] });
 
-const quotePresetsBodySchema = z.object({
-  presets: z.array(presetUpdateSchema).max(11),
-});
+const quotePresetsBodySchema = z.preprocess(
+  (val) => {
+    if (val == null) return { presets: [] };
+    if (Array.isArray(val)) return { presets: val };
+    if (typeof val === 'object') {
+      if (Array.isArray(val.fields)) return { presets: val.fields };
+      if (Array.isArray(val.presets)) return val;
+      return { presets: [] };
+    }
+    return { presets: [] };
+  },
+  z.object({
+    presets: z.array(presetUpdateSchema).max(11),
+  })
+);
 
 const quoteFieldSchema = z.object({
   name: z.string().trim().min(2).max(64),

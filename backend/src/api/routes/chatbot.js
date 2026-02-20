@@ -104,7 +104,7 @@ router.put('/behavior', async (req, res) => {
 router.get('/quote-fields', async (req, res) => {
   try {
     const presets = await chatbotQuoteFieldsRepository.listAllPresets(req.tenantId);
-    res.json({ fields: presets ?? [] });
+    res.json({ presets: presets ?? [], fields: presets ?? [] });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -114,10 +114,32 @@ router.put('/quote-fields', async (req, res) => {
   try {
     const parsed = quotePresetsBodySchema.safeParse(req.body);
     if (!parsed.success) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[quote-fields] PUT rejected payload:', JSON.stringify(req.body)?.slice(0, 200), 'errors:', parsed.error?.flatten?.());
+      }
       return validationError(res, parsed);
     }
-    const presets = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, parsed.data.presets);
-    res.json({ fields: presets });
+    const presets = parsed.data?.presets;
+    if (!Array.isArray(presets) || presets.length === 0) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[quote-fields] PUT missing presets array, body keys:', req.body ? Object.keys(req.body) : 'null');
+      }
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'presets array required' },
+      });
+    }
+    const { PRESET_NAMES } = require('../validators/chatbotSchemas');
+    const unknown = presets.filter((p) => p?.name && !PRESET_NAMES.includes(p.name));
+    if (unknown.length > 0) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Unknown preset names: ${unknown.map((u) => u.name).join(', ')}. Allowed: ${PRESET_NAMES.join(', ')}`,
+        },
+      });
+    }
+    const saved = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, presets);
+    res.json({ presets: saved, fields: saved });
   } catch (err) {
     if (err.code === '23514') {
       return res.status(400).json({

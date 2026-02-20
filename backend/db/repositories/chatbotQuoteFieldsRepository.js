@@ -14,17 +14,60 @@ const PRESET_NAMES = [
   'roof',
 ];
 
-function toPresetRow(row) {
-  if (!row) return null;
+const PRESET_LABELS = {
+  budget: 'Budget',
+  location: 'Location',
+  email_address: 'Email Address',
+  phone_number: 'Phone Number',
+  full_name: 'Full Name',
+  additional_notes: 'Additional Notes',
+  doors: 'Doors',
+  windows: 'Windows',
+  colors: 'Colors',
+  dimensions: 'Dimensions',
+  roof: 'Roof',
+};
+
+const PRESET_DESCRIPTIONS = {
+  budget: 'Budget amount with currency (EUR or USD)',
+  location: 'Cities or countries',
+  email_address: 'Valid email address',
+  phone_number: 'Phone number',
+  full_name: 'Full name',
+  additional_notes: 'Additional notes or requirements',
+  doors: 'Door options',
+  windows: 'Window options',
+  colors: 'Color options',
+  dimensions: 'Length, width, height with unit',
+  roof: 'Roof options',
+};
+
+function toPresetDto(row, name) {
+  const n = name ?? row?.name;
+  let config = {};
+  if (row?.config != null) {
+    if (typeof row.config === 'object' && !Array.isArray(row.config)) {
+      config = row.config;
+    } else if (typeof row.config === 'string') {
+      try {
+        config = JSON.parse(row.config) || {};
+      } catch {
+        config = {};
+      }
+    }
+  }
+  const typeVal = row?.type ?? getPresetType(n);
+  const unitsVal = row?.units ?? getPresetUnits(n) ?? (config?.defaultUnit ?? config?.unit ?? null);
   return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    units: row.units ?? null,
-    priority: row.priority ?? 100,
-    required: row.required !== false,
-    is_enabled: row.is_enabled === true,
-    config: row.config ?? {},
+    name: n,
+    label: PRESET_LABELS[n] ?? n,
+    description: PRESET_DESCRIPTIONS[n] ?? '',
+    type: typeVal,
+    units: unitsVal,
+    is_enabled: row?.is_enabled === true,
+    config: config ?? {},
+    priority: row?.priority ?? getPresetPriority(n),
+    required: row?.required !== false,
   };
 }
 
@@ -36,16 +79,17 @@ async function listAllPresets(companyId) {
      ORDER BY priority ASC, name ASC`,
     [companyId, PRESET_NAMES]
   );
-  const rows = result.rows.map(toPresetRow);
-  const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
-  return PRESET_NAMES.map((name) => byName[name] ?? {
-    name,
-    type: getPresetType(name),
-    units: getPresetUnits(name),
-    priority: getPresetPriority(name),
-    required: true,
-    is_enabled: false,
-    config: getDefaultConfig(name),
+  const byName = Object.fromEntries(result.rows.map((r) => [r.name, r]));
+  return PRESET_NAMES.map((name) => {
+    const row = byName[name];
+    return toPresetDto(row ?? {
+      name,
+      type: getPresetType(name),
+      priority: getPresetPriority(name),
+      required: true,
+      is_enabled: false,
+      config: getDefaultConfig(name),
+    }, name);
   });
 }
 
@@ -149,10 +193,25 @@ function getFields(companyId) {
   return list(companyId);
 }
 
+function listQuotePresets(companyId) {
+  return listAllPresets(companyId);
+}
+
+async function upsertQuotePreset(companyId, preset) {
+  return updatePresets(companyId, [preset]);
+}
+
+async function bulkUpsertQuotePresets(companyId, presets) {
+  return updatePresets(companyId, presets);
+}
+
 module.exports = {
   list,
   listAllPresets,
   updatePresets,
+  listQuotePresets,
+  upsertQuotePreset,
+  bulkUpsertQuotePresets,
   getEnabledFields,
   getFields,
   PRESET_NAMES,
