@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { leadRepository } = require('../../../db/repositories');
+const { leadRepository, companyLeadStatusesRepository } = require('../../../db/repositories');
 const { errorJson } = require('../middleware/errors');
 const {
   listLeadsQuerySchema,
@@ -9,7 +9,7 @@ const {
 } = require('../validators/leadSchemas');
 
 function toLeadResponse(lead) {
-  return {
+  const out = {
     id: lead.id,
     channel: lead.channel,
     external_id: lead.external_id,
@@ -17,7 +17,20 @@ function toLeadResponse(lead) {
     status: lead.status,
     created_at: lead.created_at,
   };
+  if (lead.status_obj) {
+    out.status_obj = lead.status_obj;
+  }
+  return out;
 }
+
+router.get('/statuses', async (req, res) => {
+  try {
+    const statuses = await companyLeadStatusesRepository.list(req.tenantId);
+    res.json({ statuses: statuses ?? [] });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
 
 router.get('/', async (req, res) => {
   try {
@@ -31,13 +44,14 @@ router.get('/', async (req, res) => {
         },
       });
     }
-    const { limit, offset, status } = parsed.data;
+    const { limit, offset, status, status_id } = parsed.data;
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
+      status_id,
       limit,
       offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status });
+    const total = await leadRepository.count(req.tenantId, { status, status_id });
     res.json({
       leads: leads.map(toLeadResponse),
       total,
@@ -76,6 +90,24 @@ router.post('/', async (req, res) => {
   }
 });
 
+router.put('/:id/status', async (req, res) => {
+  try {
+    const { status_id } = req.body ?? {};
+    if (!status_id || typeof status_id !== 'string') {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'status_id (uuid) is required' },
+      });
+    }
+    const lead = await leadRepository.setStatus(req.tenantId, req.params.id, status_id);
+    if (!lead) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or status invalid for company');
+    }
+    res.json(toLeadResponse(lead));
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.patch('/:id', async (req, res) => {
   try {
     const parsed = updateLeadBodySchema.safeParse(req.body);
@@ -91,6 +123,7 @@ router.patch('/:id', async (req, res) => {
     }
     const updateData = {};
     if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
+    if (parsed.data.status_id !== undefined) updateData.status_id = parsed.data.status_id;
     if (parsed.data.assigned_sales !== undefined) updateData.assigned_sales = parsed.data.assigned_sales;
     const lead = await leadRepository.update(req.tenantId, req.params.id, updateData);
     if (!lead) {

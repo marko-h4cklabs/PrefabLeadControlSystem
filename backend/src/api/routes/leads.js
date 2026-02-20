@@ -35,13 +35,14 @@ router.get('/', async (req, res) => {
         },
       });
     }
-    const { limit, offset, status } = parsed.data;
+    const { limit, offset, status, status_id } = parsed.data;
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
+      status_id,
       limit,
       offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status });
+    const total = await leadRepository.count(req.tenantId, { status, status_id });
     res.json({ leads, total });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);

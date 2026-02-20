@@ -1,6 +1,7 @@
 const companyRepository = require('./companyRepository');
 const userRepository = require('./userRepository');
 const leadRepository = require('./leadRepository');
+const companyLeadStatusesRepository = require('./companyLeadStatusesRepository');
 const qualificationFieldRepository = require('./qualificationFieldRepository');
 const conversationRepository = require('./conversationRepository');
 const webhookEventsRepository = require('./webhookEventsRepository');
@@ -16,6 +17,7 @@ module.exports = {
   companyRepository,
   userRepository,
   leadRepository,
+  companyLeadStatusesRepository,
   qualificationFieldRepository,
   conversationRepository,
   webhookEventsRepository,

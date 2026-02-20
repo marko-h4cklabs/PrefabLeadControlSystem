@@ -9,6 +9,7 @@ const listLeadsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   status: z.enum(VALID_STATUSES).optional(),
+  status_id: z.string().uuid().optional(),
 });
 
 const createLeadBodySchema = z.object({
@@ -30,6 +31,7 @@ const createLeadBodySchema = z.object({
 
 const updateLeadBodySchema = z.object({
   status: z.enum(VALID_STATUSES).optional(),
+  status_id: z.string().uuid().optional(),
   assigned_sales: z.string().uuid().nullable().optional(),
   channel: z
     .string()
