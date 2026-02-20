@@ -16,6 +16,7 @@ List leads with optional status filter.
 - `limit` (optional, default 50): 1–100
 - `offset` (optional, default 0)
 - `status_id` (optional): UUID to filter by status, or `__ALL__` / `all` for no filter
+- `query` (optional): Keyword search — matches `name`, `external_id`, `channel`, or status name (max 80 chars)
 
 **Examples:**
 
@@ -28,6 +29,12 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_i
 
 # All statuses (explicit)
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=__ALL__"
+
+# Keyword search
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?query=marko&limit=20&offset=0"
+
+# Search + status filter
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=550e8400-e29b-41d4-a716-446655440000&query=whatsapp&limit=20&offset=0"
 ```
 
 **Response:** `{ leads: [...], total: number }` — each lead includes `status_id`, `status_name`, `collected_info`.

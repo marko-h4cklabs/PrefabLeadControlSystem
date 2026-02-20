@@ -62,9 +62,16 @@ async function findById(companyId, leadId) {
   );
 }
 
+function escapeIlikePattern(s) {
+  return String(s ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_');
+}
+
 async function findAll(companyId, options = {}) {
-  const { status, status_id, limit = 50, offset = 0 } = options;
-  let query = `SELECT l.*, cls.id AS status_id_join, cls.name AS status_name
+  const { status, status_id, query, limit = 50, offset = 0 } = options;
+  let sql = `SELECT l.*, cls.id AS status_id_join, cls.name AS status_name
     FROM leads l
     LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
     WHERE l.company_id = $1`;
@@ -72,21 +79,27 @@ async function findAll(companyId, options = {}) {
   let paramIndex = 2;
 
   if (status) {
-    query += ` AND l.status = $${paramIndex}`;
+    sql += ` AND l.status = $${paramIndex}`;
     params.push(status);
     paramIndex++;
   }
   if (status_id) {
-    query += ` AND l.status_id = $${paramIndex}`;
+    sql += ` AND l.status_id = $${paramIndex}`;
     params.push(status_id);
     paramIndex++;
   }
+  if (query && query.trim()) {
+    const pattern = '%' + escapeIlikePattern(query.trim()) + '%';
+    params.push(pattern);
+    sql += ` AND (l.name ILIKE $${paramIndex} OR l.external_id ILIKE $${paramIndex} OR l.channel ILIKE $${paramIndex} OR cls.name ILIKE $${paramIndex})`;
+    paramIndex++;
+  }
 
-  query += ' ORDER BY l.created_at DESC';
-  query += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+  sql += ' ORDER BY l.created_at DESC';
+  sql += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
   params.push(limit, offset);
 
-  const result = await pool.query(query, params);
+  const result = await pool.query(sql, params);
   return result.rows.map((r) => {
     const statusRow = r.status_id_join ? { id: r.status_id, name: r.status_name } : null;
     return toPlainLead(
@@ -109,21 +122,39 @@ async function findAll(companyId, options = {}) {
 }
 
 async function count(companyId, options = {}) {
-  const { status, status_id } = options;
-  let query = 'SELECT COUNT(*)::int FROM leads WHERE company_id = $1';
+  const { status, status_id, query } = options;
+  if (query && query.trim()) {
+    const pattern = '%' + escapeIlikePattern(query.trim()) + '%';
+    let sql = `SELECT COUNT(*)::int
+      FROM leads l
+      LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
+      WHERE l.company_id = $1
+        AND (l.name ILIKE $2 OR l.external_id ILIKE $2 OR l.channel ILIKE $2 OR cls.name ILIKE $2)`;
+    const params = [companyId, pattern];
+    let paramIndex = 3;
+    if (status) {
+      sql += ` AND l.status = $${paramIndex++}`;
+      params.push(status);
+    }
+    if (status_id) {
+      sql += ` AND l.status_id = $${paramIndex++}`;
+      params.push(status_id);
+    }
+    const result = await pool.query(sql, params);
+    return result.rows[0]?.count ?? 0;
+  }
+  let sql = 'SELECT COUNT(*)::int FROM leads WHERE company_id = $1';
   const params = [companyId];
   let paramIndex = 2;
-
   if (status) {
-    query += ` AND status = $${paramIndex++}`;
+    sql += ` AND status = $${paramIndex++}`;
     params.push(status);
   }
   if (status_id) {
-    query += ` AND status_id = $${paramIndex++}`;
+    sql += ` AND status_id = $${paramIndex++}`;
     params.push(status_id);
   }
-
-  const result = await pool.query(query, params);
+  const result = await pool.query(sql, params);
   return result.rows[0]?.count ?? 0;
 }
 

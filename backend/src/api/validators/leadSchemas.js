@@ -25,6 +25,12 @@ const listLeadsQuerySchema = z.object({
   status: z.enum(VALID_STATUSES).optional(),
   statusId: uuidOptional,
   status_id: uuidOptional,
+  query: z
+    .string()
+    .optional()
+    .transform((v) => (v != null ? String(v).trim() : undefined))
+    .refine((v) => !v || v.length <= 80, 'query must be at most 80 characters')
+    .transform((v) => (v === '' ? undefined : v)),
 });
 
 const createLeadBodySchema = z
