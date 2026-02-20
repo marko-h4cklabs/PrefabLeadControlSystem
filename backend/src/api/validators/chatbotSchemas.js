@@ -36,34 +36,71 @@ const PRESET_NAMES = [
   'additional_notes', 'doors', 'windows', 'colors', 'dimensions', 'roof',
 ];
 
-const budgetConfigSchema = z.object({
-  units: z.array(z.enum(['EUR', 'USD'])).max(2).optional(),
-  defaultUnit: z.enum(['EUR', 'USD']).optional(),
-}).refine((d) => !d.defaultUnit || (d.units && d.units.includes(d.defaultUnit)), {
-  message: 'defaultUnit must be in units',
-  path: ['defaultUnit'],
-});
+const BUDGET_UNITS = ['EUR', 'USD'];
+const DIMENSION_PARTS = ['length', 'width', 'height'];
 
-const selectMultiConfigSchema = z.object({
-  options: z.array(z.string().trim().min(1).max(40)).max(100).optional(),
-});
+/**
+ * Normalizes and validates preset config per preset type.
+ * Strips unknown keys, applies defaults, ensures consistency (e.g. defaultUnit in units).
+ * Returns normalized config or throws with preset name + invalid key for 400 response.
+ */
+function normalizePresetConfig(name, raw) {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return getDefaultConfigForPreset(name);
+  }
 
-const dimensionsConfigSchema = z.object({
-  enabledParts: z.array(z.enum(['length', 'width', 'height'])).max(3).optional(),
-  unit: z.enum(['m', 'cm']).optional(),
-});
+  if (name === 'budget') {
+    let units = Array.isArray(raw.units)
+      ? raw.units.filter((u) => BUDGET_UNITS.includes(u))
+      : [...BUDGET_UNITS];
+    if (units.length === 0) units = [...BUDGET_UNITS];
+    let defaultUnit = raw.defaultUnit;
+    if (!defaultUnit || !BUDGET_UNITS.includes(defaultUnit)) defaultUnit = 'EUR';
+    if (!units.includes(defaultUnit)) defaultUnit = units[0] ?? 'EUR';
+    return { units, defaultUnit };
+  }
 
-const presetUpdateSchema = z.object({
-  name: z.enum(PRESET_NAMES),
-  is_enabled: z.boolean().optional(),
-  config: z.record(z.unknown()).optional(),
-}).refine((d) => {
-  if (d.config == null) return true;
-  if (d.name === 'budget') return budgetConfigSchema.safeParse(d.config).success;
-  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(d.name)) return selectMultiConfigSchema.safeParse(d.config).success;
-  if (d.name === 'dimensions') return dimensionsConfigSchema.safeParse(d.config).success;
-  return true;
-}, { message: 'Invalid config for preset', path: ['config'] });
+  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(name)) {
+    const options = Array.isArray(raw.options)
+      ? raw.options.map((o) => String(o).trim()).filter((s) => s.length >= 1 && s.length <= 40).slice(0, 100)
+      : [];
+    return { options };
+  }
+
+  if (name === 'dimensions') {
+    let enabledParts = Array.isArray(raw.enabledParts)
+      ? raw.enabledParts.filter((p) => DIMENSION_PARTS.includes(p))
+      : [...DIMENSION_PARTS];
+    if (enabledParts.length === 0) enabledParts = [...DIMENSION_PARTS];
+    const unit = raw.unit === 'cm' ? 'cm' : 'm';
+    return { enabledParts, unit };
+  }
+
+  if (['email_address', 'phone_number', 'full_name', 'additional_notes'].includes(name)) {
+    return {};
+  }
+
+  return {};
+}
+
+function getDefaultConfigForPreset(name) {
+  if (name === 'budget') return { units: ['EUR', 'USD'], defaultUnit: 'EUR' };
+  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(name)) return { options: [] };
+  if (name === 'dimensions') return { enabledParts: ['length', 'width', 'height'], unit: 'm' };
+  return {};
+}
+
+const presetUpdateSchema = z
+  .object({
+    name: z.enum(PRESET_NAMES),
+    is_enabled: z.boolean().optional(),
+    config: z.unknown().optional(),
+  })
+  .transform((d) => ({
+    name: d.name,
+    is_enabled: d.is_enabled,
+    config: normalizePresetConfig(d.name, d.config),
+  }));
 
 const quotePresetsBodySchema = z.preprocess(
   (val) => {

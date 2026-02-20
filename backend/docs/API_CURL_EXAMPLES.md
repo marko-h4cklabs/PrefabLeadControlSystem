@@ -74,6 +74,21 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
     ]
   }' \
   "http://localhost:3000/api/chatbot/quote-fields"
+
+# UI-like payload (partial configs normalized server-side)
+# - budget: UI may send only defaultUnit; units default to [EUR,USD]
+# - dimensions: UI may send enabledParts subset; unit defaults to "m"
+# - text presets: config may be {} or omitted
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "presets": [
+      { "name": "budget", "is_enabled": true, "config": { "defaultUnit": "EUR" } },
+      { "name": "email_address", "is_enabled": true, "config": {} },
+      { "name": "full_name", "is_enabled": true },
+      { "name": "dimensions", "is_enabled": true, "config": { "enabledParts": ["length","width"], "unit": "m" } }
+    ]
+  }' \
+  "http://localhost:3000/api/chatbot/quote-presets"
 ```
 
 **Errors:**

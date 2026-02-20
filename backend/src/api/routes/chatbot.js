@@ -38,6 +38,22 @@ function validationError(res, parsed) {
   });
 }
 
+function quotePresetsValidationError(res, parsed, body) {
+  const issues = parsed.error?.issues ?? [];
+  const first = issues.find((i) => Array.isArray(i.path) && i.path[0] === 'presets');
+  const idx = first?.path?.[1];
+  const presetName = idx != null && body?.presets?.[idx] ? body.presets[idx].name : body?.fields?.[idx]?.name ?? null;
+  const pathKey = first?.path?.slice(2).join('.') || 'config';
+  const msg = presetName
+    ? `Preset '${presetName}': invalid ${pathKey}`
+    : parsed.error?.message ?? 'Validation failed';
+  const cfg = idx != null && (body?.presets?.[idx] ?? body?.fields?.[idx]) ? (body.presets?.[idx] ?? body.fields?.[idx]).config : undefined;
+  console.info('[quote-presets] validation failed', { presetName: presetName ?? 'unknown', config: cfg != null ? String(JSON.stringify(cfg)).slice(0, 120) : undefined });
+  return res.status(400).json({
+    error: { code: 'VALIDATION_ERROR', message: msg, details: parsed.error?.flatten?.()?.fieldErrors },
+  });
+}
+
 router.get('/company-info', async (req, res) => {
   try {
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
@@ -114,10 +130,7 @@ router.put('/quote-fields', async (req, res) => {
   try {
     const parsed = quotePresetsBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.info('[quote-fields] PUT rejected payload:', JSON.stringify(req.body)?.slice(0, 200), 'errors:', parsed.error?.flatten?.());
-      }
-      return validationError(res, parsed);
+      return quotePresetsValidationError(res, parsed, req.body);
     }
     const presets = parsed.data?.presets;
     if (!Array.isArray(presets) || presets.length === 0) {
@@ -169,8 +182,7 @@ router.put('/quote-presets', async (req, res) => {
   try {
     const parsed = quotePresetsBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      console.info('[quote-presets] invalid payload', req.body);
-      return validationError(res, parsed);
+      return quotePresetsValidationError(res, parsed, req.body);
     }
     const presets = parsed.data?.presets;
     if (!Array.isArray(presets) || presets.length === 0) {
