@@ -48,11 +48,9 @@ router.get('/statuses', async (req, res) => {
     const statuses = (Array.isArray(rows) ? rows : []).map((s) => ({
       id: s.id,
       name: s.name,
-      slug: s.slug ?? (s.name ?? '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-      is_default: s.is_default ?? false,
-      sort_order: s.sort_order ?? 0,
+      position: s.position ?? s.sort_order ?? 0,
     }));
-    res.json({ statuses: statuses });
+    res.json({ statuses });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
@@ -72,10 +70,7 @@ router.get('/', async (req, res) => {
     }
     const { limit, offset, status, statusId, status_id } = parsed.data;
     let filterStatusId = statusId || status_id;
-    if (!filterStatusId) {
-      const defaultStatus = await companyLeadStatusesRepository.getDefault(req.tenantId);
-      filterStatusId = defaultStatus?.id ?? null;
-    } else if (filterStatusId === 'all') {
+    if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
     const leads = await leadRepository.findAll(req.tenantId, {

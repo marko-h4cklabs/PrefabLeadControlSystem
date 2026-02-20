@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const authRouter = require('./api/routes/auth');
+const meRouter = require('./api/routes/me');
 const companiesRouter = require('./api/routes/companies');
 const leadsFlatRouter = require('./api/routes/leadsFlat');
 const integrationsRouter = require('./api/routes/integrations');
@@ -80,6 +81,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authLimiter, authRouter);
+app.use('/api/me', apiLimiter, meRouter);
 
 app.use('/api/companies', authMiddleware, tenantMiddleware, apiLimiter, companiesRouter);
 app.use('/api/leads', authMiddleware, tenantMiddleware, apiLimiter, leadsFlatRouter);

@@ -11,7 +11,7 @@ async function list(companyId) {
   return result.rows.map((r) => ({
     id: r.id,
     name: r.name,
-    slug: (r.name ?? '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+    position: r.sort_order ?? 0,
     sort_order: r.sort_order ?? 0,
     is_default: r.is_default ?? false,
     created_at: r.created_at,

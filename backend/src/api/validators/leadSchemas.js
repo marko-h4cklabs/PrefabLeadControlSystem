@@ -14,8 +14,8 @@ function collapseSpaces(s) {
 const uuidOptional = z
   .string()
   .optional()
-  .refine((v) => !v || v === 'all' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), {
-    message: 'status_id must be a valid UUID or "all"',
+  .refine((v) => !v || v === 'all' || v === '__ALL__' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), {
+    message: 'status_id must be a valid UUID, "all", or "__ALL__"',
   })
   .transform((v) => (v && v.trim() ? v : undefined));
 

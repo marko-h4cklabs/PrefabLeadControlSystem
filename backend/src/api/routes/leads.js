@@ -41,10 +41,7 @@ router.get('/', async (req, res) => {
     }
     const { limit, offset, status, statusId, status_id } = parsed.data;
     let filterStatusId = statusId || status_id;
-    if (!filterStatusId) {
-      const defaultStatus = await companyLeadStatusesRepository.getDefault(req.tenantId);
-      filterStatusId = defaultStatus?.id ?? null;
-    } else if (filterStatusId === 'all') {
+    if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
     }
     const leads = await leadRepository.findAll(req.tenantId, {
@@ -312,30 +309,11 @@ router.post('/:leadId/messages', async (req, res) => {
     await leadRepository.touchUpdatedAt(companyId, leadId);
 
     if (role === 'user') {
-      const result = await aiReplyService.generateAiReply(companyId, leadId);
-      await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
-      await leadRepository.touchUpdatedAt(companyId, leadId);
-      await conversationRepository.updateParsedFields(leadId, result.parsed_fields ?? result.field_updates ?? {});
-
       conversation = await conversationRepository.getByLeadId(leadId);
-      const lookingFor = (result.missing_required_infos ?? []).map((f) => ({
-        name: f.name ?? '',
-        type: f.type ?? 'text',
-        units: f.units ?? null,
-        priority: f.priority ?? 100,
-        required: true,
-      }));
-      const collected = (result.collected_infos ?? []).map((c) => ({
-        name: c.name,
-        type: c.type ?? 'text',
-        value: c.value,
-        units: c.units ?? null,
-      }));
       return res.json({
-        assistant_message: result.assistant_message,
+        ok: true,
+        lead_id: leadId,
         conversation_id: conversation?.id ?? null,
-        looking_for: Array.isArray(lookingFor) ? lookingFor : [],
-        collected: Array.isArray(collected) ? collected : [],
         messages: conversation?.messages ?? [],
       });
     }
