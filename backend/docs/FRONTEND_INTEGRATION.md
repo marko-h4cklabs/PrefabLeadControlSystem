@@ -1,5 +1,22 @@
 # Frontend Integration Notes (Lovable)
 
+## Auth – Login (email + password only)
+
+**Login:** `POST /api/auth/login` with body `{ email, password }` only. Company ID is not required.
+
+**Response:**
+```json
+{
+  "token": "jwt...",
+  "user": { "id": "...", "email": "...", "role": "...", "companyId": "..." },
+  "company": { "id": "...", "name": "..." }
+}
+```
+
+**Authenticate:** Send `Authorization: Bearer <token>` on all API requests. The `x-company-id` header is optional; tenant is derived from the JWT. If you send `x-company-id`, it must match the user's company or you get 403.
+
+---
+
 ## A) Inbox – Status Filter & Lead Status Dropdown
 
 ### Status filter dropdown
