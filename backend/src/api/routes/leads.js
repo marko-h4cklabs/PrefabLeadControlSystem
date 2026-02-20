@@ -93,13 +93,13 @@ router.post('/', async (req, res) => {
         },
       });
     }
-    const { channel, name, external_id } = parsed.data;
+    const { channel, name, external_id, source } = parsed.data;
     const displayValue = (name ?? external_id ?? '').trim();
     const lead = await leadRepository.create(req.tenantId, {
       channel,
       name: displayValue || undefined,
       external_id: displayValue || external_id || undefined,
-      source: 'simulation',
+      source: source ?? 'inbox',
     });
     const out = {
       id: lead.id,
@@ -109,6 +109,7 @@ router.post('/', async (req, res) => {
       status_name: lead.status_name ?? lead.status ?? null,
       created_at: lead.created_at,
       updated_at: lead.updated_at,
+      source: lead.source ?? 'inbox',
     };
     res.status(201).json(out);
   } catch (err) {

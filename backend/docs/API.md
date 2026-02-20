@@ -15,26 +15,30 @@ List leads with optional status filter.
 **Query params:**
 - `limit` (optional, default 50): 1–100
 - `offset` (optional, default 0)
-- `status_id` (optional): UUID to filter by status, or `__ALL__` / `all` for no filter
+- `source` (optional, default inbox): `inbox` | `simulation` — separates real vs test leads
+- `status_id` (optional): UUID to filter by status, or `__ALL__` / `all` for all statuses
 - `query` (optional): Keyword search — matches `name`, `external_id`, `channel`, or status name (max 80 chars)
 
 **Examples:**
 
 ```bash
+# Inbox leads (default)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?source=inbox"
+
+# Simulation leads
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?source=simulation"
+
 # All leads (no status filter)
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads"
 
-# Filter by status UUID
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=550e8400-e29b-41d4-a716-446655440000"
+# Filter by status UUID + source
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=550e8400-e29b-41d4-a716-446655440000&source=inbox"
 
-# All statuses (explicit)
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=__ALL__"
+# All statuses for source (explicit)
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=__ALL__&source=simulation"
 
-# Keyword search
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?query=marko&limit=20&offset=0"
-
-# Search + status filter
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?status_id=550e8400-e29b-41d4-a716-446655440000&query=whatsapp&limit=20&offset=0"
+# Keyword search + source
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads?query=marko&source=inbox&limit=20&offset=0"
 ```
 
 **Response:** `{ leads: [...], total: number }` — each lead includes `status_id`, `status_name`, `collected_info`.
@@ -49,6 +53,22 @@ Returns company lead statuses sorted by position.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/leads/statuses"
+```
+
+---
+
+### POST /api/leads
+
+Create a lead. **Body:** `{ "channel", "name"?, "external_id"?, "source"? }` — `source` optional, `inbox`|`simulation`, default `inbox`.
+
+```bash
+# Create inbox lead (default)
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel":"whatsapp","name":"John"}' "http://localhost:3000/api/leads"
+
+# Create simulation lead
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel":"whatsapp","name":"Test","source":"simulation"}' "http://localhost:3000/api/leads"
 ```
 
 ---

@@ -202,7 +202,7 @@ async function create(companyId, data) {
 
   const nameVal = data.name ?? data.external_id ?? null;
   const externalIdVal = data.external_id ?? data.name ?? null;
-  const sourceVal = data.source === 'inbox' ? 'inbox' : 'simulation';
+  const sourceVal = data.source === 'simulation' ? 'simulation' : 'inbox';
   const result = await pool.query(
     `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales, source)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

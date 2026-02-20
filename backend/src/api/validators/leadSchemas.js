@@ -31,7 +31,7 @@ const listLeadsQuerySchema = z.object({
     .transform((v) => (v != null ? String(v).trim() : undefined))
     .refine((v) => !v || v.length <= 80, 'query must be at most 80 characters')
     .transform((v) => (v === '' ? undefined : v)),
-  source: z.enum(['inbox', 'simulation']).optional(),
+  source: z.enum(['inbox', 'simulation']).optional().default('inbox'),
 });
 
 const createLeadBodySchema = z
@@ -57,6 +57,7 @@ const createLeadBodySchema = z
       .max(64)
       .regex(externalIdRegex, 'external_id may only contain a-z, 0-9, _, -')
       .optional(),
+    source: z.enum(['inbox', 'simulation']).optional().default('inbox'),
   })
   .refine((data) => data.name || data.external_id, {
     message: 'Either name or external_id is required',
