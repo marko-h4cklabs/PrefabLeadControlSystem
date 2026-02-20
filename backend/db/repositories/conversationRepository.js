@@ -28,7 +28,11 @@ async function createIfNotExists(leadId, companyId = null) {
       chatbotQuoteFieldsRepository.list(companyId),
       chatbotBehaviorRepository.get(companyId),
     ]);
-    quoteSnapshot = (fields ?? []).filter((f) => ['text', 'number'].includes(f.type));
+    const enabled = chatbotQuoteFieldsRepository.getEnabledFields(fields ?? []);
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
+    quoteSnapshot = enabled
+      .filter((f) => f && validTypes.includes(f.type))
+      .map((f) => ({ ...f, is_enabled: true }));
     settingsSnapshot = behavior ? {
       tone: behavior.tone ?? 'professional',
       response_length: behavior.response_length ?? 'medium',

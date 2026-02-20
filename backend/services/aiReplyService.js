@@ -94,8 +94,9 @@ async function generateAiReply(companyId, leadId) {
     conversation = await conversationRepository.createIfNotExists(leadId, companyId);
   }
 
+  const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
   const orderedQuoteFields = (conversation.quote_snapshot ?? [])
-    .filter((f) => f && ['text', 'number'].includes(f.type))
+    .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
   const [behavior, companyInfo] = await Promise.all([

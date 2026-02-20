@@ -24,7 +24,7 @@ const { generateGreeting, generateClosing } = require('../../chat/greetingClosin
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
-  quoteFieldsBodySchema,
+  quotePresetsBodySchema,
 } = require('../validators/chatbotSchemas');
 const { errorJson } = require('../middleware/errors');
 
@@ -103,8 +103,8 @@ router.put('/behavior', async (req, res) => {
 
 router.get('/quote-fields', async (req, res) => {
   try {
-    const fields = await chatbotQuoteFieldsRepository.list(req.tenantId);
-    res.json({ fields: fields ?? [] });
+    const presets = await chatbotQuoteFieldsRepository.listAllPresets(req.tenantId);
+    res.json({ fields: presets ?? [] });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -112,20 +112,26 @@ router.get('/quote-fields', async (req, res) => {
 
 router.put('/quote-fields', async (req, res) => {
   try {
-    const parsed = quoteFieldsBodySchema.safeParse(req.body);
+    const parsed = quotePresetsBodySchema.safeParse(req.body);
     if (!parsed.success) {
       return validationError(res, parsed);
     }
-    const fields = await chatbotQuoteFieldsRepository.replace(req.tenantId, parsed.data.fields);
-    res.json({ fields });
+    const presets = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, parsed.data.presets);
+    res.json({ fields: presets });
   } catch (err) {
     if (err.code === '23514') {
       return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'Invalid type or priority' },
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid preset config' },
       });
     }
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
+});
+
+router.post('/quote-fields', (req, res) => {
+  res.status(403).json({
+    error: { code: 'FORBIDDEN', message: 'Custom field creation is disabled. Use preset settings only.' },
+  });
 });
 
 const chatBodySchema = require('../validators/chatSchemas').chatBodySchema;
@@ -147,7 +153,8 @@ router.post('/chat', async (req, res) => {
       chatbotQuoteFieldsRepository.list(companyId),
     ]);
 
-    const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
+    const orderedQuoteFields = enabledFields.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const quoteFieldMeta = Object.fromEntries(orderedQuoteFields.map((f) => [f.name, { type: f.type, units: f.units }]));
 
     let conversation;
@@ -250,7 +257,8 @@ router.get('/conversation/:conversationId/fields', async (req, res) => {
       chatbotQuoteFieldsRepository.list(companyId),
       chatbotBehaviorRepository.get(companyId),
     ]);
-    const orderedQuoteFields = (quoteFields ?? []).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
+    const orderedQuoteFields = enabledFields.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
     const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
       orderedQuoteFields,
@@ -278,10 +286,11 @@ router.get('/system-context', async (req, res) => {
       chatbotBehaviorRepository.get(req.tenantId),
       chatbotQuoteFieldsRepository.list(req.tenantId),
     ]);
+    const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
     const ctx = buildSystemContext(
       companyInfo ?? { website_url: '', business_description: '', additional_notes: '' },
       behavior ?? { tone: 'professional', response_length: 'medium', emojis_enabled: false, persona_style: 'busy', forbidden_topics: [] },
-      quoteFields ?? []
+      enabledFields
     );
     res.json({ systemContext: ctx, system_context: ctx });
   } catch (err) {

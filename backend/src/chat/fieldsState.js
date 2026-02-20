@@ -1,11 +1,12 @@
 /**
  * Pure function: compute required_infos and collected_infos from quote fields and collected data.
- * @param {Array} quoteFields - [{ name, type, units, priority, required }] ordered by priority
+ * Only includes presets where is_enabled=true.
+ * @param {Array} quoteFields - [{ name, type, units, priority, required, is_enabled, config }] ordered by priority
  * @param {Array} collectedFields - [{ name, type, units, value, priority }] from DB
  * @returns {{ required_infos: Array, collected_infos: Array }}
  */
 function computeFieldsState(quoteFields, collectedFields) {
-  const quote = quoteFields ?? [];
+  const quote = (quoteFields ?? []).filter((f) => f?.is_enabled !== false);
   const collected = collectedFields ?? [];
   const collectedMap = Object.fromEntries(
     collected

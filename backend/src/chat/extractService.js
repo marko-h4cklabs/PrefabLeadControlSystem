@@ -3,21 +3,32 @@ const Anthropic = require('@anthropic-ai/sdk');
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
 function buildExtractionPrompt(quoteFields) {
-  const fieldNames = (quoteFields || []).map((f) => f.name).filter(Boolean);
-  const fieldsDesc = (quoteFields || [])
-    .map((f) => `- ${f.name}: ${f.type}${f.units ? ` (${f.units})` : ''}${f.required ? ' [required]' : ''}`)
+  const fields = quoteFields || [];
+  const fieldNames = fields.map((f) => f.name).filter(Boolean);
+  const fieldsDesc = fields
+    .map((f) => {
+      let line = `- ${f.name}: ${f.type}`;
+      if (f.units) line += ` (${f.units})`;
+      if (f.config?.units) line += ` allowed units: ${(f.config.units || []).join(', ')}`;
+      if (f.config?.options?.length) line += ` allowed values: ${(f.config.options || []).slice(0, 20).join(', ')}${(f.config.options || []).length > 20 ? '...' : ''}`;
+      if (f.config?.enabledParts?.length) line += ` parts: ${(f.config.enabledParts || []).join(', ')}`;
+      if (f.required !== false) line += ' [required]';
+      return line;
+    })
     .join('\n');
   return `You extract quote field values from user messages. Output ONLY valid JSON, no other text.
 
-CONFIGURED FIELDS (you may ONLY extract these - no other fields):
+ENABLED FIELDS (you may ONLY extract these - no other fields):
 ${fieldsDesc || '(none)'}
 
 Allowed field names: ${fieldNames.join(', ') || 'none'}
 
 Rules:
-- ONLY output values for the configured fields above. Do NOT extract doors, windows, placement, or any field not in the list.
-- For type "number": extract numeric value. Accept "12000", "12,000", "€12000", etc.
-- For type "text": extract the value. Use exact field names from the list.
+- ONLY output values for the enabled fields above. Do NOT extract any field not in the list.
+- For type "number": extract numeric value. Use exact field names.
+- For type "text": extract the value. For email_address validate email format; for phone_number validate phone format.
+- For type "select_multi": if options list exists, value must be from that list or a valid subset.
+- For type "composite_dimensions": extract only enabled parts (length/width/height) and unit.
 - Include confidence 0-1 for each extracted value.
 
 Output format:
@@ -28,7 +39,7 @@ If nothing found: {"extracted":[]}`;
 
 function allRequiredAsMissing(quoteFields) {
   return (quoteFields || [])
-    .filter((f) => f.required !== false)
+    .filter((f) => f?.is_enabled !== false && f.required !== false)
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
     .map((f) => ({
       name: f.name,

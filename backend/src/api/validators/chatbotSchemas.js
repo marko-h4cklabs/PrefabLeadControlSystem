@@ -31,6 +31,44 @@ const behaviorBodySchema = z.object({
   return { ...d, forbidden_topics: topics };
 });
 
+const PRESET_NAMES = [
+  'budget', 'location', 'email_address', 'phone_number', 'full_name',
+  'additional_notes', 'doors', 'windows', 'colors', 'dimensions', 'roof',
+];
+
+const budgetConfigSchema = z.object({
+  units: z.array(z.enum(['EUR', 'USD'])).max(2).optional(),
+  defaultUnit: z.enum(['EUR', 'USD']).optional(),
+}).refine((d) => !d.defaultUnit || (d.units && d.units.includes(d.defaultUnit)), {
+  message: 'defaultUnit must be in units',
+  path: ['defaultUnit'],
+});
+
+const selectMultiConfigSchema = z.object({
+  options: z.array(z.string().trim().min(1).max(40)).max(100).optional(),
+});
+
+const dimensionsConfigSchema = z.object({
+  enabledParts: z.array(z.enum(['length', 'width', 'height'])).max(3).optional(),
+  unit: z.enum(['m', 'cm']).optional(),
+});
+
+const presetUpdateSchema = z.object({
+  name: z.enum(PRESET_NAMES),
+  is_enabled: z.boolean().optional(),
+  config: z.record(z.unknown()).optional(),
+}).refine((d) => {
+  if (d.config == null) return true;
+  if (d.name === 'budget') return budgetConfigSchema.safeParse(d.config).success;
+  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(d.name)) return selectMultiConfigSchema.safeParse(d.config).success;
+  if (d.name === 'dimensions') return dimensionsConfigSchema.safeParse(d.config).success;
+  return true;
+}, { message: 'Invalid config for preset', path: ['config'] });
+
+const quotePresetsBodySchema = z.object({
+  presets: z.array(presetUpdateSchema).max(11),
+});
+
 const quoteFieldSchema = z.object({
   name: z.string().trim().min(2).max(64),
   type: z.enum(['text', 'number'], { errorMap: () => ({ message: 'type must be "text" or "number" only' }) }),
@@ -52,4 +90,6 @@ module.exports = {
   companyInfoBodySchema,
   behaviorBodySchema,
   quoteFieldsBodySchema,
+  quotePresetsBodySchema,
+  PRESET_NAMES,
 };

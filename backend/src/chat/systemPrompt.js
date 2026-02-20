@@ -34,9 +34,11 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
   }
 
   const configuredNames = fields.map((f) => f.name).filter(Boolean);
-  parts.push('## CONFIGURED FIELDS (scope lock)');
-  parts.push(`You may ONLY ask questions for these fields: ${configuredNames.join(', ') || 'none'}`);
-  parts.push('Do NOT ask about doors, windows, placement, or any topic not in this list.');
+  parts.push('## ENABLED FIELDS (scope lock)');
+  parts.push(`Ask ONLY for these enabled fields: ${configuredNames.join(', ') || 'none'}`);
+  parts.push('Do NOT ask for anything outside this list.');
+  parts.push('If a field has an options list, treat those as allowed values; if user gives a value outside the list, ask them to choose from the list.');
+  parts.push('For dimensions, collect only the enabled parts (length/width/height) and unit.');
   parts.push('');
 
   if (missing.length > 0) {

@@ -196,9 +196,10 @@ router.get('/:leadId/conversation', async (req, res) => {
     let orderedQuoteFields = [];
     let lookingFor = [];
     let collected = [];
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
     if (conversation) {
       orderedQuoteFields = (conversation.quote_snapshot ?? [])
-        .filter((f) => f && ['text', 'number'].includes(f.type))
+        .filter((f) => f && validTypes.includes(f.type))
         .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
       const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields ?? {}, orderedQuoteFields);
       const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
@@ -217,7 +218,8 @@ router.get('/:leadId/conversation', async (req, res) => {
       }));
     } else {
       const fields = await chatbotQuoteFieldsRepository.list(companyId);
-      orderedQuoteFields = (fields ?? []).filter((f) => ['text', 'number'].includes(f.type)).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+      const enabled = chatbotQuoteFieldsRepository.getEnabledFields(fields ?? []);
+      orderedQuoteFields = enabled.filter((f) => validTypes.includes(f.type)).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
       lookingFor = orderedQuoteFields
         .filter((f) => f?.required !== false)
         .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
@@ -326,8 +328,9 @@ router.post('/:leadId/messages', async (req, res) => {
     }
 
     conversation = await conversationRepository.getByLeadId(leadId);
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
     const orderedQuoteFields = (conversation?.quote_snapshot ?? [])
-      .filter((f) => f && ['text', 'number'].includes(f.type))
+      .filter((f) => f && validTypes.includes(f.type))
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const collectedFromParsed = parsedFieldsToCollected(conversation?.parsed_fields ?? {}, orderedQuoteFields);
     const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
