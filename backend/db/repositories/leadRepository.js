@@ -133,14 +133,17 @@ async function create(companyId, data) {
   );
   const defaultStatusId = defaultStatusResult.rows[0]?.id ?? null;
 
+  const nameVal = data.name ?? data.external_id ?? null;
+  const externalIdVal = data.external_id ?? data.name ?? null;
   const result = await pool.query(
-    `INSERT INTO leads (company_id, channel, external_id, score, status, status_id, assigned_sales)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
     [
       companyId,
       data.channel,
-      data.external_id ?? null,
+      externalIdVal,
+      nameVal,
       data.score ?? 0,
       data.status ?? 'new',
       data.status_id ?? defaultStatusId,
@@ -224,6 +227,13 @@ async function setStatus(companyId, leadId, statusId) {
   return toPlainLead(row, statusRow.rows[0]);
 }
 
+async function touchUpdatedAt(companyId, leadId) {
+  await pool.query(
+    'UPDATE leads SET updated_at = NOW() WHERE id = $1 AND company_id = $2',
+    [leadId, companyId]
+  );
+}
+
 async function setName(companyId, leadId, name) {
   const result = await pool.query(
     `UPDATE leads SET name = $1, updated_at = NOW() WHERE id = $2 AND company_id = $3 RETURNING *`,
@@ -246,5 +256,6 @@ module.exports = {
   update,
   setStatus,
   setName,
+  touchUpdatedAt,
   findByCompanyChannelExternalId,
 };

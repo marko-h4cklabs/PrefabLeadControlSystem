@@ -16,24 +16,32 @@ const {
 } = require('../validators/leadSchemas');
 
 function toLeadResponse(lead) {
-  const out = {
+  const nameVal = lead.name ?? lead.external_id ?? null;
+  const externalIdVal = lead.external_id ?? lead.name ?? null;
+  return {
     id: lead.id,
+    company_id: lead.company_id,
     channel: lead.channel,
-    external_id: lead.external_id,
-    name: lead.name ?? null,
-    status: lead.status_name ?? lead.status,
+    name: nameVal,
+    external_id: externalIdVal,
     status_id: lead.status_id ?? null,
+    status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
     updated_at: lead.updated_at,
   };
-  return out;
 }
 
 function toLeadPublic(lead) {
+  const nameVal = lead.name ?? lead.external_id ?? null;
+  const externalIdVal = lead.external_id ?? lead.name ?? null;
   return {
+    id: lead.id,
+    company_id: lead.company_id,
     channel: lead.channel,
-    name: lead.name ?? null,
-    status: lead.status_name ?? lead.status,
+    name: nameVal,
+    external_id: externalIdVal,
+    status_id: lead.status_id ?? null,
+    status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
     updated_at: lead.updated_at,
   };
@@ -145,10 +153,12 @@ router.post('/', async (req, res) => {
         },
       });
     }
-    const { channel, external_id } = parsed.data;
+    const { channel, name, external_id } = parsed.data;
+    const displayValue = (name ?? external_id ?? '').trim();
     const lead = await leadRepository.create(req.tenantId, {
       channel,
-      external_id,
+      name: displayValue || undefined,
+      external_id: displayValue || external_id || undefined,
     });
     res.status(201).json(toLeadResponse(lead));
   } catch (err) {

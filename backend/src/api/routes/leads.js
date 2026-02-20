@@ -3,6 +3,7 @@ const router = express.Router({ mergeParams: true });
 const {
   leadRepository,
   conversationRepository,
+  chatbotBehaviorRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
@@ -45,7 +46,18 @@ router.get('/', async (req, res) => {
       offset,
     });
     const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId });
-    res.json({ leads, total });
+    const leadsResponse = (leads ?? []).map((l) => ({
+      id: l.id,
+      company_id: l.company_id,
+      channel: l.channel,
+      name: l.name ?? l.external_id ?? null,
+      external_id: l.external_id ?? l.name ?? null,
+      status_id: l.status_id ?? null,
+      status_name: l.status_name ?? l.status ?? null,
+      created_at: l.created_at,
+      updated_at: l.updated_at,
+    }));
+    res.json({ leads: leadsResponse, total });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -64,10 +76,12 @@ router.post('/', async (req, res) => {
         },
       });
     }
-    const { channel, external_id } = parsed.data;
+    const { channel, name, external_id } = parsed.data;
+    const displayValue = (name ?? external_id ?? '').trim();
     const lead = await leadRepository.create(req.tenantId, {
       channel,
-      external_id,
+      name: displayValue || undefined,
+      external_id: displayValue || external_id || undefined,
     });
     res.status(201).json(lead);
   } catch (err) {
@@ -79,10 +93,16 @@ router.post('/', async (req, res) => {
 });
 
 function toLeadPublic(lead) {
+  const nameVal = lead.name ?? lead.external_id ?? null;
+  const externalIdVal = lead.external_id ?? lead.name ?? null;
   return {
+    id: lead.id,
+    company_id: lead.company_id,
     channel: lead.channel,
-    name: lead.name ?? null,
-    status: lead.status_name ?? lead.status,
+    name: nameVal,
+    external_id: externalIdVal,
+    status_id: lead.status_id ?? null,
+    status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
     updated_at: lead.updated_at,
   };
@@ -151,14 +171,30 @@ router.get('/:leadId/conversation', async (req, res) => {
       .filter((f) => f && ['text', 'number'].includes(f.type))
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
     const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields, orderedQuoteFields);
-    const { required_infos, collected_infos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
+    const { required_infos: missingRequired, collected_infos: collected } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
+    const allRequired = (orderedQuoteFields ?? [])
+      .filter((f) => f?.required !== false)
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
+      .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100 }));
+    const behavior = await chatbotBehaviorRepository.get(companyId);
     res.json({
       lead_id: leadId,
+      conversation_id: conversation.id,
       messages: conversation.messages,
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
-      required_infos: required_infos ?? [],
-      collected_infos: collected_infos ?? [],
+      active_settings: {
+        tone: behavior?.tone ?? 'professional',
+        response_length: behavior?.response_length ?? 'medium',
+        persona_style: behavior?.persona_style ?? 'busy',
+        emojis_enabled: behavior?.emojis_enabled ?? false,
+        forbidden_topics: Array.isArray(behavior?.forbidden_topics) ? behavior.forbidden_topics : [],
+      },
+      required_infos: allRequired,
+      missing_required_infos: missingRequired ?? [],
+      collected_infos: collected ?? [],
+      required: missingRequired ?? [],
+      collected: collected ?? [],
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -175,6 +211,7 @@ router.post('/:leadId/ai-reply', async (req, res) => {
     const result = await aiReplyService.generateAiReply(req.tenantId, leadId);
 
     await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
+    await leadRepository.touchUpdatedAt(req.tenantId, leadId);
 
     let conversation = await conversationRepository.getByLeadId(leadId);
     const currentParsed = conversation.parsed_fields ?? {};
@@ -194,13 +231,28 @@ router.post('/:leadId/ai-reply', async (req, res) => {
     }
 
     conversation = await conversationRepository.getByLeadId(leadId);
+    const missingRequired = result.missing_required_infos ?? result.required_infos ?? [];
+    const collected = result.collected_infos ?? [];
+    const allRequired = result.required_infos ?? [];
     res.json({
+      assistant_message: result.assistant_message,
+      conversation_id: result.conversation_id ?? conversation?.id,
       lead_id: leadId,
       messages: conversation.messages,
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
-      required_infos: result.required_infos ?? [],
-      collected_infos: result.collected_infos ?? [],
+      active_settings: result.active_settings ?? {
+        tone: 'professional',
+        response_length: 'medium',
+        persona_style: 'busy',
+        emojis_enabled: false,
+        forbidden_topics: [],
+      },
+      required_infos: allRequired,
+      missing_required_infos: missingRequired,
+      collected_infos: collected,
+      required: missingRequired,
+      collected,
       highlights: result.highlights ?? null,
     });
   } catch (err) {
@@ -227,6 +279,7 @@ router.post('/:leadId/messages', async (req, res) => {
       conversation = await conversationRepository.createIfNotExists(leadId, req.tenantId);
     }
     conversation = await conversationRepository.appendMessage(leadId, role, content);
+    await leadRepository.touchUpdatedAt(req.tenantId, leadId);
     res.json({
       lead_id: leadId,
       messages: conversation.messages,

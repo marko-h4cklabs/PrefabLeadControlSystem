@@ -186,13 +186,32 @@ async function generateAiReply(companyId, leadId) {
 
   const highlights = buildHighlights(orderedQuoteFields, finalCollected, finalRequired, behavior);
 
+  const allRequiredFromSnapshot = (orderedQuoteFields ?? [])
+    .filter((f) => f?.required !== false)
+    .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
+    .map((f) => ({
+      name: f.name ?? '',
+      type: f.type ?? 'text',
+      units: f.units ?? null,
+      priority: f.priority ?? 100,
+    }));
+
   return {
     assistant_message: assistantMessage,
     field_updates: parsedFields,
     leadId,
+    conversation_id: conversation.id,
     parsed_fields: parsedFields,
-    required_infos: finalRequired,
+    required_infos: allRequiredFromSnapshot,
+    missing_required_infos: finalRequired,
     collected_infos: finalCollected,
+    active_settings: {
+      tone: behavior?.tone ?? 'professional',
+      response_length: behavior?.response_length ?? 'medium',
+      persona_style: behavior?.persona_style ?? 'busy',
+      emojis_enabled: behavior?.emojis_enabled ?? false,
+      forbidden_topics: Array.isArray(behavior?.forbidden_topics) ? behavior.forbidden_topics : [],
+    },
     highlights,
   };
 }

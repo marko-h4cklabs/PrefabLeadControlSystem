@@ -35,6 +35,14 @@ Expected: Each company has New (is_default=true), Qualified, Disqualified, Pendi
 export TOKEN="your-jwt"
 export BASE="http://localhost:3000"
 
+# With human name + channel (accepts "Erik Mekelenić", "Messenger", etc.)
+curl -s -X POST "$BASE/api/companies/YOUR_COMPANY_ID/leads" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: YOUR_COMPANY_ID" \
+  -d '{"name":"Erik Mekelenić","channel":"Messenger"}'
+
+# Legacy: external_id still works
 curl -s -X POST "$BASE/api/leads" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -42,7 +50,7 @@ curl -s -X POST "$BASE/api/leads" \
   -d '{"channel":"email","external_id":"test-123"}'
 ```
 
-Response should include `status_obj: { id: "...", name: "New" }` or lead has status_id pointing to New.
+Response includes `id`, `channel`, `name`, `external_id`, `status_id`, `status_name`, `created_at`, `updated_at`.
 
 ### 4. GET /api/leads/statuses
 

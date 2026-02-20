@@ -89,6 +89,24 @@ curl -s -X GET "$BASE_URL/api/chatbot/system-context" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+## Leads (Create with Name + Channel)
+
+```bash
+# Create lead with human name and channel (accepts "Messenger", "Erik Mekelenić", etc.)
+curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: COMPANY_ID" \
+  -d '{"name":"Erik Mekelenić","channel":"Messenger"}'
+
+# Legacy: external_id still works
+curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: COMPANY_ID" \
+  -d '{"external_id":"test-123","channel":"messenger"}'
+```
+
 ## Lead Statuses
 
 ```bash
@@ -120,8 +138,14 @@ curl -s -X PATCH "$BASE_URL/api/leads/LEAD_ID/name" \
   -H "x-company-id: YOUR_COMPANY_ID" \
   -d '{"name":"John Smith"}'
 
-# Get lead detail with collected_infos and required_infos_missing
+# Get lead detail (includes id, company_id, channel, name, external_id, status_id, status_name, created_at, updated_at)
 curl -s -X GET "$BASE_URL/api/leads/LEAD_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
+
+# AI Reply (chat) – returns assistant_message, active_settings, required_infos, missing_required_infos, collected_infos
+curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads/LEAD_ID/ai-reply" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: COMPANY_ID"
 ```
