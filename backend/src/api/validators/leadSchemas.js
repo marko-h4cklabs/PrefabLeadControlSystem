@@ -5,11 +5,20 @@ const VALID_STATUSES = ['new', 'contacted', 'qualified', 'booked', 'closed_won',
 
 const externalIdRegex = /^[a-z0-9_\-]{2,64}$/;
 
+const uuidOptional = z
+  .string()
+  .optional()
+  .refine((v) => !v || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), {
+    message: 'statusId must be a valid UUID',
+  })
+  .transform((v) => (v && v.trim() ? v : undefined));
+
 const listLeadsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   status: z.enum(VALID_STATUSES).optional(),
-  status_id: z.string().uuid().optional(),
+  statusId: uuidOptional,
+  status_id: uuidOptional,
 });
 
 const createLeadBodySchema = z.object({

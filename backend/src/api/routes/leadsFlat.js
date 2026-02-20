@@ -16,6 +16,8 @@ function toLeadResponse(lead) {
     score: lead.score ?? 0,
     status: lead.status,
     created_at: lead.created_at,
+    status_id: lead.status_id ?? null,
+    status_name: lead.status_obj?.name ?? null,
   };
   if (lead.status_obj) {
     out.status_obj = lead.status_obj;
@@ -36,22 +38,27 @@ router.get('/', async (req, res) => {
   try {
     const parsed = listLeadsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
+      const err = parsed.error.flatten();
+      if (process.env.NODE_ENV !== 'production') {
+        console.info('[leads] rejected query params:', req.query, 'errors:', err.fieldErrors);
+      }
       return res.status(400).json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'Invalid query parameters',
-          details: parsed.error.flatten().fieldErrors,
+          message: err.formErrors?.join?.(' ') || 'Invalid query parameters',
+          details: err.fieldErrors,
         },
       });
     }
-    const { limit, offset, status, status_id } = parsed.data;
+    const { limit, offset, status, statusId, status_id } = parsed.data;
+    const filterStatusId = statusId || status_id;
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
-      status_id,
+      status_id: filterStatusId,
       limit,
       offset,
     });
-    const total = await leadRepository.count(req.tenantId, { status, status_id });
+    const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId });
     res.json({
       leads: leads.map(toLeadResponse),
       total,
@@ -92,13 +99,14 @@ router.post('/', async (req, res) => {
 
 router.put('/:id/status', async (req, res) => {
   try {
-    const { status_id } = req.body ?? {};
-    if (!status_id || typeof status_id !== 'string') {
+    const { statusId, status_id } = req.body ?? {};
+    const id = statusId || status_id;
+    if (!id || typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
       return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'status_id (uuid) is required' },
+        error: { code: 'VALIDATION_ERROR', message: 'statusId (uuid) is required in body' },
       });
     }
-    const lead = await leadRepository.setStatus(req.tenantId, req.params.id, status_id);
+    const lead = await leadRepository.setStatus(req.tenantId, req.params.id, id);
     if (!lead) {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or status invalid for company');
     }

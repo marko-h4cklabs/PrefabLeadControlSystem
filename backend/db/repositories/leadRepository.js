@@ -9,13 +9,16 @@ function toPlainLead(row, statusRow = null) {
     external_id: row.external_id,
     score: row.score ?? 0,
     status: row.status,
-    status_id: row.status_id,
+    status_id: row.status_id ?? null,
     assigned_sales: row.assigned_sales,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
   if (statusRow) {
     lead.status_obj = { id: statusRow.id, name: statusRow.name };
+    lead.status_name = statusRow.name;
+  } else {
+    lead.status_name = null;
   }
   return lead;
 }

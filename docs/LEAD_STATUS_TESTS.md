@@ -2,7 +2,9 @@
 
 ## Prerequisites
 
-- Run migration: `psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql`
+- Run migrations in order:
+  - `psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql`
+  - `psql $DATABASE_URL -f backend/db/migrations/013_seed_default_company_lead_statuses.sql`
 - Or apply via Railway: connect to Postgres and run the migration SQL
 
 ## Manual Verification Steps
@@ -50,7 +52,7 @@ curl -s -X GET "$BASE/api/leads/statuses" \
 
 Expected: `{ "statuses": [ { "id": "...", "name": "New", "sort_order": 10, "is_default": true }, ... ] }`
 
-### 5. PUT /api/leads/:id/status to change to Qualified
+### 5. PUT /api/leads/:leadId/status to change to Qualified
 
 ```bash
 # Get lead ID from step 3, get Qualified status ID from step 4
@@ -61,25 +63,32 @@ curl -s -X PUT "$BASE/api/leads/$LEAD_ID/status" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-company-id: YOUR_COMPANY_ID" \
-  -d '{"status_id":"'$QUALIFIED_STATUS_ID'"}'
+  -d '{"statusId":"'$QUALIFIED_STATUS_ID'"}'
 ```
 
-Expected: `{ "id": "...", "status_obj": { "id": "...", "name": "Qualified" }, ... }`
+Also accepted: `{"status_id":"<uuid>"}`. Expected: `{ "id": "...", "status_id": "...", "status_name": "Qualified", ... }`
 
-### 6. Verify lead list shows updated status
+### 6. Verify lead list shows updated status and filter by statusId
 
 ```bash
-curl -s -X GET "$BASE/api/leads?limit=10" \
+# List all leads (includes status_id, status_name per lead)
+curl -s -X GET "$BASE/api/leads?limit=10&offset=0" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
+
+# Filter leads by status UUID
+curl -s -X GET "$BASE/api/leads?limit=10&offset=0&statusId=$QUALIFIED_STATUS_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 ```
 
-Expected: Each lead in `leads` array has `status_obj: { id, name }` with current status.
+Expected: Each lead has `status_id`, `status_name` (and optionally `status_obj`). Filter returns only leads with that status.
 
 ## cURL Examples Summary
 
-| Endpoint | Method | Body |
-|----------|--------|------|
+| Endpoint | Method | Query / Body |
+|----------|--------|--------------|
 | List statuses | `GET /api/leads/statuses` | - |
-| Update lead status | `PUT /api/leads/:id/status` | `{ "status_id": "uuid" }` |
-| List leads (filter by status) | `GET /api/leads?status_id=uuid` | - |
+| List leads | `GET /api/leads` | `?limit=&offset=&statusId=` |
+| Filter by status | `GET /api/leads?statusId=<uuid>` | - |
+| Update lead status | `PUT /api/leads/:leadId/status` | `{ "statusId": "<uuid>" }` |

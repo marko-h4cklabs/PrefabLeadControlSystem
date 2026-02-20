@@ -6,6 +6,8 @@ Replace `BASE_URL` with your API base (e.g. `https://your-railway-app.railway.ap
 ```bash
 psql $DATABASE_URL -f backend/db/migrations/010_chat_conversation_state.sql
 psql $DATABASE_URL -f backend/db/migrations/011_chat_conversation_fields_and_messages.sql
+psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql
+psql $DATABASE_URL -f backend/db/migrations/013_seed_default_company_lead_statuses.sql
 ```
 
 ## Company Info
@@ -83,4 +85,29 @@ curl -s -X POST "$BASE_URL/api/chatbot/chat" \
 # GET system context (for chatbot LLM)
 curl -s -X GET "$BASE_URL/api/chatbot/system-context" \
   -H "Authorization: Bearer $TOKEN"
+```
+
+## Lead Statuses
+
+```bash
+# List all statuses for the authenticated company (sorted by sort_order)
+curl -s -X GET "$BASE_URL/api/leads/statuses" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
+
+# List leads with optional filter by status UUID
+curl -s -X GET "$BASE_URL/api/leads?limit=10&offset=0" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
+
+curl -s -X GET "$BASE_URL/api/leads?limit=10&offset=0&statusId=STATUS_UUID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: YOUR_COMPANY_ID"
+
+# Update a lead's status
+curl -s -X PUT "$BASE_URL/api/leads/LEAD_ID/status" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: YOUR_COMPANY_ID" \
+  -d '{"statusId":"STATUS_UUID"}'
 ```
