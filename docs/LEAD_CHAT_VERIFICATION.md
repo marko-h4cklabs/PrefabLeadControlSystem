@@ -141,18 +141,12 @@ curl -s -X POST "$BASE/api/companies/$COMPANY_ID/leads/$LEAD_ID/ai-reply" \
 {
   "assistant_message": "Hi! I'd be happy to help...",
   "conversation_id": "uuid",
-  "active_settings": {
-    "tone": "professional",
-    "persona": "busy",
-    "response_length": "medium"
-  },
-  "required_infos": [{"name":"budget","type":"number","units":"USD","priority":100}],
-  "collected_infos": [],
-  "required": [...],
-  "collected": []
+  "looking_for": [{"name":"budget","type":"number","units":"USD","priority":100,"required":true}],
+  "collected": [],
+  "messages": [...]
 }
 ```
 
-- `required_infos` – missing required fields for this lead's conversation snapshot
-- `collected_infos` – collected fields with values
-- `required` / `collected` – aliases for backward compatibility
+- `looking_for` – required fields still missing (from conversation snapshot)
+- `collected` – fields with values (name, type, value, units)
+- Quote requirements are snapshotted at conversation creation; old leads keep old snapshot

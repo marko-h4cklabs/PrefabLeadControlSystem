@@ -10,6 +10,8 @@ psql $DATABASE_URL -f backend/db/migrations/012_lead_statuses.sql
 psql $DATABASE_URL -f backend/db/migrations/013_seed_default_company_lead_statuses.sql
 psql $DATABASE_URL -f backend/db/migrations/014_lead_name_and_conversation_snapshot.sql
 psql $DATABASE_URL -f backend/db/migrations/015_backfill_company_lead_statuses.sql
+psql $DATABASE_URL -f backend/db/migrations/016_leads_add_name.sql
+psql $DATABASE_URL -f backend/db/migrations/017_chat_conversation_snapshot.sql
 ```
 
 ## Company Info
@@ -143,7 +145,23 @@ curl -s -X GET "$BASE_URL/api/leads/LEAD_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: YOUR_COMPANY_ID"
 
-# AI Reply (chat) – returns assistant_message, active_settings, required_infos, missing_required_infos, collected_infos
+# Conversation – GET (returns 200 even if no messages yet)
+curl -s -X GET "$BASE_URL/api/companies/COMPANY_ID/leads/LEAD_ID/conversation" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: COMPANY_ID"
+
+# Response: { lead_id, conversation_id, messages, looking_for, collected }
+
+# Send user message (triggers AI reply when role=user)
+curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads/LEAD_ID/messages" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: COMPANY_ID" \
+  -d '{"role":"user","content":"Hi, I need a quote"}'
+
+# Response: { assistant_message, conversation_id, looking_for, collected, messages }
+
+# AI Reply (standalone)
 curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads/LEAD_ID/ai-reply" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \

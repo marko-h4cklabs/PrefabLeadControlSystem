@@ -4,6 +4,7 @@ const {
   leadRepository,
   conversationRepository,
   chatbotBehaviorRepository,
+  chatbotQuoteFieldsRepository,
   companyLeadStatusesRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
@@ -179,134 +180,189 @@ router.get('/:leadId', async (req, res) => {
 });
 
 router.get('/:leadId/conversation', async (req, res) => {
+  const requestId = `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   try {
     const leadId = req.params.leadId;
     const companyId = req.tenantId;
     const lead = await leadRepository.findById(companyId, leadId);
     if (!lead) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      return res.status(404).json({ error: 'not_found', message: 'Lead not found' });
+    }
+    let conversation = await conversationRepository.getByLeadId(leadId);
+    let orderedQuoteFields = [];
+    let lookingFor = [];
+    let collected = [];
+    if (conversation) {
+      orderedQuoteFields = (conversation.quote_snapshot ?? [])
+        .filter((f) => f && ['text', 'number'].includes(f.type))
+        .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+      const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields ?? {}, orderedQuoteFields);
+      const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
+      lookingFor = (missingRequired ?? []).map((f) => ({
+        name: f.name ?? '',
+        type: f.type ?? 'text',
+        units: f.units ?? null,
+        priority: f.priority ?? 100,
+        required: true,
+      }));
+      collected = (collectedInfos ?? []).map((c) => ({
+        name: c.name,
+        type: c.type ?? 'text',
+        value: c.value,
+        units: c.units ?? null,
+      }));
+    } else {
+      const fields = await chatbotQuoteFieldsRepository.list(companyId);
+      orderedQuoteFields = (fields ?? []).filter((f) => ['text', 'number'].includes(f.type)).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+      lookingFor = orderedQuoteFields
+        .filter((f) => f?.required !== false)
+        .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
+    }
+    res.json({
+      lead_id: leadId,
+      conversation_id: conversation?.id ?? null,
+      messages: conversation?.messages ?? [],
+      looking_for: Array.isArray(lookingFor) ? lookingFor : [],
+      collected: Array.isArray(collected) ? collected : [],
+    });
+  } catch (err) {
+    console.error('[conversation] GET error', requestId, err.stack);
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Conversation failed',
+      request_id: requestId,
+    });
+  }
+});
+
+router.post('/:leadId/ai-reply', async (req, res) => {
+  const requestId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const leadId = req.params.leadId;
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: 'not_found', message: 'Lead not found' });
+    }
+    const result = await aiReplyService.generateAiReply(companyId, leadId);
+
+    await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
+    await leadRepository.touchUpdatedAt(companyId, leadId);
+
+    let conversation = await conversationRepository.getByLeadId(leadId);
+    const merged = result.parsed_fields ?? result.field_updates ?? {};
+    const currentParsed = conversation?.parsed_fields ?? {};
+    const hasChanges = JSON.stringify(merged) !== JSON.stringify(currentParsed);
+    if (hasChanges && Object.keys(merged).length > 0) {
+      await conversationRepository.updateParsedFields(leadId, merged);
+    }
+
+    conversation = await conversationRepository.getByLeadId(leadId);
+    const missingRequired = result.missing_required_infos ?? [];
+    const collected = result.collected_infos ?? [];
+    const lookingFor = missingRequired.map((f) => ({
+      name: f.name ?? '',
+      type: f.type ?? 'text',
+      units: f.units ?? null,
+      priority: f.priority ?? 100,
+      required: true,
+    }));
+    const collectedOut = collected.map((c) => ({
+      name: c.name,
+      type: c.type ?? 'text',
+      value: c.value,
+      units: c.units ?? null,
+    }));
+    res.json({
+      assistant_message: result.assistant_message,
+      conversation_id: result.conversation_id ?? conversation?.id,
+      lead_id: leadId,
+      looking_for: Array.isArray(lookingFor) ? lookingFor : [],
+      collected: Array.isArray(collectedOut) ? collectedOut : [],
+      messages: conversation?.messages ?? [],
+    });
+  } catch (err) {
+    console.error('[conversation] POST ai-reply error', requestId, err.stack);
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Conversation failed',
+      request_id: requestId,
+    });
+  }
+});
+
+router.post('/:leadId/messages', async (req, res) => {
+  const requestId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const leadId = req.params.leadId;
+    const companyId = req.tenantId;
+    const { role, content } = req.body;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: 'not_found', message: 'Lead not found' });
+    }
+    if (!role || !content) {
+      return res.status(400).json({ error: 'validation_error', message: 'role and content are required' });
     }
     let conversation = await conversationRepository.getByLeadId(leadId);
     if (!conversation) {
       conversation = await conversationRepository.createIfNotExists(leadId, companyId);
     }
-    const orderedQuoteFields = (conversation.quote_snapshot ?? [])
-      .filter((f) => f && ['text', 'number'].includes(f.type))
-      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-    const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields, orderedQuoteFields);
-    const { required_infos: missingRequired, collected_infos: collected } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
-    const allRequired = (orderedQuoteFields ?? [])
-      .filter((f) => f?.required !== false)
-      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))
-      .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100 }));
-    const behavior = await chatbotBehaviorRepository.get(companyId);
-    res.json({
-      lead_id: leadId,
-      conversation_id: conversation.id,
-      messages: conversation.messages,
-      parsed_fields: conversation.parsed_fields,
-      current_step: conversation.current_step,
-      active_settings: {
-        tone: behavior?.tone ?? 'professional',
-        response_length: behavior?.response_length ?? 'medium',
-        persona_style: behavior?.persona_style ?? 'busy',
-        emojis_enabled: behavior?.emojis_enabled ?? false,
-        forbidden_topics: Array.isArray(behavior?.forbidden_topics) ? behavior.forbidden_topics : [],
-      },
-      required_infos: missingRequired ?? [],
-      collected_infos: collected ?? [],
-      required: missingRequired ?? [],
-      collected: collected ?? [],
-    });
-  } catch (err) {
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
-  }
-});
+    await conversationRepository.appendMessage(leadId, role, content);
+    await leadRepository.touchUpdatedAt(companyId, leadId);
 
-router.post('/:leadId/ai-reply', async (req, res) => {
-  try {
-    const leadId = req.params.leadId;
-    const lead = await leadRepository.findById(req.tenantId, leadId);
-    if (!lead) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
-    }
-    const result = await aiReplyService.generateAiReply(req.tenantId, leadId);
+    if (role === 'user') {
+      const result = await aiReplyService.generateAiReply(companyId, leadId);
+      await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
+      await leadRepository.touchUpdatedAt(companyId, leadId);
+      await conversationRepository.updateParsedFields(leadId, result.parsed_fields ?? result.field_updates ?? {});
 
-    await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
-    await leadRepository.touchUpdatedAt(req.tenantId, leadId);
-
-    let conversation = await conversationRepository.getByLeadId(leadId);
-    const currentParsed = conversation.parsed_fields ?? {};
-    const merged = { ...currentParsed };
-    for (const [key, value] of Object.entries(result.field_updates ?? {})) {
-      const isNonEmpty =
-        value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
-      if (isNonEmpty) {
-        merged[key] = value;
-      }
-    }
-    const hasChanges =
-      Object.keys(merged).length !== Object.keys(currentParsed).length ||
-      JSON.stringify(merged) !== JSON.stringify(currentParsed);
-    if (hasChanges) {
-      await conversationRepository.updateParsedFields(leadId, merged);
+      conversation = await conversationRepository.getByLeadId(leadId);
+      const lookingFor = (result.missing_required_infos ?? []).map((f) => ({
+        name: f.name ?? '',
+        type: f.type ?? 'text',
+        units: f.units ?? null,
+        priority: f.priority ?? 100,
+        required: true,
+      }));
+      const collected = (result.collected_infos ?? []).map((c) => ({
+        name: c.name,
+        type: c.type ?? 'text',
+        value: c.value,
+        units: c.units ?? null,
+      }));
+      return res.json({
+        assistant_message: result.assistant_message,
+        conversation_id: conversation?.id ?? null,
+        looking_for: Array.isArray(lookingFor) ? lookingFor : [],
+        collected: Array.isArray(collected) ? collected : [],
+        messages: conversation?.messages ?? [],
+      });
     }
 
     conversation = await conversationRepository.getByLeadId(leadId);
-    const missingRequired = result.missing_required_infos ?? result.required_infos ?? [];
-    const collected = result.collected_infos ?? [];
-    const allRequired = result.required_infos ?? [];
-    res.json({
-      assistant_message: result.assistant_message,
-      conversation_id: result.conversation_id ?? conversation?.id,
-      lead_id: leadId,
-      messages: conversation.messages,
-      parsed_fields: conversation.parsed_fields,
-      current_step: conversation.current_step,
-      active_settings: {
-        tone: result.active_settings?.tone ?? 'professional',
-        persona: result.active_settings?.persona_style ?? 'busy',
-        response_length: result.active_settings?.response_length ?? 'medium',
-      },
-      required_infos: missingRequired,
-      collected_infos: collected,
-      required: missingRequired,
-      collected,
-      highlights: result.highlights ?? null,
-    });
-  } catch (err) {
-    if (err.message?.includes('Invalid JSON') || err.message?.includes('assistant_message') || err.message?.includes('field_updates')) {
-      return res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'AI response invalid', details: err.message } });
-    }
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
-  }
-});
+    const orderedQuoteFields = (conversation?.quote_snapshot ?? [])
+      .filter((f) => f && ['text', 'number'].includes(f.type))
+      .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    const collectedFromParsed = parsedFieldsToCollected(conversation?.parsed_fields ?? {}, orderedQuoteFields);
+    const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
+    const lookingFor = (missingRequired ?? []).map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
+    const collected = (collectedInfos ?? []).map((c) => ({ name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null }));
 
-router.post('/:leadId/messages', async (req, res) => {
-  try {
-    const leadId = req.params.leadId;
-    const { role, content } = req.body;
-    const lead = await leadRepository.findById(req.tenantId, leadId);
-    if (!lead) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
-    }
-    if (!role || !content) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'role and content are required' } });
-    }
-    let conversation = await conversationRepository.getByLeadId(leadId);
-    if (!conversation) {
-      conversation = await conversationRepository.createIfNotExists(leadId, req.tenantId);
-    }
-    conversation = await conversationRepository.appendMessage(leadId, role, content);
-    await leadRepository.touchUpdatedAt(req.tenantId, leadId);
     res.json({
       lead_id: leadId,
-      messages: conversation.messages,
-      parsed_fields: conversation.parsed_fields,
-      current_step: conversation.current_step,
+      conversation_id: conversation?.id ?? null,
+      messages: conversation?.messages ?? [],
+      looking_for: Array.isArray(lookingFor) ? lookingFor : [],
+      collected: Array.isArray(collected) ? collected : [],
     });
   } catch (err) {
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+    console.error('[conversation] POST messages error', requestId, err.stack);
+    res.status(500).json({
+      error: 'internal_error',
+      message: 'Conversation failed',
+      request_id: requestId,
+    });
   }
 });
 

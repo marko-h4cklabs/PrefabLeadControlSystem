@@ -1,5 +1,6 @@
 const { pool } = require('../index');
 const chatbotQuoteFieldsRepository = require('./chatbotQuoteFieldsRepository');
+const chatbotBehaviorRepository = require('./chatbotBehaviorRepository');
 
 function toPlainConversation(row) {
   if (!row) return null;
@@ -10,6 +11,7 @@ function toPlainConversation(row) {
     current_step: row.current_step ?? 0,
     parsed_fields: row.parsed_fields ?? {},
     quote_snapshot: row.quote_snapshot ?? null,
+    settings_snapshot: row.settings_snapshot ?? null,
     last_updated: row.last_updated,
     created_at: row.created_at,
   };
@@ -20,16 +22,26 @@ async function createIfNotExists(leadId, companyId = null) {
   if (existing) return existing;
 
   let quoteSnapshot = null;
+  let settingsSnapshot = null;
   if (companyId) {
-    const fields = await chatbotQuoteFieldsRepository.list(companyId);
+    const [fields, behavior] = await Promise.all([
+      chatbotQuoteFieldsRepository.list(companyId),
+      chatbotBehaviorRepository.get(companyId),
+    ]);
     quoteSnapshot = (fields ?? []).filter((f) => ['text', 'number'].includes(f.type));
+    settingsSnapshot = behavior ? {
+      tone: behavior.tone ?? 'professional',
+      response_length: behavior.response_length ?? 'medium',
+      persona_style: behavior.persona_style ?? 'busy',
+      forbidden_topics: Array.isArray(behavior.forbidden_topics) ? behavior.forbidden_topics : [],
+    } : null;
   }
 
   const result = await pool.query(
-    `INSERT INTO conversations (lead_id, quote_snapshot)
-     VALUES ($1, $2::jsonb)
+    `INSERT INTO conversations (lead_id, quote_snapshot, settings_snapshot)
+     VALUES ($1, $2::jsonb, $3::jsonb)
      RETURNING *`,
-    [leadId, quoteSnapshot ? JSON.stringify(quoteSnapshot) : null]
+    [leadId, quoteSnapshot ? JSON.stringify(quoteSnapshot) : null, settingsSnapshot ? JSON.stringify(settingsSnapshot) : null]
   );
   return toPlainConversation(result.rows[0]);
 }

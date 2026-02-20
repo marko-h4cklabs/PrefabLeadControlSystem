@@ -65,13 +65,18 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
     const extracted = Array.isArray(parsed?.extracted) ? parsed.extracted : [];
     const normalized = extracted
       .filter((e) => e?.name != null && e?.value != null)
-      .map((e) => ({
-        name: String(e.name ?? '').trim(),
-        value: e.value,
-        type: (e.type ?? 'text').toLowerCase() === 'number' ? 'number' : 'text',
-        units: e.units ?? null,
-        confidence: typeof e.confidence === 'number' ? e.confidence : 0.9,
-      }))
+      .map((e) => {
+        const name = String(e.name ?? '').trim();
+        const type = (e.type ?? 'text').toLowerCase() === 'number' ? 'number' : 'text';
+        let value = e.value;
+        if (type === 'number' && value != null) {
+          const num = Number(value);
+          value = Number.isFinite(num) ? num : value;
+        } else if (type === 'text' && value != null) {
+          value = String(value).trim();
+        }
+        return { name, value, type, units: e.units ?? null, confidence: typeof e.confidence === 'number' ? e.confidence : 0.9 };
+      })
       .filter((e) => e.name !== '' && allowedNames.has(e.name.toLowerCase()));
     return {
       extracted: normalized,
