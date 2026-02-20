@@ -8,7 +8,9 @@ All authenticated endpoints require: `Authorization: Bearer <token>`
 
 ## Quote Requirements (Presets)
 
-### GET /api/chatbot/quote-fields
+Both `/quote-fields` and `/quote-presets` expose the same behavior. Use whichever your frontend expects.
+
+### GET /api/chatbot/quote-fields (or /api/chatbot/quote-presets)
 
 Returns the 11 preset quote fields with `is_enabled` and `config`.
 
@@ -21,7 +23,7 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/chatbot/quote-
 
 ---
 
-### PUT /api/chatbot/quote-fields
+### PUT /api/chatbot/quote-fields (or /api/chatbot/quote-presets)
 
 Save preset settings. Accepts multiple payload shapes for backward compatibility.
 

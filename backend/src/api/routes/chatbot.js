@@ -156,6 +156,51 @@ router.post('/quote-fields', (req, res) => {
   });
 });
 
+router.get('/quote-presets', async (req, res) => {
+  try {
+    const presets = await chatbotQuoteFieldsRepository.listAllPresets(req.tenantId);
+    res.json({ presets: presets ?? [], fields: presets ?? [] });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/quote-presets', async (req, res) => {
+  try {
+    const parsed = quotePresetsBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      console.info('[quote-presets] invalid payload', req.body);
+      return validationError(res, parsed);
+    }
+    const presets = parsed.data?.presets;
+    if (!Array.isArray(presets) || presets.length === 0) {
+      console.info('[quote-presets] invalid payload', req.body);
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'presets array required' },
+      });
+    }
+    const { PRESET_NAMES } = require('../validators/chatbotSchemas');
+    const unknown = presets.filter((p) => p?.name && !PRESET_NAMES.includes(p.name));
+    if (unknown.length > 0) {
+      return res.status(400).json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Unknown preset names: ${unknown.map((u) => u.name).join(', ')}. Allowed: ${PRESET_NAMES.join(', ')}`,
+        },
+      });
+    }
+    const saved = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, presets);
+    res.json({ presets: saved, fields: saved });
+  } catch (err) {
+    if (err.code === '23514') {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid preset config' },
+      });
+    }
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 const chatBodySchema = require('../validators/chatSchemas').chatBodySchema;
 
 router.post('/chat', async (req, res) => {
