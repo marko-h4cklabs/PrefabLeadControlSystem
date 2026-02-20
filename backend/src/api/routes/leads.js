@@ -4,6 +4,7 @@ const {
   leadRepository,
   conversationRepository,
   chatbotBehaviorRepository,
+  companyLeadStatusesRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
@@ -38,7 +39,13 @@ router.get('/', async (req, res) => {
       });
     }
     const { limit, offset, status, statusId, status_id } = parsed.data;
-    const filterStatusId = statusId || status_id;
+    let filterStatusId = statusId || status_id;
+    if (!filterStatusId) {
+      const defaultStatus = await companyLeadStatusesRepository.getDefault(req.tenantId);
+      filterStatusId = defaultStatus?.id ?? null;
+    } else if (filterStatusId === 'all') {
+      filterStatusId = null;
+    }
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
@@ -46,18 +53,26 @@ router.get('/', async (req, res) => {
       offset,
     });
     const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId });
-    const leadsResponse = (leads ?? []).map((l) => ({
-      id: l.id,
-      company_id: l.company_id,
-      channel: l.channel,
-      name: l.name ?? l.external_id ?? null,
-      external_id: l.external_id ?? l.name ?? null,
-      status_id: l.status_id ?? null,
-      status_name: l.status_name ?? l.status ?? null,
-      created_at: l.created_at,
-      updated_at: l.updated_at,
-    }));
-    res.json({ leads: leadsResponse, total });
+    const leadsWithSummary = await Promise.all(
+      (leads ?? []).map(async (l) => {
+        const base = {
+          id: l.id,
+          channel: l.channel,
+          name: l.name ?? l.external_id ?? null,
+          status_id: l.status_id ?? null,
+          status_name: l.status_name ?? l.status ?? null,
+          created_at: l.created_at,
+          updated_at: l.updated_at,
+        };
+        try {
+          base.collected_info = await leadRepository.getCollectedInfoSummary(l.id, 120);
+        } catch {
+          base.collected_info = '';
+        }
+        return base;
+      })
+    );
+    res.json({ leads: leadsWithSummary, total });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -83,7 +98,16 @@ router.post('/', async (req, res) => {
       name: displayValue || undefined,
       external_id: displayValue || external_id || undefined,
     });
-    res.status(201).json(lead);
+    const out = {
+      id: lead.id,
+      channel: lead.channel,
+      name: lead.name ?? lead.external_id ?? null,
+      status_id: lead.status_id ?? null,
+      status_name: lead.status_name ?? lead.status ?? null,
+      created_at: lead.created_at,
+      updated_at: lead.updated_at,
+    };
+    res.status(201).json(out);
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: { code: 'CONFLICT', message: 'Lead already exists for this channel/external_id' } });
@@ -94,13 +118,10 @@ router.post('/', async (req, res) => {
 
 function toLeadPublic(lead) {
   const nameVal = lead.name ?? lead.external_id ?? null;
-  const externalIdVal = lead.external_id ?? lead.name ?? null;
   return {
     id: lead.id,
-    company_id: lead.company_id,
     channel: lead.channel,
     name: nameVal,
-    external_id: externalIdVal,
     status_id: lead.status_id ?? null,
     status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
@@ -136,19 +157,21 @@ router.get('/:leadId', async (req, res) => {
     const parsedFields = conversation?.parsed_fields ?? {};
     const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
     const { required_infos, collected_infos } = computeFieldsState(orderedSnapshot, collectedFromParsed);
+    const collectedInfos = (collected_infos ?? []).map((c) => ({
+      name: c.name,
+      type: c.type ?? 'text',
+      value: c.value,
+      units: c.units ?? null,
+    }));
     res.json({
-      lead: toLeadPublic(lead),
-      collected_infos: (collected_infos ?? []).map((c) => ({
-        name: c.name,
-        type: c.type ?? 'text',
-        value: c.value,
-        units: c.units ?? null,
-      })),
-      required_infos_missing: (required_infos ?? []).map((f) => ({
-        name: f.name,
-        type: f.type ?? 'text',
-        units: f.units ?? null,
-      })),
+      id: lead.id,
+      channel: lead.channel,
+      name: lead.name ?? lead.external_id ?? null,
+      status_id: lead.status_id ?? null,
+      status_name: lead.status_name ?? lead.status ?? null,
+      created_at: lead.created_at,
+      updated_at: lead.updated_at,
+      collected_infos: collectedInfos,
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -190,8 +213,7 @@ router.get('/:leadId/conversation', async (req, res) => {
         emojis_enabled: behavior?.emojis_enabled ?? false,
         forbidden_topics: Array.isArray(behavior?.forbidden_topics) ? behavior.forbidden_topics : [],
       },
-      required_infos: allRequired,
-      missing_required_infos: missingRequired ?? [],
+      required_infos: missingRequired ?? [],
       collected_infos: collected ?? [],
       required: missingRequired ?? [],
       collected: collected ?? [],
@@ -241,15 +263,12 @@ router.post('/:leadId/ai-reply', async (req, res) => {
       messages: conversation.messages,
       parsed_fields: conversation.parsed_fields,
       current_step: conversation.current_step,
-      active_settings: result.active_settings ?? {
-        tone: 'professional',
-        response_length: 'medium',
-        persona_style: 'busy',
-        emojis_enabled: false,
-        forbidden_topics: [],
+      active_settings: {
+        tone: result.active_settings?.tone ?? 'professional',
+        persona: result.active_settings?.persona_style ?? 'busy',
+        response_length: result.active_settings?.response_length ?? 'medium',
       },
-      required_infos: allRequired,
-      missing_required_infos: missingRequired,
+      required_infos: missingRequired,
       collected_infos: collected,
       required: missingRequired,
       collected,

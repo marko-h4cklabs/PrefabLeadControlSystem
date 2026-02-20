@@ -1,4 +1,5 @@
 const { pool } = require('../index');
+const conversationRepository = require('./conversationRepository');
 
 function toPlainLead(row, statusRow = null) {
   if (!row) return null;
@@ -227,6 +228,24 @@ async function setStatus(companyId, leadId, statusId) {
   return toPlainLead(row, statusRow.rows[0]);
 }
 
+async function getCollectedInfoSummary(leadId, maxLen = 120) {
+  const conversation = await conversationRepository.getByLeadId(leadId);
+  const parsed = conversation?.parsed_fields ?? {};
+  const snapshot = conversation?.quote_snapshot ?? [];
+  const ordered = Array.isArray(snapshot) ? snapshot : [];
+  const quoteByName = Object.fromEntries(ordered.map((f) => [f.name, f]));
+  const parts = [];
+  for (const [name, value] of Object.entries(parsed)) {
+    if (value == null || String(value).trim() === '') continue;
+    const qf = quoteByName[name];
+    const units = qf?.units ? ` ${qf.units}` : '';
+    parts.push(`${name}: ${value}${units}`);
+    if (parts.join(' · ').length > maxLen) break;
+  }
+  const summary = parts.join(' · ');
+  return summary.length > maxLen ? summary.slice(0, maxLen - 3) + '...' : summary;
+}
+
 async function touchUpdatedAt(companyId, leadId) {
   await pool.query(
     'UPDATE leads SET updated_at = NOW() WHERE id = $1 AND company_id = $2',
@@ -257,5 +276,6 @@ module.exports = {
   setStatus,
   setName,
   touchUpdatedAt,
+  getCollectedInfoSummary,
   findByCompanyChannelExternalId,
 };

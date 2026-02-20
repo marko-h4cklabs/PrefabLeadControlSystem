@@ -4,14 +4,18 @@ const VALID_CHANNELS = ['messenger', 'instagram', 'whatsapp', 'telegram', 'email
 const VALID_STATUSES = ['new', 'contacted', 'qualified', 'booked', 'closed_won', 'closed_lost'];
 
 const externalIdRegex = /^[a-z0-9_\-]{2,64}$/;
-// Human name: Unicode letters, diacritics, spaces, apostrophe (' or '), hyphen; 2-80 chars
-const createLeadNameRegex = /^[\p{L}][\p{L}\p{M}\u0027\u2019\- ]*$/u;
+// Human name: Unicode letters, diacritics, spaces, apostrophe, hyphen, dot; trim + collapse spaces
+const createLeadNameRegex = /^[\p{L}\p{M}\u0027\u2019.\-\s]+$/u;
+
+function collapseSpaces(s) {
+  return String(s ?? '').replace(/\s+/g, ' ').trim();
+}
 
 const uuidOptional = z
   .string()
   .optional()
-  .refine((v) => !v || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), {
-    message: 'statusId must be a valid UUID',
+  .refine((v) => !v || v === 'all' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v), {
+    message: 'status_id must be a valid UUID or "all"',
   })
   .transform((v) => (v && v.trim() ? v : undefined));
 
@@ -33,11 +37,12 @@ const createLeadBodySchema = z
       .transform((v) => v.toLowerCase()),
     name: z
       .string()
-      .trim()
-      .min(2, 'name must be 2-80 characters')
-      .max(80)
-      .regex(createLeadNameRegex, 'name may only contain letters, spaces, apostrophe, hyphen')
-      .optional(),
+      .optional()
+      .transform((v) => (v != null ? collapseSpaces(v) : undefined))
+      .refine((v) => !v || v.length >= 2, 'name must be at least 2 characters')
+      .refine((v) => !v || v.length <= 80, 'name must be at most 80 characters')
+      .refine((v) => !v || createLeadNameRegex.test(v), 'name may only contain letters, spaces, apostrophe, hyphen, dot')
+      .transform((v) => (v === '' ? undefined : v)),
     external_id: z
       .string()
       .trim()

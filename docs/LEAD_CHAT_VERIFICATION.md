@@ -17,13 +17,42 @@ curl -s -X POST "$BASE/api/companies/$COMPANY_ID/leads" \
   -d '{"name":"Erik Mekelenić","channel":"Messenger"}'
 ```
 
-**Alternative (legacy):** `{"external_id":"test-123","channel":"messenger"}` still works.
+**Example response:**
+```json
+{
+  "id": "uuid",
+  "channel": "messenger",
+  "name": "Erik Mekelenić",
+  "status_id": "uuid",
+  "status_name": "New",
+  "created_at": "2025-02-18T...",
+  "updated_at": "2025-02-18T..."
+}
+```
 
-Response includes `id`, `channel`, `name`, `external_id`, `status_id`, `status_name`, `created_at`, `updated_at`.
+**Legacy:** `{"external_id":"test-123","channel":"messenger"}` still works.
 
 ---
 
-## B) Fetch Lead Detail
+## B) Statuses Endpoint
+
+```bash
+curl -s -X GET "$BASE/api/leads/statuses" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: $COMPANY_ID"
+```
+
+**Example response:**
+```json
+{
+  "statuses": [
+    {"id": "uuid", "name": "New", "slug": "new", "is_default": true, "sort_order": 10},
+    {"id": "uuid", "name": "Qualified", "slug": "qualified", "is_default": false, "sort_order": 20}
+  ]
+}
+```
+
+## C) Fetch Lead Detail
 
 ```bash
 export LEAD_ID="lead-uuid-from-step-A"
@@ -33,28 +62,64 @@ curl -s -X GET "$BASE/api/leads/$LEAD_ID" \
   -H "x-company-id: $COMPANY_ID"
 ```
 
-**Expected response shape:**
+**Example response:**
 ```json
 {
-  "lead": {
-    "id": "...",
-    "company_id": "...",
-    "channel": "messenger",
-    "name": "Erik Mekelenić",
-    "external_id": "Erik Mekelenić",
-    "status_id": "...",
-    "status_name": "New",
-    "created_at": "2025-02-18T...",
-    "updated_at": "2025-02-18T..."
-  },
-  "collected_infos": [],
-  "required_infos_missing": []
+  "id": "uuid",
+  "channel": "messenger",
+  "name": "Erik Mekelenić",
+  "status_id": "uuid",
+  "status_name": "New",
+  "created_at": "2025-02-18T...",
+  "updated_at": "2025-02-18T...",
+  "collected_infos": [
+    {"name": "location", "type": "text", "value": "Croatia, Zagreb", "units": null},
+    {"name": "budget", "type": "number", "value": 3000, "units": "EUR"}
+  ]
 }
 ```
 
 ---
 
-## C) Send Chat Message (AI Reply) – Sidebar Contract
+## D) Lead List (with filtering)
+
+```bash
+# Default: filter by "New" status
+curl -s -X GET "$BASE/api/leads?limit=10&offset=0" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: $COMPANY_ID"
+
+# Filter by status UUID
+curl -s -X GET "$BASE/api/leads?status_id=STATUS_UUID" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: $COMPANY_ID"
+
+# All statuses (no filter)
+curl -s -X GET "$BASE/api/leads?status_id=all" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: $COMPANY_ID"
+```
+
+**Example response:**
+```json
+{
+  "leads": [
+    {
+      "id": "uuid",
+      "channel": "messenger",
+      "name": "Erik Mekelenić",
+      "status_id": "uuid",
+      "status_name": "New",
+      "created_at": "2025-02-18T...",
+      "updated_at": "2025-02-18T...",
+      "collected_info": "location: Croatia, Zagreb · budget: 3000 EUR"
+    }
+  ],
+  "total": 1
+}
+```
+
+## E) Send Chat Message (AI Reply) – Sidebar Contract
 
 ```bash
 # First, add a user message
@@ -71,28 +136,23 @@ curl -s -X POST "$BASE/api/companies/$COMPANY_ID/leads/$LEAD_ID/ai-reply" \
   -H "x-company-id: $COMPANY_ID"
 ```
 
-**Expected response includes:**
+**Example response:**
 ```json
 {
-  "assistant_message": "...",
+  "assistant_message": "Hi! I'd be happy to help...",
   "conversation_id": "uuid",
   "active_settings": {
     "tone": "professional",
-    "response_length": "medium",
-    "persona_style": "busy",
-    "emojis_enabled": false,
-    "forbidden_topics": []
+    "persona": "busy",
+    "response_length": "medium"
   },
   "required_infos": [{"name":"budget","type":"number","units":"USD","priority":100}],
-  "missing_required_infos": [{"name":"budget","type":"number","units":"USD","priority":100}],
   "collected_infos": [],
   "required": [...],
   "collected": []
 }
 ```
 
-- `active_settings` – from chatbot behavior
-- `required_infos` – all required fields from quote snapshot
-- `missing_required_infos` – required but not yet collected
+- `required_infos` – missing required fields for this lead's conversation snapshot
 - `collected_infos` – collected fields with values
 - `required` / `collected` – aliases for backward compatibility

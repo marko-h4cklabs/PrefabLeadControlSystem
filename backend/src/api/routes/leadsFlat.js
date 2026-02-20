@@ -17,13 +17,10 @@ const {
 
 function toLeadResponse(lead) {
   const nameVal = lead.name ?? lead.external_id ?? null;
-  const externalIdVal = lead.external_id ?? lead.name ?? null;
   return {
     id: lead.id,
-    company_id: lead.company_id,
     channel: lead.channel,
     name: nameVal,
-    external_id: externalIdVal,
     status_id: lead.status_id ?? null,
     status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
@@ -33,13 +30,10 @@ function toLeadResponse(lead) {
 
 function toLeadPublic(lead) {
   const nameVal = lead.name ?? lead.external_id ?? null;
-  const externalIdVal = lead.external_id ?? lead.name ?? null;
   return {
     id: lead.id,
-    company_id: lead.company_id,
     channel: lead.channel,
     name: nameVal,
-    external_id: externalIdVal,
     status_id: lead.status_id ?? null,
     status_name: lead.status_name ?? lead.status ?? null,
     created_at: lead.created_at,
@@ -54,9 +48,11 @@ router.get('/statuses', async (req, res) => {
     const statuses = (Array.isArray(rows) ? rows : []).map((s) => ({
       id: s.id,
       name: s.name,
-      position: s.position ?? s.sort_order ?? 0,
+      slug: s.slug ?? (s.name ?? '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
+      is_default: s.is_default ?? false,
+      sort_order: s.sort_order ?? 0,
     }));
-    res.json({ statuses });
+    res.json({ statuses: statuses });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
@@ -75,7 +71,13 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ error: msg });
     }
     const { limit, offset, status, statusId, status_id } = parsed.data;
-    const filterStatusId = statusId || status_id;
+    let filterStatusId = statusId || status_id;
+    if (!filterStatusId) {
+      const defaultStatus = await companyLeadStatusesRepository.getDefault(req.tenantId);
+      filterStatusId = defaultStatus?.id ?? null;
+    } else if (filterStatusId === 'all') {
+      filterStatusId = null;
+    }
     const leads = await leadRepository.findAll(req.tenantId, {
       status,
       status_id: filterStatusId,
@@ -83,8 +85,28 @@ router.get('/', async (req, res) => {
       offset,
     });
     const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId });
+    const leadsWithSummary = await Promise.all(
+      (Array.isArray(leads) ? leads : []).map(async (lead) => {
+        const base = toLeadResponse(lead);
+        const out = {
+          id: base.id,
+          channel: base.channel,
+          name: base.name ?? base.external_id ?? null,
+          status_id: base.status_id,
+          status_name: base.status_name,
+          created_at: base.created_at,
+          updated_at: base.updated_at,
+        };
+        try {
+          out.collected_info = await leadRepository.getCollectedInfoSummary(lead.id, 120);
+        } catch {
+          out.collected_info = '';
+        }
+        return out;
+      })
+    );
     res.json({
-      leads: Array.isArray(leads) ? leads.map(toLeadResponse) : [],
+      leads: leadsWithSummary,
       total: typeof total === 'number' ? total : 0,
     });
   } catch (err) {
@@ -121,19 +143,21 @@ router.get('/:id', async (req, res) => {
     const parsedFields = conversation?.parsed_fields ?? {};
     const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
     const { required_infos, collected_infos } = computeFieldsState(orderedSnapshot, collectedFromParsed);
+    const collectedInfos = (collected_infos ?? []).map((c) => ({
+      name: c.name,
+      type: c.type ?? 'text',
+      value: c.value,
+      units: c.units ?? null,
+    }));
     res.json({
-      lead: toLeadPublic(lead),
-      collected_infos: (collected_infos ?? []).map((c) => ({
-        name: c.name,
-        type: c.type ?? 'text',
-        value: c.value,
-        units: c.units ?? null,
-      })),
-      required_infos_missing: (required_infos ?? []).map((f) => ({
-        name: f.name,
-        type: f.type ?? 'text',
-        units: f.units ?? null,
-      })),
+      id: lead.id,
+      channel: lead.channel,
+      name: lead.name ?? lead.external_id ?? null,
+      status_id: lead.status_id ?? null,
+      status_name: lead.status_name ?? lead.status ?? null,
+      created_at: lead.created_at,
+      updated_at: lead.updated_at,
+      collected_infos: collectedInfos,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Internal server error' });
