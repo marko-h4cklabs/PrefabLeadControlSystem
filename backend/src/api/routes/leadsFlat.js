@@ -145,19 +145,13 @@ router.get('/', async (req, res) => {
   }
 });
 
-// --- CRM routes: MUST be before GET /:id so /:id/activity, /:id/notes, /:id/tasks match first ---
+// --- CRM routes: use :leadId for consistency with frontend /api/leads/:leadId/activity etc. ---
 const crmLeadRouter = require('./crm');
-router.use('/:id/crm', (req, res, next) => {
-  req.params.leadId = req.params.id;
-  next();
-}, crmLeadRouter);
+router.use('/:leadId/crm', crmLeadRouter);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function resolveLeadId(req) {
-  return req.params.leadId ?? req.params.id;
-}
 async function ensureLeadForCrm(req, res, next) {
-  const leadId = resolveLeadId(req);
+  const leadId = req.params.leadId;
   if (!leadId || !UUID_REGEX.test(String(leadId))) {
     if (process.env.NODE_ENV !== 'production') {
       console.warn('[crm] invalid leadId:', { leadId, params: req.params });
@@ -200,41 +194,50 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     });
 }
 
-// --- CRM GET routes: register BEFORE GET /:id so /:id/activity, /:id/notes, /:id/tasks match first ---
-router.get('/:id/activity', ensureLeadForCrm, async (req, res) => {
+// --- CRM GET routes: /:leadId/... matches /api/leads/:leadId/activity etc. BEFORE generic GET /:id ---
+router.get('/:leadId/activity', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[crm] GET activity', { leadId, tenantId: req.tenantId });
+    }
     const parsed = crmActivityQuerySchema.safeParse(req.query);
     const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
     const items = await leadActivitiesRepository.listByLead(req.tenantId, leadId, { limit, offset });
     const total = await leadActivitiesRepository.countByLead(req.tenantId, leadId);
-    res.json({ items: (items ?? []).map(toCrmActivityItem), total: total ?? 0 });
+    res.json({ items: Array.isArray(items) ? items.map(toCrmActivityItem) : [], total: typeof total === 'number' ? total : 0 });
   } catch (err) {
     if (err.code === '42P01') return res.json({ items: [], total: 0 });
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
-router.get('/:id/notes', ensureLeadForCrm, async (req, res) => {
+router.get('/:leadId/notes', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[crm] GET notes', { leadId, tenantId: req.tenantId });
+    }
     const parsed = crmNotesQuerySchema.safeParse(req.query);
     const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
     const items = await leadNotesRepository.listByLead(req.tenantId, leadId, { limit, offset });
     const total = await leadNotesRepository.countByLead(req.tenantId, leadId);
-    res.json({ items: (items ?? []).map(toCrmNoteItem), total: total ?? 0 });
+    res.json({ items: Array.isArray(items) ? items.map(toCrmNoteItem) : [], total: typeof total === 'number' ? total : 0 });
   } catch (err) {
     if (err.code === '42P01') return res.json({ items: [], total: 0 });
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
-router.get('/:id/tasks', ensureLeadForCrm, async (req, res) => {
+router.get('/:leadId/tasks', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[crm] GET tasks', { leadId, tenantId: req.tenantId });
+    }
     const parsed = crmTasksQuerySchema.safeParse(req.query);
     const { limit, offset, status } = parsed.success ? parsed.data : { limit: 50, offset: 0, status: undefined };
     const items = await leadTasksRepository.listByLead(req.tenantId, leadId, { limit, offset, status });
     const total = await leadTasksRepository.countByLead(req.tenantId, leadId, status ? { status } : {});
-    res.json({ items: (items ?? []).map(toCrmTaskItem), total: total ?? 0 });
+    res.json({ items: Array.isArray(items) ? items.map(toCrmTaskItem) : [], total: typeof total === 'number' ? total : 0 });
   } catch (err) {
     if (err.code === '42P01') return res.json({ items: [], total: 0 });
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -458,7 +461,7 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// --- Also support /api/leads/:id/activity, /notes, /tasks (no /crm/) for backward compatibility ---
+// --- CRM POST/PATCH/DELETE (notes, tasks) ---
 function toCrmActivityItem(row) {
   return {
     id: row.id,
@@ -478,7 +481,7 @@ function toCrmTaskItem(task) {
   return { id: task.id, title: task.title, description: task.description, status: task.status, due_at: task.due_at, assigned_user_id: task.assigned_user_id, created_by_user_id: task.created_by_user_id, completed_at: task.completed_at, created_at: task.created_at, updated_at: task.updated_at };
 }
 
-router.post('/:id/notes', ensureLeadForCrm, async (req, res) => {
+router.post('/:leadId/notes', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const parsed = createNoteBodySchema.safeParse(req.body);
@@ -495,7 +498,7 @@ router.post('/:id/notes', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-router.patch('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
+router.patch('/:leadId/notes/:noteId', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const parsed = updateNoteBodySchema.safeParse(req.body);
@@ -513,7 +516,7 @@ router.patch('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-router.delete('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
+router.delete('/:leadId/notes/:noteId', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const removed = await leadNotesRepository.remove({ companyId: req.tenantId, leadId, noteId: req.params.noteId });
@@ -526,7 +529,7 @@ router.delete('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-router.post('/:id/tasks', ensureLeadForCrm, async (req, res) => {
+router.post('/:leadId/tasks', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const parsed = createTaskBodySchema.safeParse(req.body);
@@ -544,7 +547,7 @@ router.post('/:id/tasks', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-router.patch('/:id/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
+router.patch('/:leadId/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const parsed = updateTaskBodySchema.safeParse(req.body);
@@ -575,7 +578,7 @@ router.patch('/:id/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-router.delete('/:id/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
+router.delete('/:leadId/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     const removed = await leadTasksRepository.remove({ companyId: req.tenantId, leadId, taskId: req.params.taskId });

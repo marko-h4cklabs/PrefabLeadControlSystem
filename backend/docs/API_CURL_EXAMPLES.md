@@ -101,11 +101,11 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
 
 All CRM endpoints require JWT auth and tenant context (`x-company-id` or JWT company).
 
-**Primary paths (used by frontend):** `/api/leads/:id/crm/activity`, `/api/leads/:id/crm/notes`, `/api/leads/:id/crm/tasks`
+**Primary paths (used by frontend):** `/api/leads/:leadId/activity`, `/api/leads/:leadId/notes`, `/api/leads/:leadId/tasks`
 
-**Alternative paths (also supported):** `/api/crm/leads/:leadId/...`
+**Alternative paths:** `/api/leads/:leadId/crm/activity` etc., `/api/crm/leads/:leadId/...`
 
-### GET /api/leads/:id/activity
+### GET /api/leads/:leadId/activity
 
 Returns activity timeline for the lead. Query: `?limit=30&offset=0` (optional).
 
@@ -116,21 +116,21 @@ curl -H "Authorization: Bearer $TOKEN" -H "x-company-id: $COMPANY_ID" \
   "http://localhost:3000/api/leads/LEAD_UUID/activity?limit=30"
 ```
 
-### GET /api/leads/:id/notes
+### GET /api/leads/:leadId/notes
 
-### GET /api/leads/:id/tasks
+### GET /api/leads/:leadId/tasks
 
-### POST /api/leads/:id/notes
+### POST /api/leads/:leadId/notes
 
-### PATCH /api/leads/:id/notes/:noteId
+### PATCH /api/leads/:leadId/notes/:noteId
 
-### DELETE /api/leads/:id/notes/:noteId
+### DELETE /api/leads/:leadId/notes/:noteId
 
-### POST /api/leads/:id/tasks
+### POST /api/leads/:leadId/tasks
 
-### PATCH /api/leads/:id/tasks/:taskId
+### PATCH /api/leads/:leadId/tasks/:taskId
 
-### DELETE /api/leads/:id/tasks/:taskId
+### DELETE /api/leads/:leadId/tasks/:taskId
 
 ### GET /api/crm/leads/:leadId/summary (combined)
 

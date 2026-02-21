@@ -215,21 +215,30 @@ if (!leadId || typeof leadId !== 'string' || !/^[0-9a-f-]{36}$/i.test(leadId)) {
 }
 ```
 
-### Endpoints (flat route – recommended)
+### Endpoints (use lead.id from Lead Detail)
 
 | Method | Path | Body |
 |--------|------|------|
-| GET | `/api/leads/:leadId/crm/activity?limit=30&offset=0` | - |
-| GET | `/api/leads/:leadId/crm/notes?limit=50&offset=0` | - |
-| GET | `/api/leads/:leadId/crm/tasks?limit=50&offset=0&status=open` | - |
-| POST | `/api/leads/:leadId/crm/notes` | `{ "body": "..." }` |
-| PATCH | `/api/leads/:leadId/crm/notes/:noteId` | `{ "body": "..." }` |
-| DELETE | `/api/leads/:leadId/crm/notes/:noteId` | - |
-| POST | `/api/leads/:leadId/crm/tasks` | `{ "title": "...", "description?", "due_at?", "assigned_user_id?" }` |
-| PATCH | `/api/leads/:leadId/crm/tasks/:taskId` | `{ "title?", "description?", "status?", "due_at?", "assigned_user_id?" }` |
-| DELETE | `/api/leads/:leadId/crm/tasks/:taskId` | - |
+| GET | `/api/leads/:leadId/activity?limit=30&offset=0` | - |
+| GET | `/api/leads/:leadId/notes?limit=50&offset=0` | - |
+| GET | `/api/leads/:leadId/tasks?limit=50&offset=0&status=open` | - |
+| POST | `/api/leads/:leadId/notes` | `{ "body": "..." }` |
+| PATCH | `/api/leads/:leadId/notes/:noteId` | `{ "body": "..." }` |
+| DELETE | `/api/leads/:leadId/notes/:noteId` | - |
+| POST | `/api/leads/:leadId/tasks` | `{ "title": "...", "description?", "due_at?", "assigned_user_id?" }` |
+| PATCH | `/api/leads/:leadId/tasks/:taskId` | `{ "title?", "description?", "status?", "due_at?", "assigned_user_id?" }` |
+| DELETE | `/api/leads/:leadId/tasks/:taskId` | - |
 
-**Response shapes:** `{ items: [...], total: number }` for GET. Empty lists: `{ items: [], total: 0 }`.
+**Alternative (with /crm/):** `/api/leads/:leadId/crm/activity`, `/crm/notes`, `/crm/tasks` also work.
+
+**Response shapes:** `{ items: [...], total: number }` for GET. Empty lists: `{ items: [], total: 0 }`. Never null.
+
+**Frontend defensive guard:** Before fetching, validate `leadId` and normalize response:
+```js
+const isValidLeadId = (id) => id && typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id);
+if (!isValidLeadId(lead?.id)) return; // or show "Unable to load CRM"
+const items = Array.isArray(res?.items) ? res.items : [];
+```
 
 **Headers:** `Authorization: Bearer <token>`, optional `x-company-id` (must match JWT company if sent).
 
