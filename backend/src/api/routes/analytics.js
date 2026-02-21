@@ -4,6 +4,8 @@ const { analyticsRepository } = require('../../../db/repositories');
 const { analyticsQuerySchema } = require('../validators/analyticsSchemas');
 const { errorJson } = require('../middleware/errors');
 
+const ANALYTICS_DEBUG = process.env.ANALYTICS_DEBUG === 'true';
+
 router.get('/dashboard', async (req, res) => {
   try {
     const parsed = analyticsQuerySchema.safeParse(req.query);
@@ -24,6 +26,7 @@ router.get('/dashboard', async (req, res) => {
       fieldCompletion,
       topSignals,
       availableChannels,
+      rawCounts,
     ] = await Promise.all([
       analyticsRepository.getFullSummary(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getLeadsOverTime(companyId, { startDate, endDate, source, channel }),
@@ -32,21 +35,35 @@ router.get('/dashboard', async (req, res) => {
       analyticsRepository.getFieldCompletion(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getTopSignals(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getAvailableChannels(companyId, { startDate, endDate, source }),
+      ANALYTICS_DEBUG ? analyticsRepository.getRawCounts(companyId, { startDate, endDate, source, channel }) : Promise.resolve(null),
     ]);
 
     const dataAsOf = new Date().toISOString();
-    if (process.env.NODE_ENV !== 'production') {
-      console.info('[analytics] dashboard', {
-        companyId: companyId?.slice(0, 8) + '…',
-        range: appliedFilters.range,
-        source: appliedFilters.source,
-        channel: appliedFilters.channel,
-        totalLeads: summary?.totalLeads ?? 0,
-        channelsFound: availableChannels?.length ?? 0,
+    if (ANALYTICS_DEBUG) {
+      console.info('[analytics] dashboard DEBUG', {
+        tenantId: companyId,
+        parsedFilters: { range: appliedFilters.range, source: appliedFilters.source, channel: appliedFilters.channel },
+        normalizedFilters: { startDate, endDate, source, channel },
+        rawCounts: rawCounts ?? {},
+        summary: summary ? {
+          totalLeads: summary.totalLeads,
+          newLeadsToday: summary.newLeadsToday,
+          conversationsStarted: summary.conversationsStarted,
+          inboxCount: summary.inboxCount,
+          simulationCount: summary.simulationCount,
+        } : null,
+        lengths: {
+          leadsOverTime: leadsOverTime?.length ?? 0,
+          channelBreakdown: channelBreakdown?.length ?? 0,
+          statusBreakdown: statusBreakdown?.length ?? 0,
+          fieldCompletion: fieldCompletion?.length ?? 0,
+          topSignals: topSignals?.length ?? 0,
+          availableChannels: availableChannels?.length ?? 0,
+        },
       });
     }
 
-    res.json({
+    const payload = {
       range: { startDate, endDate, source: appliedFilters.source, channel: appliedFilters.channel },
       applied_filters: appliedFilters,
       data_as_of: dataAsOf,
@@ -57,7 +74,11 @@ router.get('/dashboard', async (req, res) => {
       statusBreakdown,
       fieldCompletion,
       topSignals,
-    });
+    };
+    if (ANALYTICS_DEBUG && rawCounts) {
+      payload._debug = { rawCounts, tenantId: companyId };
+    }
+    res.json(payload);
   } catch (err) {
     if (err.code === '42P01') {
       return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });

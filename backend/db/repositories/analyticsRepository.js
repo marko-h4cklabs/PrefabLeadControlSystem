@@ -8,8 +8,32 @@
 const { pool } = require('../index');
 
 /**
+ * Normalize source: all => no filter; inbox/simulation => filter. Legacy: NULL/empty source treated as inbox.
+ * @param {string} s - raw source value
+ * @returns {{ filter: boolean, value?: string }} - filter=true means add WHERE clause
+ */
+function normalizeSource(s) {
+  const v = (s ?? '').toString().trim().toLowerCase();
+  if (!v || v === 'all') return { filter: false };
+  if (v === 'inbox' || v === 'simulation') return { filter: true, value: v };
+  return { filter: false };
+}
+
+/**
+ * Normalize channel: all/empty/undefined/all channels => no filter.
+ * UI labels like "All Channels" must not be used as filter values.
+ * @param {string} c - raw channel value
+ * @returns {{ filter: boolean, value?: string }}
+ */
+function normalizeChannel(c) {
+  const v = (c ?? '').toString().trim().toLowerCase();
+  if (!v || v === 'all' || v === 'all channels') return { filter: false };
+  return { filter: true, value: v };
+}
+
+/**
  * Build consistent WHERE clause for analytics (tenant + date range + optional source/channel).
- * Uses COALESCE(l.source,'inbox') for legacy null source; channel uses LOWER for case-insensitive match.
+ * Legacy: NULL/empty source treated as inbox. Channel filter case-insensitive.
  * @param {string} companyId
  * @param {{ startDate, endDate, source?, channel? }} options
  * @param {{ withChannelFilter?: boolean }} opts - if false, omit channel filter (for available_channels)
@@ -20,13 +44,15 @@ function buildWhere(companyId, options, opts = {}) {
   const params = [companyId, startDate, endDate];
   let paramIndex = 4;
   let where = `l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval '1 day')`;
-  if (source && source !== 'all') {
-    where += ` AND COALESCE(l.source, 'inbox') = $${paramIndex++}`;
-    params.push(source.toLowerCase());
+  const src = normalizeSource(source);
+  if (src.filter) {
+    where += ` AND COALESCE(NULLIF(TRIM(l.source), ''), 'inbox') = $${paramIndex++}`;
+    params.push(src.value);
   }
-  if (withChannelFilter && channel && channel !== 'all') {
+  const ch = withChannelFilter ? normalizeChannel(channel) : { filter: false };
+  if (ch.filter) {
     where += ` AND LOWER(TRIM(l.channel)) = LOWER(TRIM($${paramIndex++}))`;
-    params.push(channel);
+    params.push(ch.value);
   }
   return { where, params };
 }
@@ -131,7 +157,7 @@ async function getFullSummary(companyId, options) {
 
   const [sourceRes, fieldRes] = await Promise.all([
     pool.query(
-      `SELECT COALESCE(l.source, 'inbox') AS source, COUNT(*)::int AS cnt FROM leads l WHERE ${where} GROUP BY COALESCE(l.source, 'inbox')`,
+      `SELECT COALESCE(NULLIF(TRIM(l.source), ''), 'inbox') AS source, COUNT(*)::int AS cnt FROM leads l WHERE ${where} GROUP BY COALESCE(NULLIF(TRIM(l.source), ''), 'inbox')`,
       params
     ),
     pool.query(
@@ -183,10 +209,10 @@ async function getLeadsOverTime(companyId, options) {
   const { where, params } = buildWhereNoAlias(companyId, options);
 
   const result = await pool.query(
-    `SELECT date_trunc('day', created_at)::date AS day, COALESCE(source, 'inbox') AS source, COUNT(*)::int AS count
+    `SELECT date_trunc('day', created_at)::date AS day, COALESCE(NULLIF(TRIM(source), ''), 'inbox') AS source, COUNT(*)::int AS count
      FROM leads
      WHERE ${where}
-     GROUP BY date_trunc('day', created_at)::date, COALESCE(source, 'inbox')
+     GROUP BY date_trunc('day', created_at)::date, COALESCE(NULLIF(TRIM(source), ''), 'inbox')
      ORDER BY day ASC`,
     params
   );
@@ -249,11 +275,11 @@ async function getStatusBreakdown(companyId, options) {
   const { where, params } = buildWhere(companyId, options);
 
   const result = await pool.query(
-    `SELECT COALESCE(cls.name, l.status) AS status_name, COUNT(*)::int AS count
+    `SELECT COALESCE(cls.name, l.status, 'unknown') AS status_name, COUNT(*)::int AS count
      FROM leads l
      LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
      WHERE ${where}
-     GROUP BY COALESCE(cls.name, l.status)
+     GROUP BY COALESCE(cls.name, l.status, 'unknown')
      ORDER BY count DESC`,
     params
   );
@@ -262,6 +288,25 @@ async function getStatusBreakdown(companyId, options) {
     status: r.status_name ?? 'unknown',
     count: r.count ?? 0,
   }));
+}
+
+/**
+ * Raw counts for debugging (ANALYTICS_DEBUG). Total leads for tenant, total after filters.
+ */
+async function getRawCounts(companyId, options) {
+  const totalForTenantRes = await pool.query(
+    'SELECT COUNT(*)::int AS cnt FROM leads WHERE company_id = $1',
+    [companyId]
+  );
+  const { where, params } = buildWhere(companyId, options);
+  const filteredRes = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM leads l WHERE ${where}`,
+    params
+  );
+  return {
+    totalForTenant: totalForTenantRes.rows[0]?.cnt ?? 0,
+    totalAfterFilters: filteredRes.rows[0]?.cnt ?? 0,
+  };
 }
 
 /**
@@ -360,4 +405,5 @@ module.exports = {
   getFieldCompletion,
   getTopSignals,
   getAvailableChannels,
+  getRawCounts,
 };
