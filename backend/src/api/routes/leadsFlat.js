@@ -595,4 +595,10 @@ router.delete('/:leadId/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
   }
 });
 
+// POST /:leadId/appointments — create appointment from lead detail
+const { createAppointmentHandler } = require('./appointments');
+router.post('/:leadId/appointments', ensureLeadForCrm, (req, res) => {
+  return createAppointmentHandler(req, res, req.crmLeadId);
+});
+
 module.exports = router;

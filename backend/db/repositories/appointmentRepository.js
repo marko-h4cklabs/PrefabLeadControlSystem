@@ -25,33 +25,20 @@ function toDto(row) {
   } : null;
   return {
     id: row.id,
-    // snake_case
-    company_id: row.company_id,
-    lead_id: row.lead_id,
-    appointment_type: row.appointment_type ?? 'call',
-    start_at: row.start_at ?? null,
-    end_at: row.end_at ?? null,
-    reminder_minutes_before: row.reminder_minutes_before ?? null,
-    created_by_user_id: row.created_by_user_id ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    // camelCase
-    companyId: row.company_id,
     leadId: row.lead_id,
+    lead: leadObj,
+    title: row.title ?? null,
     appointmentType: row.appointment_type ?? 'call',
+    status: row.status ?? 'scheduled',
     startAt: row.start_at ?? null,
     endAt: row.end_at ?? null,
+    timezone: row.timezone ?? 'Europe/Zagreb',
+    notes: row.notes ?? null,
+    source: row.source ?? 'manual',
     reminderMinutesBefore: row.reminder_minutes_before ?? null,
     createdByUserId: row.created_by_user_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    // shared (already single-word)
-    lead: leadObj,
-    title: row.title ?? null,
-    status: row.status ?? 'scheduled',
-    timezone: row.timezone ?? 'Europe/Zagreb',
-    notes: row.notes ?? null,
-    source: row.source ?? 'manual',
   };
 }
 
@@ -101,7 +88,7 @@ async function update(companyId, id, patch) {
 }
 
 async function list(companyId, options = {}) {
-  const { from, to, status, appointmentType, source, leadId, limit = 100, offset = 0 } = options;
+  const { from, to, status, appointmentType, source, leadId, q, limit = 100, offset = 0 } = options;
   let sql = `SELECT ${SELECT_COLS} ${FROM_JOINED} WHERE a.company_id = $1`;
   const params = [companyId];
   let idx = 2;
@@ -111,6 +98,11 @@ async function list(companyId, options = {}) {
   if (appointmentType) { sql += ` AND a.appointment_type = $${idx++}`; params.push(appointmentType); }
   if (source && source !== 'all') { sql += ` AND a.source = $${idx++}`; params.push(source); }
   if (leadId) { sql += ` AND a.lead_id = $${idx++}`; params.push(leadId); }
+  if (q) {
+    sql += ` AND (a.title ILIKE $${idx} OR l.name ILIKE $${idx} OR l.channel ILIKE $${idx})`;
+    params.push(`%${q}%`);
+    idx++;
+  }
   sql += ` ORDER BY a.start_at ASC NULLS LAST LIMIT $${idx++} OFFSET $${idx++}`;
   params.push(Math.min(limit, 500), Math.max(offset, 0));
   const result = await pool.query(sql, params);
@@ -118,8 +110,8 @@ async function list(companyId, options = {}) {
 }
 
 async function count(companyId, options = {}) {
-  const { from, to, status, appointmentType, source, leadId } = options;
-  let sql = `SELECT COUNT(*)::int AS cnt FROM appointments a WHERE a.company_id = $1`;
+  const { from, to, status, appointmentType, source, leadId, q } = options;
+  let sql = `SELECT COUNT(*)::int AS cnt FROM appointments a LEFT JOIN leads l ON a.lead_id = l.id WHERE a.company_id = $1`;
   const params = [companyId];
   let idx = 2;
   if (from) { sql += ` AND a.start_at >= $${idx++}::timestamptz`; params.push(from); }
@@ -128,6 +120,11 @@ async function count(companyId, options = {}) {
   if (appointmentType) { sql += ` AND a.appointment_type = $${idx++}`; params.push(appointmentType); }
   if (source && source !== 'all') { sql += ` AND a.source = $${idx++}`; params.push(source); }
   if (leadId) { sql += ` AND a.lead_id = $${idx++}`; params.push(leadId); }
+  if (q) {
+    sql += ` AND (a.title ILIKE $${idx} OR l.name ILIKE $${idx} OR l.channel ILIKE $${idx})`;
+    params.push(`%${q}%`);
+    idx++;
+  }
   const result = await pool.query(sql, params);
   return result.rows[0]?.cnt ?? 0;
 }
@@ -156,4 +153,41 @@ async function cancel(companyId, id, cancellationNote = null) {
   return update(companyId, id, { status: 'cancelled', notes });
 }
 
-module.exports = { create, findById, update, list, count, upcoming, cancel };
+async function hardDelete(companyId, id) {
+  const result = await pool.query(
+    'DELETE FROM appointments WHERE id = $1 AND company_id = $2 RETURNING id',
+    [id, companyId]
+  );
+  return result.rowCount > 0;
+}
+
+async function findDueReminders() {
+  const result = await pool.query(
+    `SELECT a.id AS appointment_id, a.company_id, a.lead_id, a.title, a.appointment_type,
+            a.start_at, a.reminder_minutes_before,
+            l.name AS lead_name, l.channel AS lead_channel
+     FROM appointments a
+     LEFT JOIN leads l ON a.lead_id = l.id
+     WHERE a.status = 'scheduled'
+       AND a.reminder_minutes_before IS NOT NULL
+       AND a.reminder_minutes_before > 0
+       AND a.start_at > NOW()
+       AND a.start_at <= NOW() + make_interval(mins => a.reminder_minutes_before)
+       AND NOT EXISTS (
+         SELECT 1 FROM appointment_reminders_sent rs
+         WHERE rs.appointment_id = a.id AND rs.reminder_minutes_before = a.reminder_minutes_before
+       )`
+  );
+  return result.rows ?? [];
+}
+
+async function markReminderSent(appointmentId, reminderMinutesBefore) {
+  await pool.query(
+    `INSERT INTO appointment_reminders_sent (appointment_id, reminder_minutes_before)
+     VALUES ($1, $2)
+     ON CONFLICT (appointment_id, reminder_minutes_before) DO NOTHING`,
+    [appointmentId, reminderMinutesBefore]
+  );
+}
+
+module.exports = { create, findById, update, list, count, upcoming, cancel, hardDelete, findDueReminders, markReminderSent };

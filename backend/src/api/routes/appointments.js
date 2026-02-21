@@ -5,6 +5,8 @@ const { logLeadActivity } = require('../../../services/activityLogger');
 const {
   createAppointmentSchema,
   updateAppointmentSchema,
+  rescheduleSchema,
+  statusSchema,
   listAppointmentsSchema,
   upcomingSchema,
   cancelSchema,
@@ -26,26 +28,19 @@ function validationError(res, parsed, debugCtx) {
 function fmtTime(iso) {
   if (!iso) return '';
   try {
-    const d = new Date(iso);
-    return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   } catch { return String(iso); }
 }
 
 function logDbError(tag, err, extra = {}) {
-  console.error(`[appointments] ${tag}:`, {
-    message: err.message,
-    code: err.code,
-    detail: err.detail,
-    where: err.where,
-    ...extra,
-  });
+  console.error(`[appointments] ${tag}:`, { message: err.message, code: err.code, detail: err.detail, ...extra });
 }
 
-// POST /api/appointments
-router.post('/', async (req, res) => {
+async function createAppointmentHandler(req, res, overrideLeadId) {
   try {
-    const parsed = createAppointmentSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed, { route: 'POST /', bodyKeys: Object.keys(req.body || {}) });
+    const body = overrideLeadId ? { ...req.body, lead_id: overrideLeadId, leadId: overrideLeadId } : req.body;
+    const parsed = createAppointmentSchema.safeParse(body);
+    if (!parsed.success) return validationError(res, parsed, { route: 'POST create', bodyKeys: Object.keys(req.body || {}) });
 
     const { lead_id, title, appointment_type, status, start_at, end_at, timezone, notes, source, reminder_minutes_before } = parsed.data;
     const companyId = req.tenantId;
@@ -53,7 +48,7 @@ router.post('/', async (req, res) => {
     const lead = await leadRepository.findById(companyId, lead_id);
     if (!lead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or does not belong to your company');
 
-    const derivedTitle = title || `${(appointment_type || 'call').replace('_', ' ')} - ${lead.name || lead.channel || 'Lead'}`;
+    const derivedTitle = title || `${(appointment_type || 'call').replace(/_/g, ' ')} - ${lead.name || lead.channel || 'Lead'}`;
 
     const appointment = await appointmentRepository.create({
       companyId,
@@ -70,20 +65,15 @@ router.post('/', async (req, res) => {
       createdByUserId: req.user?.id ?? null,
     });
 
+    const actorType = req.user?.role === 'admin' ? 'admin' : 'user';
     logLeadActivity({
-      companyId,
-      leadId: lead_id,
-      eventType: 'appointment_created',
-      actorType: req.user?.role === 'admin' ? 'admin' : 'user',
-      actorUserId: req.user?.id,
-      metadata: { appointmentId: appointment.id, type: appointment_type, startAt: start_at },
+      companyId, leadId: lead_id, eventType: 'appointment_created', actorType, actorUserId: req.user?.id,
+      metadata: { appointmentId: appointment.id, type: appointment_type, message: `Appointment scheduled: ${derivedTitle} on ${fmtTime(start_at)}` },
     }).catch(() => {});
 
     const leadName = lead.name || lead.channel || 'Lead';
     notificationRepository.create(companyId, {
-      leadId: lead_id,
-      type: 'appointment',
-      title: 'Appointment scheduled',
+      leadId: lead_id, type: 'appointment', title: 'Appointment scheduled',
       body: `${derivedTitle} with ${leadName} on ${fmtTime(start_at)}`,
       url: `/inbox/${lead_id}`,
     }).catch(() => {});
@@ -93,7 +83,10 @@ router.post('/', async (req, res) => {
     logDbError('create', err);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create appointment');
   }
-});
+}
+
+// POST /api/appointments
+router.post('/', (req, res) => createAppointmentHandler(req, res, null));
 
 // GET /api/appointments
 router.get('/', async (req, res) => {
@@ -101,27 +94,23 @@ router.get('/', async (req, res) => {
     const parsed = listAppointmentsSchema.safeParse(req.query);
     if (!parsed.success) return validationError(res, parsed, { route: 'GET /', queryKeys: Object.keys(req.query || {}) });
 
-    const { from, to, status, appointment_type, source, lead_id, limit, offset } = parsed.data;
+    const { from, to, status, appointment_type, source, lead_id, q, limit, offset } = parsed.data;
     const companyId = req.tenantId;
-    const opts = { from, to, status, appointmentType: appointment_type, source, leadId: lead_id, limit, offset };
+    const opts = { from, to, status, appointmentType: appointment_type, source, leadId: lead_id, q, limit, offset };
 
     const [items, total] = await Promise.all([
       appointmentRepository.list(companyId, opts),
       appointmentRepository.count(companyId, opts),
     ]);
 
-    res.json({
-      items,
-      total,
-      range: { from: from ?? null, to: to ?? null },
-    });
+    res.json({ items, total, range: { from: from ?? null, to: to ?? null } });
   } catch (err) {
     logDbError('list', err, { query: req.query, tenantId: req.tenantId });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list appointments');
   }
 });
 
-// GET /api/appointments/upcoming  (must be before /:id)
+// GET /api/appointments/upcoming
 router.get('/upcoming', async (req, res) => {
   try {
     const parsed = upcomingSchema.safeParse(req.query);
@@ -131,7 +120,6 @@ router.get('/upcoming', async (req, res) => {
       limit: parsed.data.limit,
       withinDays: parsed.data.within_days,
     });
-
     res.json({ items });
   } catch (err) {
     logDbError('upcoming', err, { tenantId: req.tenantId });
@@ -162,8 +150,8 @@ router.patch('/:id', async (req, res) => {
     if (!existing) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
 
     if ((parsed.data.start_at || parsed.data.end_at) && !(parsed.data.start_at && parsed.data.end_at)) {
-      const effectiveStart = new Date(parsed.data.start_at || existing.start_at);
-      const effectiveEnd = new Date(parsed.data.end_at || existing.end_at);
+      const effectiveStart = new Date(parsed.data.start_at || existing.startAt);
+      const effectiveEnd = new Date(parsed.data.end_at || existing.endAt);
       if (effectiveEnd <= effectiveStart) {
         return errorJson(res, 400, 'VALIDATION_ERROR', 'end_at must be after start_at');
       }
@@ -174,23 +162,17 @@ router.patch('/:id', async (req, res) => {
 
     const eventType = parsed.data.status === 'cancelled' ? 'appointment_cancelled' : 'appointment_updated';
     logLeadActivity({
-      companyId,
-      leadId: existing.lead_id,
-      eventType,
-      actorType: req.user?.role === 'admin' ? 'admin' : 'user',
-      actorUserId: req.user?.id,
-      metadata: { appointmentId: updated.id, changes: Object.keys(parsed.data) },
+      companyId, leadId: existing.leadId, eventType,
+      actorType: req.user?.role === 'admin' ? 'admin' : 'user', actorUserId: req.user?.id,
+      metadata: { appointmentId: updated.id, changes: Object.keys(parsed.data), message: `Appointment updated` },
     }).catch(() => {});
 
     if (parsed.data.status === 'cancelled' || parsed.data.start_at) {
       const notifTitle = parsed.data.status === 'cancelled' ? 'Appointment cancelled' : 'Appointment rescheduled';
-      const leadName = updated.lead?.name || 'Lead';
       notificationRepository.create(companyId, {
-        leadId: existing.lead_id,
-        type: 'appointment',
-        title: notifTitle,
-        body: `${updated.title} with ${leadName} – ${fmtTime(updated.start_at)}`,
-        url: `/inbox/${existing.lead_id}`,
+        leadId: existing.leadId, type: 'appointment', title: notifTitle,
+        body: `${updated.title} with ${updated.lead?.name || 'Lead'} – ${fmtTime(updated.startAt)}`,
+        url: `/inbox/${existing.leadId}`,
       }).catch(() => {});
     }
 
@@ -198,6 +180,85 @@ router.patch('/:id', async (req, res) => {
   } catch (err) {
     logDbError('update', err, { id: req.params.id });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update appointment');
+  }
+});
+
+// POST /api/appointments/:id/reschedule
+router.post('/:id/reschedule', async (req, res) => {
+  try {
+    const parsed = rescheduleSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed, { route: 'POST /:id/reschedule' });
+
+    const companyId = req.tenantId;
+    const existing = await appointmentRepository.findById(companyId, req.params.id);
+    if (!existing) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    const patch = { start_at: parsed.data.start_at, end_at: parsed.data.end_at, status: 'scheduled' };
+    if (parsed.data.timezone) patch.timezone = parsed.data.timezone;
+    if (parsed.data.notes) {
+      patch.notes = [existing.notes, `Rescheduled: ${parsed.data.notes}`].filter(Boolean).join('\n');
+    }
+
+    const updated = await appointmentRepository.update(companyId, req.params.id, patch);
+    if (!updated) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    logLeadActivity({
+      companyId, leadId: existing.leadId, eventType: 'appointment_rescheduled',
+      actorType: req.user?.role === 'admin' ? 'admin' : 'user', actorUserId: req.user?.id,
+      metadata: { appointmentId: updated.id, message: `Appointment rescheduled to ${fmtTime(updated.startAt)}` },
+    }).catch(() => {});
+
+    notificationRepository.create(companyId, {
+      leadId: existing.leadId, type: 'appointment', title: 'Appointment rescheduled',
+      body: `${updated.title} with ${updated.lead?.name || 'Lead'} rescheduled to ${fmtTime(updated.startAt)}`,
+      url: `/inbox/${existing.leadId}`,
+    }).catch(() => {});
+
+    res.json(updated);
+  } catch (err) {
+    logDbError('reschedule', err, { id: req.params.id });
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to reschedule appointment');
+  }
+});
+
+// POST /api/appointments/:id/status
+router.post('/:id/status', async (req, res) => {
+  try {
+    const parsed = statusSchema.safeParse(req.body);
+    if (!parsed.success) return validationError(res, parsed, { route: 'POST /:id/status' });
+
+    const companyId = req.tenantId;
+    const existing = await appointmentRepository.findById(companyId, req.params.id);
+    if (!existing) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    const patch = { status: parsed.data.status };
+    if (parsed.data.notes) {
+      patch.notes = [existing.notes, `Status → ${parsed.data.status}: ${parsed.data.notes}`].filter(Boolean).join('\n');
+    }
+
+    const updated = await appointmentRepository.update(companyId, req.params.id, patch);
+    if (!updated) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    const eventMap = { cancelled: 'appointment_cancelled', completed: 'appointment_completed', no_show: 'appointment_no_show', scheduled: 'appointment_rescheduled' };
+    logLeadActivity({
+      companyId, leadId: existing.leadId, eventType: eventMap[parsed.data.status] || 'appointment_updated',
+      actorType: req.user?.role === 'admin' ? 'admin' : 'user', actorUserId: req.user?.id,
+      metadata: { appointmentId: updated.id, status: parsed.data.status, message: `Appointment marked ${parsed.data.status}` },
+    }).catch(() => {});
+
+    if (parsed.data.status !== existing.status) {
+      notificationRepository.create(companyId, {
+        leadId: existing.leadId, type: 'appointment',
+        title: `Appointment ${parsed.data.status}`,
+        body: `${updated.title} with ${updated.lead?.name || 'Lead'} – ${parsed.data.status}`,
+        url: `/inbox/${existing.leadId}`,
+      }).catch(() => {});
+    }
+
+    res.json(updated);
+  } catch (err) {
+    logDbError('status', err, { id: req.params.id });
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update appointment status');
   }
 });
 
@@ -216,21 +277,15 @@ router.post('/:id/cancel', async (req, res) => {
     if (!cancelled) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
 
     logLeadActivity({
-      companyId,
-      leadId: existing.lead_id,
-      eventType: 'appointment_cancelled',
-      actorType: req.user?.role === 'admin' ? 'admin' : 'user',
-      actorUserId: req.user?.id,
-      metadata: { appointmentId: cancelled.id, note: parsed.data.note },
+      companyId, leadId: existing.leadId, eventType: 'appointment_cancelled',
+      actorType: req.user?.role === 'admin' ? 'admin' : 'user', actorUserId: req.user?.id,
+      metadata: { appointmentId: cancelled.id, note: parsed.data.note, message: `Appointment cancelled` },
     }).catch(() => {});
 
-    const leadName = cancelled.lead?.name || 'Lead';
     notificationRepository.create(companyId, {
-      leadId: existing.lead_id,
-      type: 'appointment',
-      title: 'Appointment cancelled',
-      body: `${cancelled.title} with ${leadName} – ${fmtTime(cancelled.start_at)}`,
-      url: `/inbox/${existing.lead_id}`,
+      leadId: existing.leadId, type: 'appointment', title: 'Appointment cancelled',
+      body: `${cancelled.title} with ${cancelled.lead?.name || 'Lead'} – cancelled`,
+      url: `/inbox/${existing.leadId}`,
     }).catch(() => {});
 
     res.json(cancelled);
@@ -240,4 +295,26 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
+// DELETE /api/appointments/:id
+router.delete('/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const existing = await appointmentRepository.findById(companyId, req.params.id);
+    if (!existing) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    logLeadActivity({
+      companyId, leadId: existing.leadId, eventType: 'appointment_deleted',
+      actorType: req.user?.role === 'admin' ? 'admin' : 'user', actorUserId: req.user?.id,
+      metadata: { appointmentId: existing.id, title: existing.title, message: `Appointment deleted: ${existing.title}` },
+    }).catch(() => {});
+
+    await appointmentRepository.hardDelete(companyId, req.params.id);
+    res.json({ success: true, id: req.params.id });
+  } catch (err) {
+    logDbError('delete', err, { id: req.params.id });
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete appointment');
+  }
+});
+
 module.exports = router;
+module.exports.createAppointmentHandler = createAppointmentHandler;
