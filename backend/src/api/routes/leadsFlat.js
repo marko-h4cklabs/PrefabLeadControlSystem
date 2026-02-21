@@ -6,6 +6,9 @@ const {
   companyLeadStatusesRepository,
   conversationRepository,
   chatAttachmentRepository,
+  leadActivitiesRepository,
+  leadNotesRepository,
+  leadTasksRepository,
 } = require('../../../db/repositories');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
@@ -32,6 +35,15 @@ const {
   patchNameBodySchema,
   patchStatusBodySchema,
 } = require('../validators/leadSchemas');
+const {
+  crmActivityQuerySchema,
+  crmNotesQuerySchema,
+  crmTasksQuerySchema,
+  createNoteBodySchema,
+  updateNoteBodySchema,
+  createTaskBodySchema,
+  updateTaskBodySchema,
+} = require('../validators/crmSchemas');
 
 function toLeadResponse(lead) {
   const nameVal = lead.name ?? lead.external_id ?? null;
@@ -366,6 +378,175 @@ router.patch('/:id', async (req, res) => {
     }
     res.json(toLeadResponse(lead));
   } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// --- CRM routes (Activity / Notes / Tasks) - same path style as frontend: /api/leads/:id/activity etc. ---
+function toCrmActivityItem(row) {
+  return {
+    id: row.id,
+    event_type: row.event_type,
+    actor_type: row.actor_type,
+    actor_user_id: row.actor_user_id,
+    source: row.source,
+    channel: row.channel,
+    metadata: row.metadata ?? {},
+    created_at: row.created_at,
+  };
+}
+function toCrmNoteItem(note) {
+  return { id: note.id, body: note.body, created_by_user_id: note.created_by_user_id, updated_by_user_id: note.updated_by_user_id, created_at: note.created_at, updated_at: note.updated_at };
+}
+function toCrmTaskItem(task) {
+  return { id: task.id, title: task.title, description: task.description, status: task.status, due_at: task.due_at, assigned_user_id: task.assigned_user_id, created_by_user_id: task.created_by_user_id, completed_at: task.completed_at, created_at: task.created_at, updated_at: task.updated_at };
+}
+async function ensureLeadForCrm(req, res, next) {
+  const lead = await leadRepository.findById(req.tenantId, req.params.id);
+  if (!lead) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
+  req.lead = lead;
+  next();
+}
+
+router.get('/:id/activity', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = crmActivityQuerySchema.safeParse(req.query);
+    const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
+    const items = await leadActivitiesRepository.listByLead(req.tenantId, req.params.id, { limit, offset });
+    const total = await leadActivitiesRepository.countByLead(req.tenantId, req.params.id);
+    res.json({ items: (items ?? []).map(toCrmActivityItem), total: total ?? 0 });
+  } catch (err) {
+    if (err.code === '42P01') return res.json({ items: [], total: 0 });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/:id/notes', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = crmNotesQuerySchema.safeParse(req.query);
+    const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
+    const items = await leadNotesRepository.listByLead(req.tenantId, req.params.id, { limit, offset });
+    const total = await leadNotesRepository.countByLead(req.tenantId, req.params.id);
+    res.json({ items: (items ?? []).map(toCrmNoteItem), total: total ?? 0 });
+  } catch (err) {
+    if (err.code === '42P01') return res.json({ items: [], total: 0 });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/:id/tasks', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = crmTasksQuerySchema.safeParse(req.query);
+    const { limit, offset, status } = parsed.success ? parsed.data : { limit: 50, offset: 0, status: undefined };
+    const items = await leadTasksRepository.listByLead(req.tenantId, req.params.id, { limit, offset, status });
+    const total = await leadTasksRepository.countByLead(req.tenantId, req.params.id, status ? { status } : {});
+    res.json({ items: (items ?? []).map(toCrmTaskItem), total: total ?? 0 });
+  } catch (err) {
+    if (err.code === '42P01') return res.json({ items: [], total: 0 });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/:id/notes', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = createNoteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.formErrors?.join?.(' ') || 'Validation failed', details: err.fieldErrors } });
+    }
+    const note = await leadNotesRepository.create({ companyId: req.tenantId, leadId: req.params.id, body: parsed.data.body, createdByUserId: req.user?.id });
+    logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'note_created', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    res.status(201).json(toCrmNoteItem(note));
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.patch('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = updateNoteBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.formErrors?.join?.(' ') || 'Validation failed', details: err.fieldErrors } });
+    }
+    const note = await leadNotesRepository.update({ companyId: req.tenantId, leadId: req.params.id, noteId: req.params.noteId, body: parsed.data.body, updatedByUserId: req.user?.id });
+    if (!note) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
+    logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'note_updated', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    res.json(toCrmNoteItem(note));
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.delete('/:id/notes/:noteId', ensureLeadForCrm, async (req, res) => {
+  try {
+    const removed = await leadNotesRepository.remove({ companyId: req.tenantId, leadId: req.params.id, noteId: req.params.noteId });
+    if (!removed) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Note not found' } });
+    logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'note_deleted', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    res.status(204).send();
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/:id/tasks', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = createTaskBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.formErrors?.join?.(' ') || 'Validation failed', details: err.fieldErrors } });
+    }
+    const { title, description, due_at, assigned_user_id } = parsed.data;
+    const task = await leadTasksRepository.create({ companyId: req.tenantId, leadId: req.params.id, title, description: description ?? null, dueAt: due_at ?? null, assignedUserId: assigned_user_id ?? null, createdByUserId: req.user?.id });
+    logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'task_created', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    res.status(201).json(toCrmTaskItem(task));
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.patch('/:id/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = updateTaskBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      const err = parsed.error.flatten();
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.formErrors?.join?.(' ') || 'Validation failed', details: err.fieldErrors } });
+    }
+    const patch = {};
+    if (parsed.data.title !== undefined) patch.title = parsed.data.title;
+    if (parsed.data.description !== undefined) patch.description = parsed.data.description;
+    if (parsed.data.status !== undefined) patch.status = parsed.data.status;
+    if (parsed.data.due_at !== undefined) patch.due_at = parsed.data.due_at;
+    if (parsed.data.assigned_user_id !== undefined) patch.assigned_user_id = parsed.data.assigned_user_id;
+    if (Object.keys(patch).length === 0) return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'At least one field to update is required' } });
+    const prevTask = await leadTasksRepository.findById(req.tenantId, req.params.id, req.params.taskId);
+    const task = await leadTasksRepository.update({ companyId: req.tenantId, leadId: req.params.id, taskId: req.params.taskId, patch });
+    if (!task) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
+    const wasNotDone = prevTask && prevTask.status !== 'done';
+    if (patch.status === 'done' && wasNotDone) {
+      logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'task_completed', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    } else {
+      logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'task_updated', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    }
+    res.json(toCrmTaskItem(task));
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.delete('/:id/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
+  try {
+    const removed = await leadTasksRepository.remove({ companyId: req.tenantId, leadId: req.params.id, taskId: req.params.taskId });
+    if (!removed) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Task not found' } });
+    logLeadActivity({ companyId: req.tenantId, leadId: req.params.id, eventType: 'task_deleted', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});
+    res.status(204).send();
+  } catch (err) {
+    if (err.code === '42P01') return res.status(500).json({ error: { code: 'CRM_TABLES_MISSING', message: 'CRM tables not yet migrated' } });
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
