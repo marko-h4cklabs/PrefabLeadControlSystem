@@ -19,6 +19,7 @@ const notificationSettingsRepository = require('./notificationSettingsRepository
 const leadActivitiesRepository = require('./leadActivitiesRepository');
 const leadNotesRepository = require('./leadNotesRepository');
 const leadTasksRepository = require('./leadTasksRepository');
+const appointmentRepository = require('./appointmentRepository');
 
 module.exports = {
   companyRepository,
@@ -42,4 +43,5 @@ module.exports = {
   leadActivitiesRepository,
   leadNotesRepository,
   leadTasksRepository,
+  appointmentRepository,
 };

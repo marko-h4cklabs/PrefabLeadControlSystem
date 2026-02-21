@@ -14,6 +14,7 @@ const notificationsRouter = require('./api/routes/notifications');
 const settingsRouter = require('./api/routes/settings');
 const crmRouter = require('./api/routes/crmIndex');
 const analyticsRouter = require('./api/routes/analytics');
+const appointmentsRouter = require('./api/routes/appointments');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -113,6 +114,7 @@ app.use('/api/notifications', authMiddleware, tenantMiddleware, apiLimiter, noti
 app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsRouter);
 app.use('/api/crm', authMiddleware, tenantMiddleware, apiLimiter, crmRouter);
 app.use('/api/analytics', authMiddleware, tenantMiddleware, apiLimiter, analyticsRouter);
+app.use('/api/appointments', authMiddleware, tenantMiddleware, apiLimiter, appointmentsRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
