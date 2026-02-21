@@ -80,7 +80,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-const { chatAttachmentRepository } = require('./db/repositories');
+const { chatAttachmentRepository } = require('../db/repositories');
 app.get('/public/attachments/:id/:token', async (req, res) => {
   try {
     const { id, token } = req.params;
