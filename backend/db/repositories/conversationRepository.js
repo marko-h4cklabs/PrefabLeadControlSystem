@@ -75,12 +75,24 @@ async function appendMessage(leadId, role, content) {
 }
 
 async function updateParsedFields(leadId, parsedFields) {
+  const existing = await pool.query(
+    'SELECT parsed_fields FROM conversations WHERE lead_id = $1',
+    [leadId]
+  );
+  let final = parsedFields ?? {};
+  if (existing.rows[0]) {
+    const current = existing.rows[0].parsed_fields ?? {};
+    const currentPictures = current.pictures;
+    if (Array.isArray(currentPictures) && currentPictures.length > 0 && !Array.isArray(final.pictures)) {
+      final = { ...final, pictures: currentPictures };
+    }
+  }
   const result = await pool.query(
     `UPDATE conversations
      SET parsed_fields = $1::jsonb, last_updated = NOW()
      WHERE lead_id = $2
      RETURNING *`,
-    [JSON.stringify(parsedFields), leadId]
+    [JSON.stringify(final), leadId]
   );
   return toPlainConversation(result.rows[0]);
 }

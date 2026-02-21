@@ -4,7 +4,7 @@ const { dimensionsToDisplayString } = require('./dimensionsFormat');
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
 function buildExtractionPrompt(quoteFields) {
-  const fields = quoteFields || [];
+  const fields = (quoteFields || []).filter((f) => f?.type !== 'pictures');
   const fieldNames = fields.map((f) => f.name).filter(Boolean);
   const fieldsDesc = fields
     .map((f) => {
@@ -29,7 +29,7 @@ Rules:
 - ONLY output values for the enabled fields above. Do NOT extract any field not in the list.
 - For type "number": extract numeric value. Use exact field names.
 - For type "text": extract the value. For email_address validate email format; for phone_number validate phone format.
-- For type "boolean" (e.g. pictures): extract yes/no or true/false. Store as "true" or "false" string.
+- For type "boolean": extract yes/no or true/false. Store as "true" or "false" string.
 - For type "select_multi": if options list exists, value must be from that list or a valid subset. For time_window, object_type, ground_condition, utility_connections, completion_level: extract as string or list.
 - For type "composite_dimensions": extract length, width, height (as numbers) and unit. Output as object {"length":N,"width":N,"height":N,"unit":"m"} - backend will normalize to string.
 - Include confidence 0-1 for each extracted value.
@@ -81,7 +81,7 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
     const dimensionsConfig = dimensionsField?.config ?? {};
 
     const normalized = extracted
-      .filter((e) => e?.name != null && e?.value != null)
+      .filter((e) => e?.name != null && e?.value != null && String(e.name).toLowerCase() !== 'pictures')
       .map((e) => {
         const name = String(e.name ?? '').trim();
         const rawType = (e.type ?? 'text').toLowerCase();
@@ -103,7 +103,7 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
         }
         return { name, value, type, units: e.units ?? null, confidence: typeof e.confidence === 'number' ? e.confidence : 0.9 };
       })
-      .filter((e) => e.name !== '' && allowedNames.has(e.name.toLowerCase()));
+      .filter((e) => e.name !== '' && e.name.toLowerCase() !== 'pictures' && allowedNames.has(e.name.toLowerCase()));
     return {
       extracted: normalized,
       missing_required: [],

@@ -49,12 +49,18 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     .filter(Boolean);
 }
 
+function filterOutPicturesFromUpdates(updates) {
+  if (!updates || typeof updates !== 'object') return updates ?? {};
+  return Object.fromEntries(Object.entries(updates).filter(([k]) => k.toLowerCase() !== 'pictures'));
+}
+
 function mergeParsedFields(current, updates, allowedFieldNames, quoteFields = []) {
   const merged = { ...current };
   const allowed = allowedFieldNames ? new Set([...allowedFieldNames].map((s) => String(s).toLowerCase())) : null;
   const dimensionsField = (quoteFields ?? []).find((f) => f.name === 'dimensions');
   const dimensionsConfig = dimensionsField?.config ?? {};
   for (const [key, value] of Object.entries(updates ?? {})) {
+    if (key.toLowerCase() === 'pictures') continue; // Pictures: attachments-only, never overwrite from Claude
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) continue;
     if (allowed && !allowed.has(String(key).toLowerCase())) continue;
     let finalValue = value;
@@ -135,7 +141,7 @@ async function generateAiReply(companyId, leadId) {
   const { extracted } = await extractFieldsWithClaude(userText, orderedQuoteFields);
   const extractedUpdates = {};
   for (const e of extracted ?? []) {
-    if (e?.name && e?.value != null && String(e.value).trim() !== '') {
+    if (e?.name && e.name.toLowerCase() !== 'pictures' && e?.value != null && String(e.value).trim() !== '') {
       extractedUpdates[e.name] = e.type === 'number' ? Number(e.value) : String(e.value).trim();
     }
   }
@@ -174,14 +180,16 @@ async function generateAiReply(companyId, leadId) {
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames, orderedQuoteFields);
+    const fieldUpdatesNoPictures = filterOutPicturesFromUpdates(parsed.field_updates);
+    parsedFields = mergeParsedFields(parsedFields, fieldUpdatesNoPictures, allowedFieldNames, orderedQuoteFields);
   } else {
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
     const userPrompt = buildUserPrompt(conversation.messages);
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames, orderedQuoteFields);
+    const fieldUpdatesNoPictures = filterOutPicturesFromUpdates(parsed.field_updates);
+    parsedFields = mergeParsedFields(parsedFields, fieldUpdatesNoPictures, allowedFieldNames, orderedQuoteFields);
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {

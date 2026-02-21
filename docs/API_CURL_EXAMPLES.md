@@ -16,6 +16,7 @@ psql $DATABASE_URL -f backend/db/migrations/018_leads_add_source.sql
 psql $DATABASE_URL -f backend/db/migrations/019_quote_presets.sql
 psql $DATABASE_URL -f backend/db/migrations/021_quote_presets_groups_and_new_fields.sql
 psql $DATABASE_URL -f backend/db/migrations/022_chat_attachments.sql
+psql $DATABASE_URL -f backend/db/migrations/023_pictures_preset_type.sql
 ```
 
 ## Company Info

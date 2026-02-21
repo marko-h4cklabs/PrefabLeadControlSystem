@@ -120,7 +120,7 @@ function getPresetType(name) {
     phone_number: 'text',
     full_name: 'text',
     additional_notes: 'text',
-    pictures: 'boolean',
+    pictures: 'pictures',
     object_type: 'select_multi',
     doors: 'select_multi',
     windows: 'select_multi',
