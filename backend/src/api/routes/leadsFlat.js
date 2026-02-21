@@ -487,7 +487,11 @@ router.post('/:leadId/notes', ensureLeadForCrm, async (req, res) => {
     const parsed = createNoteBodySchema.safeParse(req.body);
     if (!parsed.success) {
       const err = parsed.error.flatten();
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.formErrors?.join?.(' ') || 'Validation failed', details: err.fieldErrors } });
+      const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Validation failed';
+      if (process.env.NODE_ENV !== 'production') {
+        console.debug('[notes create] validation failed', { leadId, bodyKeys: Object.keys(req.body || {}) });
+      }
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg, details: err.fieldErrors } });
     }
     const note = await leadNotesRepository.create({ companyId: req.tenantId, leadId, body: parsed.data.body, createdByUserId: req.user?.id });
     logLeadActivity({ companyId: req.tenantId, leadId, eventType: 'note_created', actorType: 'user', actorUserId: req.user?.id, metadata: {} }).catch(() => {});

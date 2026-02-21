@@ -24,21 +24,26 @@ const crmTasksQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-const createNoteBodySchema = z.object({
-  body: z
-    .string()
-    .trim()
-    .min(1, 'body is required')
-    .max(5000, 'body must be at most 5000 characters'),
-});
+// Accept body, text, or content (frontend may use different keys) - normalize to body
+const createNoteBodySchema = z
+  .object({
+    body: z.string().optional(),
+    text: z.string().optional(),
+    content: z.string().optional(),
+  })
+  .transform((o) => ({ body: String(o?.body ?? o?.text ?? o?.content ?? '').trim() }))
+  .refine((o) => o.body.length >= 1, { message: 'Note content is required', path: ['body'] })
+  .refine((o) => o.body.length <= 5000, { message: 'Note must be at most 5000 characters', path: ['body'] });
 
-const updateNoteBodySchema = z.object({
-  body: z
-    .string()
-    .trim()
-    .min(1, 'body is required')
-    .max(5000, 'body must be at most 5000 characters'),
-});
+const updateNoteBodySchema = z
+  .object({
+    body: z.string().optional(),
+    text: z.string().optional(),
+    content: z.string().optional(),
+  })
+  .transform((o) => ({ body: String(o?.body ?? o?.text ?? o?.content ?? '').trim() }))
+  .refine((o) => o.body.length >= 1, { message: 'Note content is required', path: ['body'] })
+  .refine((o) => o.body.length <= 5000, { message: 'Note must be at most 5000 characters', path: ['body'] });
 
 const createTaskBodySchema = z.object({
   title: z
