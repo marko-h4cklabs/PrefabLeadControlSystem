@@ -595,8 +595,40 @@ router.delete('/:leadId/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
   }
 });
 
-// POST /:leadId/appointments — create appointment from lead detail
+// ---- Lead Appointments ----
 const { createAppointmentHandler } = require('./appointments');
+const { appointmentRepository } = require('../../../db/repositories');
+const { listAppointmentsSchema } = require('../validators/appointmentSchemas');
+
+router.get('/:leadId/appointments', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = listAppointmentsSchema.safeParse(req.query);
+    if (!parsed.success) {
+      const flat = parsed.error.flatten();
+      const fieldMsgs = Object.entries(flat.fieldErrors ?? {})
+        .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
+        .filter(Boolean);
+      const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
+    }
+
+    const { from, to, status, appointment_type, limit, offset } = parsed.data;
+    const companyId = req.tenantId;
+    const leadId = req.crmLeadId;
+    const opts = { from, to, status, appointmentType: appointment_type, leadId, limit, offset };
+
+    const [items, total] = await Promise.all([
+      appointmentRepository.list(companyId, opts),
+      appointmentRepository.count(companyId, opts),
+    ]);
+
+    res.json({ items, total, range: { from: from ?? null, to: to ?? null } });
+  } catch (err) {
+    console.error('[leads/:leadId/appointments] list error:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list lead appointments');
+  }
+});
+
 router.post('/:leadId/appointments', ensureLeadForCrm, (req, res) => {
   return createAppointmentHandler(req, res, req.crmLeadId);
 });

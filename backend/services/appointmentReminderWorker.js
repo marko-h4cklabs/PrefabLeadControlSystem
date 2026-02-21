@@ -63,4 +63,39 @@ function stop() {
   }
 }
 
-module.exports = { start, stop };
+async function runOnce() {
+  if (running) return 0;
+  running = true;
+  let count = 0;
+  try {
+    const due = await appointmentRepository.findDueReminders();
+    for (const row of due) {
+      try {
+        const leadName = row.lead_name || row.lead_channel || 'Lead';
+        const channel = row.lead_channel ? ` (${row.lead_channel})` : '';
+        const typeLabel = (row.appointment_type || 'call').replace(/_/g, ' ');
+        const body = `Upcoming ${typeLabel} in ${fmtMinutes(row.reminder_minutes_before)} — ${leadName}${channel}`;
+
+        await notificationRepository.create(row.company_id, {
+          leadId: row.lead_id,
+          type: 'appointment_reminder',
+          title: 'Appointment reminder',
+          body,
+          url: `/inbox/${row.lead_id}`,
+        });
+
+        await appointmentRepository.markReminderSent(row.appointment_id, row.reminder_minutes_before);
+        count++;
+      } catch (err) {
+        console.error('[reminderWorker] runOnce single:', { appointmentId: row.appointment_id, error: err.message });
+      }
+    }
+  } catch (err) {
+    console.error('[reminderWorker] runOnce error:', err.message);
+  } finally {
+    running = false;
+  }
+  return count;
+}
+
+module.exports = { start, stop, runOnce };

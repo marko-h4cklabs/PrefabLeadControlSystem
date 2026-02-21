@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { notificationSettingsRepository } = require('../../../db/repositories');
+const { notificationSettingsRepository, schedulingSettingsRepository } = require('../../../db/repositories');
 const { requireRole } = require('../middleware/auth');
 const { errorJson } = require('../middleware/errors');
+const { schedulingSettingsSchema } = require('../validators/schedulingSettingsSchema');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -74,6 +75,48 @@ router.put('/notifications', requireRole('owner', 'admin'), async (req, res) => 
     res.json(saved);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---- Scheduling settings ----
+
+router.get('/scheduling', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const settings = await schedulingSettingsRepository.get(companyId);
+    res.json(settings);
+  } catch (err) {
+    console.error('[settings/scheduling] GET error:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load scheduling settings');
+  }
+});
+
+router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const parsed = schedulingSettingsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      const flat = parsed.error.flatten();
+      const fieldMsgs = Object.entries(flat.fieldErrors ?? {})
+        .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
+        .filter(Boolean);
+      const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: msg, fields: flat.fieldErrors },
+      });
+    }
+
+    const current = await schedulingSettingsRepository.get(companyId);
+    const merged = { ...current };
+    for (const [key, val] of Object.entries(parsed.data)) {
+      if (val !== undefined) merged[key] = val;
+    }
+
+    const saved = await schedulingSettingsRepository.upsert(companyId, merged);
+    res.json(saved);
+  } catch (err) {
+    console.error('[settings/scheduling] PUT error:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to save scheduling settings');
   }
 });
 

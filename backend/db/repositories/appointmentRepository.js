@@ -25,19 +25,29 @@ function toDto(row) {
   } : null;
   return {
     id: row.id,
+    company_id: row.company_id,
+    companyId: row.company_id,
+    lead_id: row.lead_id,
     leadId: row.lead_id,
     lead: leadObj,
     title: row.title ?? null,
+    appointment_type: row.appointment_type ?? 'call',
     appointmentType: row.appointment_type ?? 'call',
     status: row.status ?? 'scheduled',
+    start_at: row.start_at ?? null,
     startAt: row.start_at ?? null,
+    end_at: row.end_at ?? null,
     endAt: row.end_at ?? null,
     timezone: row.timezone ?? 'Europe/Zagreb',
     notes: row.notes ?? null,
     source: row.source ?? 'manual',
+    reminder_minutes_before: row.reminder_minutes_before ?? null,
     reminderMinutesBefore: row.reminder_minutes_before ?? null,
+    created_by_user_id: row.created_by_user_id ?? null,
     createdByUserId: row.created_by_user_id ?? null,
+    created_at: row.created_at,
     createdAt: row.created_at,
+    updated_at: row.updated_at,
     updatedAt: row.updated_at,
   };
 }
@@ -50,8 +60,8 @@ async function create(data) {
   } = data;
   const result = await pool.query(
     `INSERT INTO appointments
-       (company_id, lead_id, title, appointment_type, status, start_at, end_at, timezone, notes, source, reminder_minutes_before, created_by_user_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       (company_id, lead_id, title, appointment_type, status, start_at, end_at, scheduled_time, timezone, notes, source, reminder_minutes_before, created_by_user_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$8,$9,$10,$11,$12)
      RETURNING *`,
     [companyId, leadId, title, appointmentType, status, startAt, endAt, timezone, notes, source, reminderMinutesBefore, createdByUserId]
   );
@@ -76,6 +86,10 @@ async function update(companyId, id, patch) {
       fields.push(`${key} = $${idx++}`);
       values.push(patch[key]);
     }
+  }
+  if (patch.start_at !== undefined) {
+    fields.push(`scheduled_time = $${idx++}`);
+    values.push(patch.start_at);
   }
   if (fields.length === 0) return findById(companyId, id);
   fields.push('updated_at = NOW()');

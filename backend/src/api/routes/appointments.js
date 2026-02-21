@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { appointmentRepository, leadRepository, notificationRepository } = require('../../../db/repositories');
 const { logLeadActivity } = require('../../../services/activityLogger');
+const { getAvailability } = require('../../../services/availabilityService');
+const reminderWorker = require('../../../services/appointmentReminderWorker');
 const {
   createAppointmentSchema,
   updateAppointmentSchema,
@@ -110,7 +112,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/appointments/upcoming
+// Static sub-routes BEFORE /:id
 router.get('/upcoming', async (req, res) => {
   try {
     const parsed = upcomingSchema.safeParse(req.query);
@@ -127,7 +129,36 @@ router.get('/upcoming', async (req, res) => {
   }
 });
 
-// GET /api/appointments/:id
+router.get('/availability', async (req, res) => {
+  try {
+    const from = req.query.from || req.query.fromDate;
+    const to = req.query.to || req.query.toDate;
+    const appointmentType = req.query.type || req.query.appointmentType || req.query.appointment_type;
+    const companyId = req.tenantId;
+
+    const result = await getAvailability(companyId, {
+      from: from || undefined,
+      to: to || undefined,
+      appointmentType: appointmentType || undefined,
+    });
+    res.json(result);
+  } catch (err) {
+    logDbError('availability', err, { tenantId: req.tenantId, query: req.query });
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to compute availability');
+  }
+});
+
+router.post('/reminders/run', async (req, res) => {
+  try {
+    const count = await reminderWorker.runOnce();
+    res.json({ success: true, remindersProcessed: count ?? 0 });
+  } catch (err) {
+    logDbError('reminders/run', err);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to run reminders');
+  }
+});
+
+// Dynamic /:id routes AFTER static routes
 router.get('/:id', async (req, res) => {
   try {
     const appointment = await appointmentRepository.findById(req.tenantId, req.params.id);
@@ -139,7 +170,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// PATCH /api/appointments/:id
 router.patch('/:id', async (req, res) => {
   try {
     const parsed = updateAppointmentSchema.safeParse(req.body);
@@ -183,7 +213,6 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// POST /api/appointments/:id/reschedule
 router.post('/:id/reschedule', async (req, res) => {
   try {
     const parsed = rescheduleSchema.safeParse(req.body);
@@ -221,7 +250,6 @@ router.post('/:id/reschedule', async (req, res) => {
   }
 });
 
-// POST /api/appointments/:id/status
 router.post('/:id/status', async (req, res) => {
   try {
     const parsed = statusSchema.safeParse(req.body);
@@ -262,7 +290,6 @@ router.post('/:id/status', async (req, res) => {
   }
 });
 
-// POST /api/appointments/:id/cancel
 router.post('/:id/cancel', async (req, res) => {
   try {
     const parsed = cancelSchema.safeParse(req.body || {});
@@ -295,7 +322,6 @@ router.post('/:id/cancel', async (req, res) => {
   }
 });
 
-// DELETE /api/appointments/:id
 router.delete('/:id', async (req, res) => {
   try {
     const companyId = req.tenantId;
