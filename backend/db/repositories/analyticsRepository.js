@@ -2,9 +2,40 @@
  * Analytics repository – aggregates for dashboard.
  * All queries scoped by company_id (tenant).
  * Uses leads, conversations, chat_attachments, company_lead_statuses, chatbot_quote_fields.
+ * Legacy: COALESCE(source,'inbox') for null source; channel filter is case-insensitive.
  */
 
 const { pool } = require('../index');
+
+/**
+ * Build consistent WHERE clause for analytics (tenant + date range + optional source/channel).
+ * Uses COALESCE(l.source,'inbox') for legacy null source; channel uses LOWER for case-insensitive match.
+ * @param {string} companyId
+ * @param {{ startDate, endDate, source?, channel? }} options
+ * @param {{ withChannelFilter?: boolean }} opts - if false, omit channel filter (for available_channels)
+ */
+function buildWhere(companyId, options, opts = {}) {
+  const { startDate, endDate, source, channel } = options;
+  const { withChannelFilter = true } = opts;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = `l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval '1 day')`;
+  if (source && source !== 'all') {
+    where += ` AND COALESCE(l.source, 'inbox') = $${paramIndex++}`;
+    params.push(source.toLowerCase());
+  }
+  if (withChannelFilter && channel && channel !== 'all') {
+    where += ` AND LOWER(TRIM(l.channel)) = LOWER(TRIM($${paramIndex++}))`;
+    params.push(channel);
+  }
+  return { where, params };
+}
+
+/** Same as buildWhere but for queries without table alias (plain leads table). */
+function buildWhereNoAlias(companyId, options, opts = {}) {
+  const { where, params } = buildWhere(companyId, options, opts);
+  return { where: where.replace(/l\./g, ''), params };
+}
 
 const PRESET_LABELS = {
   budget: 'Budget',
@@ -52,19 +83,7 @@ function countCollectedFields(parsedFields, quoteSnapshot, hasAttachments) {
  * @param {{ startDate: string, endDate: string, source?: string, channel?: string }} options
  */
 async function getSummary(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND l.source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND l.channel = $${paramIndex++}`;
-    params.push(channel);
-  }
-
+  const { where, params } = buildWhere(companyId, options);
   const todayStart = new Date().toISOString().slice(0, 10);
 
   const [summaryRes, newTodayRes, convRes] = await Promise.all([
@@ -73,14 +92,15 @@ async function getSummary(companyId, options) {
       params
     ),
     pool.query(
-      `SELECT COUNT(*)::int AS cnt FROM leads l WHERE company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($2::date + interval '1 day')`,
+      `SELECT COUNT(*)::int AS cnt FROM leads l
+       WHERE l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($2::date + interval '1 day')`,
       [companyId, todayStart]
     ),
     pool.query(
       `SELECT COUNT(DISTINCT l.id)::int AS cnt
        FROM leads l
        INNER JOIN conversations c ON c.lead_id = l.id
-       WHERE ${where.replace(/l\./g, 'l.')}`,
+       WHERE ${where}`,
       params
     ),
   ]);
@@ -107,22 +127,11 @@ async function getSummary(companyId, options) {
  */
 async function getFullSummary(companyId, options) {
   const base = await getSummary(companyId, options);
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND l.source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND l.channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhere(companyId, options);
 
   const [sourceRes, fieldRes] = await Promise.all([
     pool.query(
-      `SELECT l.source, COUNT(*)::int AS cnt FROM leads l WHERE ${where} GROUP BY l.source`,
+      `SELECT COALESCE(l.source, 'inbox') AS source, COUNT(*)::int AS cnt FROM leads l WHERE ${where} GROUP BY COALESCE(l.source, 'inbox')`,
       params
     ),
     pool.query(
@@ -171,24 +180,13 @@ async function getFullSummary(companyId, options) {
  * Leads over time (daily buckets).
  */
 async function getLeadsOverTime(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'company_id = $1 AND created_at >= $2::date AND created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhereNoAlias(companyId, options);
 
   const result = await pool.query(
-    `SELECT date_trunc('day', created_at)::date AS day, source, COUNT(*)::int AS count
+    `SELECT date_trunc('day', created_at)::date AS day, COALESCE(source, 'inbox') AS source, COUNT(*)::int AS count
      FROM leads
      WHERE ${where}
-     GROUP BY date_trunc('day', created_at)::date, source
+     GROUP BY date_trunc('day', created_at)::date, COALESCE(source, 'inbox')
      ORDER BY day ASC`,
     params
   );
@@ -211,24 +209,13 @@ async function getLeadsOverTime(companyId, options) {
  * Channel breakdown (count per channel).
  */
 async function getChannelBreakdown(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'company_id = $1 AND created_at >= $2::date AND created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhereNoAlias(companyId, options);
 
   const result = await pool.query(
-    `SELECT channel, COUNT(*)::int AS count
+    `SELECT COALESCE(TRIM(channel), 'unknown') AS channel, COUNT(*)::int AS count
      FROM leads
      WHERE ${where}
-     GROUP BY channel
+     GROUP BY COALESCE(TRIM(channel), 'unknown')
      ORDER BY count DESC`,
     params
   );
@@ -240,21 +227,26 @@ async function getChannelBreakdown(companyId, options) {
 }
 
 /**
+ * Available channels for dropdown (range + source, no channel filter).
+ * Returns distinct channel strings sorted alphabetically.
+ */
+async function getAvailableChannels(companyId, options) {
+  const { where, params } = buildWhere(companyId, options, { withChannelFilter: false });
+  const result = await pool.query(
+    `SELECT DISTINCT COALESCE(TRIM(l.channel), 'unknown') AS channel
+     FROM leads l
+     WHERE ${where}
+     ORDER BY channel ASC`,
+    params
+  );
+  return (result.rows ?? []).map((r) => r.channel ?? 'unknown').filter(Boolean);
+}
+
+/**
  * Status breakdown (status_id + company_lead_statuses name, fallback to legacy status).
  */
 async function getStatusBreakdown(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND l.source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND l.channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhere(companyId, options);
 
   const result = await pool.query(
     `SELECT COALESCE(cls.name, l.status) AS status_name, COUNT(*)::int AS count
@@ -276,18 +268,7 @@ async function getStatusBreakdown(companyId, options) {
  * Field completion (enabled quote fields: how many leads have each collected).
  */
 async function getFieldCompletion(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND l.source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND l.channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhere(companyId, options);
 
   const [enabledRes, leadsRes] = await Promise.all([
     pool.query(
@@ -349,18 +330,7 @@ async function getFieldCompletion(companyId, options) {
  * Top signals: top channels by conversion to conversation.
  */
 async function getTopSignals(companyId, options) {
-  const { startDate, endDate, source, channel } = options;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
-  if (source && source !== 'all') {
-    where += ` AND l.source = $${paramIndex++}`;
-    params.push(source);
-  }
-  if (channel && channel !== 'all') {
-    where += ` AND l.channel = $${paramIndex++}`;
-    params.push(channel);
-  }
+  const { where, params } = buildWhere(companyId, options);
 
   const result = await pool.query(
     `SELECT l.channel,
@@ -389,4 +359,5 @@ module.exports = {
   getStatusBreakdown,
   getFieldCompletion,
   getTopSignals,
+  getAvailableChannels,
 };

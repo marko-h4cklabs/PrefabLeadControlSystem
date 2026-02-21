@@ -14,18 +14,43 @@ router.get('/dashboard', async (req, res) => {
     }
     const { startDate, endDate, source, channel } = parsed.data;
     const companyId = req.tenantId;
+    const appliedFilters = { range: parsed.data.range ?? '30', source: source ?? 'all', channel: channel ?? 'all' };
 
-    const [summary, leadsOverTime, channelBreakdown, statusBreakdown, fieldCompletion, topSignals] = await Promise.all([
+    const [
+      summary,
+      leadsOverTime,
+      channelBreakdown,
+      statusBreakdown,
+      fieldCompletion,
+      topSignals,
+      availableChannels,
+    ] = await Promise.all([
       analyticsRepository.getFullSummary(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getLeadsOverTime(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getChannelBreakdown(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getStatusBreakdown(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getFieldCompletion(companyId, { startDate, endDate, source, channel }),
       analyticsRepository.getTopSignals(companyId, { startDate, endDate, source, channel }),
+      analyticsRepository.getAvailableChannels(companyId, { startDate, endDate, source }),
     ]);
 
+    const dataAsOf = new Date().toISOString();
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[analytics] dashboard', {
+        companyId: companyId?.slice(0, 8) + '…',
+        range: appliedFilters.range,
+        source: appliedFilters.source,
+        channel: appliedFilters.channel,
+        totalLeads: summary?.totalLeads ?? 0,
+        channelsFound: availableChannels?.length ?? 0,
+      });
+    }
+
     res.json({
-      range: { startDate, endDate, source: source ?? 'all', channel: channel ?? 'all' },
+      range: { startDate, endDate, source: appliedFilters.source, channel: appliedFilters.channel },
+      applied_filters: appliedFilters,
+      data_as_of: dataAsOf,
+      available_channels: availableChannels ?? [],
       summary,
       leadsOverTime,
       channelBreakdown,

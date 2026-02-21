@@ -31,6 +31,13 @@ Returns all analytics data in one response. Prefer this for the Analytics page.
     "source": "all",
     "channel": "all"
   },
+  "applied_filters": {
+    "range": "30",
+    "source": "all",
+    "channel": "all"
+  },
+  "data_as_of": "2025-02-18T14:30:00.000Z",
+  "available_channels": ["email", "messenger", "telegram", "whatsapp"],
   "summary": {
     "totalLeads": 42,
     "newLeadsToday": 3,
@@ -86,7 +93,7 @@ Returns all analytics data in one response. Prefer this for the Analytics page.
 
 3. **Optional filters**
    - Source: All / Inbox / Simulation → `source=all|inbox|simulation`
-   - Channel: All + dynamic options from `channelBreakdown` → `channel=all|<channel>`
+   - Channel: All + dynamic options from `available_channels` (sorted, for selected range+source) → `channel=all|<channel>`
 
 4. **KPI cards (top row)**
    - Total Leads, New Leads Today, Conversations Started

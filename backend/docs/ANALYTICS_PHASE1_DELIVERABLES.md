@@ -21,6 +21,12 @@ app.use('/api/analytics', authMiddleware, tenantMiddleware, apiLimiter, analytic
 
 **Query params (all):** `range` (7|30|90), `source` (all|inbox|simulation), `channel` (all or specific).
 
+**Dashboard response additions (fix for zero-data):**
+- `available_channels`: array of channel strings for dropdown (range+source, no channel filter)
+- `applied_filters`: { range, source, channel }
+- `data_as_of`: ISO timestamp
+- Legacy: COALESCE(source,'inbox') for null source; channel filter case-insensitive
+
 ## 2. Frontend Integration
 
 The frontend (Lovable) is in a separate repo. See `ANALYTICS_API.md` for:
@@ -62,6 +68,13 @@ The frontend (Lovable) is in a separate repo. See `ANALYTICS_API.md` for:
 
 5. **Frontend (when built)**
    - [ ] Analytics nav item visible between Chatbot and Settings
+   - [ ] Channel dropdown uses `available_channels` (not channelBreakdown)
    - [ ] Date range + filters work
    - [ ] KPI cards, charts, Top Signals render
    - [ ] Loading, empty, error states
+
+6. **Non-zero data (when leads exist)**
+   - [ ] Dashboard returns non-zero totals for range=90 when leads exist
+   - [ ] source=all|inbox|simulation filters correctly
+   - [ ] channel=all returns all; channel=telegram (or existing) filters correctly
+   - [ ] available_channels includes existing channels even when channel filter selected

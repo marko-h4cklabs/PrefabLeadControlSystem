@@ -5,9 +5,21 @@ const SOURCE_OPTIONS = ['all', 'inbox', 'simulation'];
 const CHANNEL_OPTIONS = ['all', 'whatsapp', 'messenger', 'instagram', 'telegram', 'email', 'web'];
 
 const analyticsQuerySchema = z.object({
-  range: z.enum(RANGE_OPTIONS).default('30'),
-  source: z.enum(SOURCE_OPTIONS).optional().default('all'),
-  channel: z.string().trim().optional().default('all'),
+  range: z.preprocess(
+    (v) => (v != null ? String(v).trim() : undefined),
+    z.enum(RANGE_OPTIONS).optional().default('30')
+  ),
+  source: z.preprocess(
+    (v) => (v != null ? String(v).trim().toLowerCase() : undefined),
+    z.enum(SOURCE_OPTIONS).optional().default('all')
+  ),
+  channel: z.preprocess(
+    (v) => {
+      const s = v != null ? String(v).trim() : undefined;
+      return (s === '' || s === null || s === undefined) ? undefined : s;
+    },
+    z.string().optional().default('all')
+  ),
 }).transform((o) => {
   const days = parseInt(o.range, 10) || 30;
   const end = new Date();
