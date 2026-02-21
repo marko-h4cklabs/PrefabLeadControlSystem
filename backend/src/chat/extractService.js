@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { dimensionsToDisplayString } = require('./dimensionsFormat');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
@@ -30,7 +31,7 @@ Rules:
 - For type "text": extract the value. For email_address validate email format; for phone_number validate phone format.
 - For type "boolean" (e.g. pictures): extract yes/no or true/false. Store as "true" or "false" string.
 - For type "select_multi": if options list exists, value must be from that list or a valid subset. For time_window, object_type, ground_condition, utility_connections, completion_level: extract as string or list.
-- For type "composite_dimensions": extract only enabled parts (length/width/height) and unit.
+- For type "composite_dimensions": extract length, width, height (as numbers) and unit. Output as object {"length":N,"width":N,"height":N,"unit":"m"} - backend will normalize to string.
 - Include confidence 0-1 for each extracted value.
 
 Output format:
@@ -76,6 +77,9 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
     const jsonStr = jsonMatch ? jsonMatch[0] : raw;
     const parsed = JSON.parse(jsonStr);
     const extracted = Array.isArray(parsed?.extracted) ? parsed.extracted : [];
+    const dimensionsField = (quoteFields ?? []).find((f) => f.name === 'dimensions');
+    const dimensionsConfig = dimensionsField?.config ?? {};
+
     const normalized = extracted
       .filter((e) => e?.name != null && e?.value != null)
       .map((e) => {
@@ -91,6 +95,11 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
           value = ['true', 'yes', '1'].includes(v) ? 'true' : 'false';
         } else if (type === 'text' && value != null) {
           value = String(value).trim();
+        }
+        if (name === 'dimensions' && value != null) {
+          const str = dimensionsToDisplayString(value, dimensionsConfig);
+          if (str) value = str;
+          return { name, value, type: 'text', units: e.units ?? null, confidence: typeof e.confidence === 'number' ? e.confidence : 0.9 };
         }
         return { name, value, type, units: e.units ?? null, confidence: typeof e.confidence === 'number' ? e.confidence : 0.9 };
       })

@@ -1,4 +1,5 @@
 const { pool } = require('../index');
+const { dimensionsToDisplayString } = require('../../src/chat/dimensionsFormat');
 
 async function getFields(conversationId, quoteFields = []) {
   const result = await pool.query(
@@ -9,12 +10,16 @@ async function getFields(conversationId, quoteFields = []) {
      ORDER BY field_name`,
     [conversationId]
   );
-  const metaByField = Object.fromEntries((quoteFields || []).map((f) => [f.name, { units: f.units || null, priority: f.priority ?? 100 }]));
+  const metaByField = Object.fromEntries((quoteFields || []).map((f) => [f.name, { units: f.units || null, priority: f.priority ?? 100, config: f.config }]));
   return result.rows.map((r) => {
-    const value = r.field_type === 'number'
+    let value = r.field_type === 'number'
       ? (r.field_value_number != null ? Number(r.field_value_number) : null)
       : r.field_value_text;
-    const meta = metaByField[r.field_name] ?? { units: null, priority: 100 };
+    const meta = metaByField[r.field_name] ?? { units: null, priority: 100, config: {} };
+    if (r.field_name === 'dimensions' && value != null) {
+      const str = dimensionsToDisplayString(value, meta.config);
+      if (str) value = str;
+    }
     return {
       name: r.field_name,
       type: r.field_type,

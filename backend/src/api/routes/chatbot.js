@@ -38,6 +38,19 @@ function validationError(res, parsed) {
   });
 }
 
+function validateEnabledPresetOrder(presets) {
+  const enabled = (presets ?? []).filter((p) => p?.is_enabled === true);
+  if (enabled.length === 0) return null;
+  const priorities = enabled.map((p) => p?.priority);
+  const missing = priorities.some((p) => p == null);
+  if (missing) return 'Order must be >= 1';
+  const hasInvalid = priorities.some((p) => typeof p !== 'number' || !Number.isInteger(p) || p < 1);
+  if (hasInvalid) return 'Order must be >= 1';
+  const unique = new Set(priorities);
+  if (unique.size !== priorities.length) return 'Duplicate order values among enabled presets';
+  return null;
+}
+
 function quotePresetsValidationError(res, parsed, body) {
   const issues = parsed.error?.issues ?? [];
   const first = issues.find((i) => Array.isArray(i.path) && i.path[0] === 'presets');
@@ -151,6 +164,10 @@ router.put('/quote-fields', async (req, res) => {
         },
       });
     }
+    const orderErr = validateEnabledPresetOrder(presets);
+    if (orderErr) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: orderErr } });
+    }
     const saved = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, presets);
     res.json({ presets: saved, fields: saved });
   } catch (err) {
@@ -200,6 +217,10 @@ router.put('/quote-presets', async (req, res) => {
           message: `Unknown preset names: ${unknown.map((u) => u.name).join(', ')}. Allowed: ${PRESET_NAMES.join(', ')}`,
         },
       });
+    }
+    const orderErr = validateEnabledPresetOrder(presets);
+    if (orderErr) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: orderErr } });
     }
     const saved = await chatbotQuoteFieldsRepository.updatePresets(req.tenantId, presets);
     res.json({ presets: saved, fields: saved });

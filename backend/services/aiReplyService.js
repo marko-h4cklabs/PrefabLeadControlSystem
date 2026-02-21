@@ -5,6 +5,7 @@ const {
   chatbotCompanyInfoRepository,
 } = require('../db/repositories');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
+const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
 const { computeFieldsState } = require('../src/chat/fieldsState');
 const { buildSystemPrompt, buildFieldQuestion } = require('../src/chat/systemPrompt');
 const { enforceStyle } = require('../src/chat/enforceStyle');
@@ -22,26 +23,40 @@ const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
-    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .filter(([, v]) => v != null && (typeof v !== 'string' || v.trim() !== ''))
     .map(([name, value]) => {
       const qf = quoteByName[name];
+      let displayValue = value;
+      if (name === 'dimensions' && value != null) {
+        const str = dimensionsToDisplayString(value, qf?.config);
+        if (str) displayValue = str;
+        else return null;
+      }
       return {
         name,
-        value,
+        value: displayValue,
         type: qf?.type ?? 'text',
         units: qf?.units ?? null,
         priority: qf?.priority ?? 100,
       };
-    });
+    })
+    .filter(Boolean);
 }
 
-function mergeParsedFields(current, updates, allowedFieldNames) {
+function mergeParsedFields(current, updates, allowedFieldNames, quoteFields = []) {
   const merged = { ...current };
   const allowed = allowedFieldNames ? new Set([...allowedFieldNames].map((s) => String(s).toLowerCase())) : null;
+  const dimensionsField = (quoteFields ?? []).find((f) => f.name === 'dimensions');
+  const dimensionsConfig = dimensionsField?.config ?? {};
   for (const [key, value] of Object.entries(updates ?? {})) {
     if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) continue;
     if (allowed && !allowed.has(String(key).toLowerCase())) continue;
-    merged[key] = value;
+    let finalValue = value;
+    if (key === 'dimensions' && value != null && typeof value === 'object' && !Array.isArray(value)) {
+      const str = dimensionsToDisplayString(value, dimensionsConfig);
+      if (str) finalValue = str;
+    }
+    merged[key] = finalValue;
   }
   return merged;
 }
@@ -118,7 +133,7 @@ async function generateAiReply(companyId, leadId) {
       extractedUpdates[e.name] = e.type === 'number' ? Number(e.value) : String(e.value).trim();
     }
   }
-  parsedFields = mergeParsedFields(parsedFields, extractedUpdates, allowedFieldNames);
+  parsedFields = mergeParsedFields(parsedFields, extractedUpdates, allowedFieldNames, orderedQuoteFields);
 
   const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
   const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
@@ -153,14 +168,14 @@ async function generateAiReply(companyId, leadId) {
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames);
+    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames, orderedQuoteFields);
   } else {
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
     const userPrompt = buildUserPrompt(conversation.messages);
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
     assistantMessage = parsed.assistant_message;
-    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames);
+    parsedFields = mergeParsedFields(parsedFields, parsed.field_updates, allowedFieldNames, orderedQuoteFields);
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {
