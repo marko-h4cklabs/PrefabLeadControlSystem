@@ -1,0 +1,392 @@
+/**
+ * Analytics repository – aggregates for dashboard.
+ * All queries scoped by company_id (tenant).
+ * Uses leads, conversations, chat_attachments, company_lead_statuses, chatbot_quote_fields.
+ */
+
+const { pool } = require('../index');
+
+const PRESET_LABELS = {
+  budget: 'Budget',
+  location: 'Location',
+  time_window: 'Time Window',
+  email_address: 'Email Address',
+  phone_number: 'Phone Number',
+  full_name: 'Full Name',
+  additional_notes: 'Additional Notes',
+  pictures: 'Pictures',
+  object_type: 'Object Type',
+  doors: 'Doors',
+  windows: 'Windows',
+  colors: 'Colors',
+  dimensions: 'Dimensions',
+  roof: 'Roof',
+  ground_condition: 'Ground Condition',
+  utility_connections: 'Utility Connections',
+  completion_level: 'Completion Level',
+};
+
+function hasValue(v) {
+  if (v == null) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return String(v).trim() !== '';
+}
+
+function countCollectedFields(parsedFields, quoteSnapshot, hasAttachments) {
+  const quoteByName = Object.fromEntries(
+    (Array.isArray(quoteSnapshot) ? quoteSnapshot : []).map((f) => [f?.name, f]).filter(([n]) => n)
+  );
+  const collected = new Set();
+  for (const [name, value] of Object.entries(parsedFields ?? {})) {
+    if (hasValue(value)) collected.add(name);
+  }
+  if (hasAttachments && collected.has('pictures') === false) {
+    collected.add('pictures');
+  }
+  return collected;
+}
+
+/**
+ * Get analytics summary for dashboard.
+ * @param {string} companyId
+ * @param {{ startDate: string, endDate: string, source?: string, channel?: string }} options
+ */
+async function getSummary(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND l.source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND l.channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const todayStart = new Date().toISOString().slice(0, 10);
+
+  const [summaryRes, newTodayRes, convRes] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*)::int AS total FROM leads l WHERE ${where}`,
+      params
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS cnt FROM leads l WHERE company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($2::date + interval '1 day')`,
+      [companyId, todayStart]
+    ),
+    pool.query(
+      `SELECT COUNT(DISTINCT l.id)::int AS cnt
+       FROM leads l
+       INNER JOIN conversations c ON c.lead_id = l.id
+       WHERE ${where.replace(/l\./g, 'l.')}`,
+      params
+    ),
+  ]);
+
+  const totalLeads = summaryRes.rows[0]?.total ?? 0;
+  const newLeadsToday = newTodayRes.rows[0]?.cnt ?? 0;
+  const conversationsStarted = convRes.rows[0]?.cnt ?? 0;
+
+  return {
+    totalLeads,
+    newLeadsToday,
+    conversationsStarted,
+    quoteDataCompletionRate: null,
+    avgCollectedFieldsPerLead: null,
+    inboxCount: null,
+    simulationCount: null,
+    inboxPct: null,
+    simulationPct: null,
+  };
+}
+
+/**
+ * Get full summary (with quote completion, inbox/sim split).
+ */
+async function getFullSummary(companyId, options) {
+  const base = await getSummary(companyId, options);
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND l.source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND l.channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const [sourceRes, fieldRes] = await Promise.all([
+    pool.query(
+      `SELECT l.source, COUNT(*)::int AS cnt FROM leads l WHERE ${where} GROUP BY l.source`,
+      params
+    ),
+    pool.query(
+      `SELECT l.id, c.parsed_fields, c.quote_snapshot,
+              (SELECT COUNT(*) FROM chat_attachments ca WHERE ca.lead_id = l.id AND ca.company_id = l.company_id) AS has_attachments
+       FROM leads l
+       LEFT JOIN conversations c ON c.lead_id = l.id
+       WHERE ${where}`,
+      params
+    ),
+  ]);
+
+  const sourceRows = sourceRes.rows ?? [];
+  let inboxCount = 0;
+  let simulationCount = 0;
+  for (const r of sourceRows) {
+    const s = (r.source ?? 'inbox').toLowerCase();
+    if (s === 'inbox') inboxCount += r.cnt ?? 0;
+    else if (s === 'simulation') simulationCount += r.cnt ?? 0;
+  }
+  const total = inboxCount + simulationCount;
+  base.inboxCount = inboxCount;
+  base.simulationCount = simulationCount;
+  base.inboxPct = total > 0 ? Math.round((inboxCount / total) * 100) : 0;
+  base.simulationPct = total > 0 ? Math.round((simulationCount / total) * 100) : 0;
+
+  const fieldRows = fieldRes.rows ?? [];
+  let totalCollected = 0;
+  let leadsWithAnyField = 0;
+  for (const r of fieldRows) {
+    const parsed = r.parsed_fields ?? {};
+    const snapshot = r.quote_snapshot ?? [];
+    const hasAttachments = (r.has_attachments ?? 0) > 0;
+    const collected = countCollectedFields(parsed, snapshot, hasAttachments);
+    totalCollected += collected.size;
+    if (collected.size > 0) leadsWithAnyField += 1;
+  }
+  const leadCount = fieldRows.length;
+  base.avgCollectedFieldsPerLead = leadCount > 0 ? Math.round((totalCollected / leadCount) * 100) / 100 : 0;
+  base.quoteDataCompletionRate = leadCount > 0 ? Math.round((leadsWithAnyField / leadCount) * 100) : 0;
+
+  return base;
+}
+
+/**
+ * Leads over time (daily buckets).
+ */
+async function getLeadsOverTime(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'company_id = $1 AND created_at >= $2::date AND created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const result = await pool.query(
+    `SELECT date_trunc('day', created_at)::date AS day, source, COUNT(*)::int AS count
+     FROM leads
+     WHERE ${where}
+     GROUP BY date_trunc('day', created_at)::date, source
+     ORDER BY day ASC`,
+    params
+  );
+
+  const byDay = {};
+  for (const r of result.rows ?? []) {
+    const d = r.day ? new Date(r.day).toISOString().slice(0, 10) : null;
+    if (!d) continue;
+    if (!byDay[d]) byDay[d] = { day: d, inbox: 0, simulation: 0, total: 0 };
+    const s = (r.source ?? 'inbox').toLowerCase();
+    if (s === 'inbox') byDay[d].inbox += r.count ?? 0;
+    else if (s === 'simulation') byDay[d].simulation += r.count ?? 0;
+    byDay[d].total += r.count ?? 0;
+  }
+
+  return Object.values(byDay).sort((a, b) => a.day.localeCompare(b.day));
+}
+
+/**
+ * Channel breakdown (count per channel).
+ */
+async function getChannelBreakdown(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'company_id = $1 AND created_at >= $2::date AND created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const result = await pool.query(
+    `SELECT channel, COUNT(*)::int AS count
+     FROM leads
+     WHERE ${where}
+     GROUP BY channel
+     ORDER BY count DESC`,
+    params
+  );
+
+  return (result.rows ?? []).map((r) => ({
+    channel: r.channel ?? 'unknown',
+    count: r.count ?? 0,
+  }));
+}
+
+/**
+ * Status breakdown (status_id + company_lead_statuses name, fallback to legacy status).
+ */
+async function getStatusBreakdown(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND l.source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND l.channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const result = await pool.query(
+    `SELECT COALESCE(cls.name, l.status) AS status_name, COUNT(*)::int AS count
+     FROM leads l
+     LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
+     WHERE ${where}
+     GROUP BY COALESCE(cls.name, l.status)
+     ORDER BY count DESC`,
+    params
+  );
+
+  return (result.rows ?? []).map((r) => ({
+    status: r.status_name ?? 'unknown',
+    count: r.count ?? 0,
+  }));
+}
+
+/**
+ * Field completion (enabled quote fields: how many leads have each collected).
+ */
+async function getFieldCompletion(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND l.source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND l.channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const [enabledRes, leadsRes] = await Promise.all([
+    pool.query(
+      `SELECT name FROM chatbot_quote_fields WHERE company_id = $1 AND is_enabled = true ORDER BY priority ASC, name ASC`,
+      [companyId]
+    ),
+    pool.query(
+      `SELECT l.id, c.parsed_fields, c.quote_snapshot,
+              (SELECT COUNT(*) FROM chat_attachments ca WHERE ca.lead_id = l.id AND ca.company_id = l.company_id) AS has_attachments
+       FROM leads l
+       LEFT JOIN conversations c ON c.lead_id = l.id
+       WHERE ${where}`,
+      params
+    ),
+  ]);
+
+  const enabled = (enabledRes.rows ?? []).map((r) => r.name).filter(Boolean);
+  const fieldCounts = {};
+
+  for (const lead of leadsRes.rows ?? []) {
+    const parsed = lead.parsed_fields ?? {};
+    const snapshot = lead.quote_snapshot ?? [];
+    const hasAttachments = (lead.has_attachments ?? 0) > 0;
+    const collected = countCollectedFields(parsed, snapshot, hasAttachments);
+    for (const name of collected) {
+      fieldCounts[name] = (fieldCounts[name] ?? 0) + 1;
+    }
+  }
+
+  const totalLeads = leadsRes.rows?.length ?? 0;
+  const out = [];
+  for (const name of enabled) {
+    const count = fieldCounts[name] ?? 0;
+    out.push({
+      field: name,
+      label: PRESET_LABELS[name] ?? name,
+      collected: count,
+      total: totalLeads,
+      pct: totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0,
+    });
+  }
+
+  for (const name of Object.keys(fieldCounts)) {
+    if (!enabled.includes(name)) {
+      out.push({
+        field: name,
+        label: PRESET_LABELS[name] ?? name,
+        collected: fieldCounts[name],
+        total: totalLeads,
+        pct: totalLeads > 0 ? Math.round((fieldCounts[name] / totalLeads) * 100) : 0,
+      });
+    }
+  }
+
+  return out.sort((a, b) => b.collected - a.collected);
+}
+
+/**
+ * Top signals: top channels by conversion to conversation.
+ */
+async function getTopSignals(companyId, options) {
+  const { startDate, endDate, source, channel } = options;
+  const params = [companyId, startDate, endDate];
+  let paramIndex = 4;
+  let where = 'l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval \'1 day\')';
+  if (source && source !== 'all') {
+    where += ` AND l.source = $${paramIndex++}`;
+    params.push(source);
+  }
+  if (channel && channel !== 'all') {
+    where += ` AND l.channel = $${paramIndex++}`;
+    params.push(channel);
+  }
+
+  const result = await pool.query(
+    `SELECT l.channel,
+            COUNT(*)::int AS total,
+            COUNT(c.id)::int AS with_conversation
+     FROM leads l
+     LEFT JOIN conversations c ON c.lead_id = l.id
+     WHERE ${where}
+     GROUP BY l.channel
+     ORDER BY with_conversation DESC, total DESC`,
+    params
+  );
+
+  return (result.rows ?? []).map((r) => ({
+    channel: r.channel ?? 'unknown',
+    total: r.total ?? 0,
+    withConversation: r.with_conversation ?? 0,
+    conversionPct: (r.total ?? 0) > 0 ? Math.round(((r.with_conversation ?? 0) / r.total) * 100) : 0,
+  }));
+}
+
+module.exports = {
+  getFullSummary,
+  getLeadsOverTime,
+  getChannelBreakdown,
+  getStatusBreakdown,
+  getFieldCompletion,
+  getTopSignals,
+};

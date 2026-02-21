@@ -6,6 +6,7 @@ const qualificationFieldRepository = require('./qualificationFieldRepository');
 const conversationRepository = require('./conversationRepository');
 const webhookEventsRepository = require('./webhookEventsRepository');
 const analyticsSnapshotRepository = require('./analyticsSnapshotRepository');
+const analyticsRepository = require('./analyticsRepository');
 const chatbotCompanyInfoRepository = require('./chatbotCompanyInfoRepository');
 const chatbotBehaviorRepository = require('./chatbotBehaviorRepository');
 const chatbotQuoteFieldsRepository = require('./chatbotQuoteFieldsRepository');
@@ -28,6 +29,7 @@ module.exports = {
   conversationRepository,
   webhookEventsRepository,
   analyticsSnapshotRepository,
+  analyticsRepository,
   chatbotCompanyInfoRepository,
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
