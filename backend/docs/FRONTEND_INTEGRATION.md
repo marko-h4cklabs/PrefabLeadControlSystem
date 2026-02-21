@@ -101,3 +101,70 @@
 - `400`: Validation (e.g. invalid email, password too short).
 - `401`: Wrong current password.
 - `409`: Email already in use.
+
+---
+
+## D) Picture Attachments (pictures quote preset)
+
+When the **pictures** quote preset is enabled for a company, the chat accepts image uploads and stores them as collected info.
+
+### Upload endpoint
+
+- **POST** `/api/leads/:leadId/attachments` (flat route)
+- **POST** `/api/companies/:companyId/leads/:leadId/attachments` (companies route)
+
+**Request:** `multipart/form-data` with field `file` (image file).
+
+**Constraints:**
+- Only images: `mime` must start with `image/` (e.g. `image/jpeg`, `image/png`)
+- Max size: 5MB
+
+**Response (201):**
+```json
+{
+  "attachment_id": "uuid",
+  "url": "https://<backend>/public/attachments/<id>/<public_token>",
+  "mime_type": "image/jpeg",
+  "file_name": "photo.jpg"
+}
+```
+
+**Frontend upload example:**
+```js
+const formData = new FormData();
+formData.append('file', fileInput.files[0]);
+
+const res = await fetch(`/api/leads/${leadId}/attachments`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` },
+  body: formData,
+});
+const { url } = await res.json();
+```
+
+### Public image URL (no auth)
+
+- **GET** `/public/attachments/:id/:token`
+
+Use the `url` from the upload response. It works without JWT and can be:
+- Opened in a browser
+- Embedded in `<img src="...">` tags for preview
+
+### Display in collected info
+
+When pictures preset is enabled and attachments exist, `collected_infos` (or `collected`) includes:
+```json
+{
+  "name": "pictures",
+  "type": "pictures",
+  "value": ["https://.../public/attachments/...", "https://.../public/attachments/..."]
+}
+```
+
+**Display example:**
+```jsx
+{collected_infos
+  ?.filter(c => c.name === 'pictures' && Array.isArray(c.value))
+  ?.flatMap(c => c.value)
+  ?.map(url => <img key={url} src={url} alt="Attachment" />)}
+```

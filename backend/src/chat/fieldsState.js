@@ -8,9 +8,11 @@
 function computeFieldsState(quoteFields, collectedFields) {
   const quote = (quoteFields ?? []).filter((f) => f?.is_enabled !== false);
   const collected = collectedFields ?? [];
+  const hasValue = (v) => v != null && (Array.isArray(v) ? v.length > 0 : String(v).trim() !== '');
+
   const collectedMap = Object.fromEntries(
     collected
-      .filter((c) => c?.name != null && c?.value != null && String(c.value).trim() !== '')
+      .filter((c) => c?.name != null && hasValue(c.value))
       .map((c) => [String(c.name).trim(), c])
   );
 
@@ -21,7 +23,7 @@ function computeFieldsState(quoteFields, collectedFields) {
   const required_infos = requiredFields
     .filter((f) => {
       const v = collectedMap[f.name]?.value;
-      return v == null || String(v).trim() === '';
+      return !hasValue(v);
     })
     .map((f) => ({
       name: f.name ?? '',
@@ -31,7 +33,7 @@ function computeFieldsState(quoteFields, collectedFields) {
     }));
 
   const collected_infos = collected
-    .filter((c) => c?.name != null && c?.value != null && String(c.value).trim() !== '')
+    .filter((c) => c?.name != null && hasValue(c.value))
     .map((c) => ({
       name: c.name,
       type: c.type ?? 'text',

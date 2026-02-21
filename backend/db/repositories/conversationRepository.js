@@ -29,7 +29,7 @@ async function createIfNotExists(leadId, companyId = null) {
       chatbotBehaviorRepository.get(companyId),
     ]);
     const enabled = chatbotQuoteFieldsRepository.getEnabledFields(fields ?? []);
-    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
     quoteSnapshot = enabled
       .filter((f) => f && validTypes.includes(f.type))
       .map((f) => ({ ...f, is_enabled: true }));

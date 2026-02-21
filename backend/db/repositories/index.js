@@ -12,6 +12,7 @@ const chatbotQuoteFieldsRepository = require('./chatbotQuoteFieldsRepository');
 const chatConversationRepository = require('./chatConversationRepository');
 const chatConversationFieldsRepository = require('./chatConversationFieldsRepository');
 const chatMessagesRepository = require('./chatMessagesRepository');
+const chatAttachmentRepository = require('./chatAttachmentRepository');
 
 module.exports = {
   companyRepository,
@@ -28,4 +29,5 @@ module.exports = {
   chatConversationRepository,
   chatConversationFieldsRepository,
   chatMessagesRepository,
+  chatAttachmentRepository,
 };

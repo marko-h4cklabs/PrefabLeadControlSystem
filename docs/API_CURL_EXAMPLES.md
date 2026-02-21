@@ -12,6 +12,10 @@ psql $DATABASE_URL -f backend/db/migrations/014_lead_name_and_conversation_snaps
 psql $DATABASE_URL -f backend/db/migrations/015_backfill_company_lead_statuses.sql
 psql $DATABASE_URL -f backend/db/migrations/016_leads_add_name.sql
 psql $DATABASE_URL -f backend/db/migrations/017_chat_conversation_snapshot.sql
+psql $DATABASE_URL -f backend/db/migrations/018_leads_add_source.sql
+psql $DATABASE_URL -f backend/db/migrations/019_quote_presets.sql
+psql $DATABASE_URL -f backend/db/migrations/021_quote_presets_groups_and_new_fields.sql
+psql $DATABASE_URL -f backend/db/migrations/022_chat_attachments.sql
 ```
 
 ## Company Info
@@ -166,4 +170,10 @@ curl -s -X POST "$BASE_URL/api/companies/COMPANY_ID/leads/LEAD_ID/ai-reply" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "x-company-id: COMPANY_ID"
+
+# Upload image attachment (pictures preset)
+curl -s -X POST "$BASE_URL/api/leads/LEAD_ID/attachments" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@/path/to/image.jpg"
+# Response: { attachment_id, url, mime_type, file_name }
 ```

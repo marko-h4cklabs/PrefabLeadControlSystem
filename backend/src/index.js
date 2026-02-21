@@ -80,6 +80,23 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+const { chatAttachmentRepository } = require('./db/repositories');
+app.get('/public/attachments/:id/:token', async (req, res) => {
+  try {
+    const { id, token } = req.params;
+    const row = await chatAttachmentRepository.findById(id);
+    if (!row || row.public_token !== token) {
+      return res.status(404).send('Not found');
+    }
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.set('Content-Disposition', 'inline');
+    res.set('Content-Type', row.mime_type || 'application/octet-stream');
+    res.send(row.data);
+  } catch (err) {
+    res.status(500).send('Internal server error');
+  }
+});
+
 app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/me', apiLimiter, meRouter);
 

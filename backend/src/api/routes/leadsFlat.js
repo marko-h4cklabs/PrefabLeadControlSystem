@@ -1,10 +1,25 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
 const {
   leadRepository,
   companyLeadStatusesRepository,
   conversationRepository,
+  chatAttachmentRepository,
 } = require('../../../db/repositories');
+
+const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ATTACHMENT_MAX_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only images allowed'));
+    }
+    cb(null, true);
+  },
+});
 const { errorJson } = require('../middleware/errors');
 const { computeFieldsState } = require('../../chat/fieldsState');
 const {
@@ -115,16 +130,25 @@ router.get('/', async (req, res) => {
   }
 });
 
+function buildAttachmentUrls(attachments, baseUrl) {
+  return (attachments ?? []).map((a) => `${baseUrl.replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
+}
+
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
-    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .filter(([, v]) => {
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return String(v).trim() !== '';
+    })
     .map(([name, value]) => {
       const qf = quoteByName[name];
+      const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
       return {
         name,
         value,
-        type: qf?.type ?? 'text',
+        type,
         units: qf?.units ?? null,
         priority: qf?.priority ?? 100,
       };
@@ -142,7 +166,19 @@ router.get('/:id', async (req, res) => {
     const snapshot = conversation?.quote_snapshot ?? null;
     const orderedSnapshot = Array.isArray(snapshot) ? snapshot : (snapshot?.fields ? snapshot.fields : []);
     const parsedFields = conversation?.parsed_fields ?? {};
-    const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
+    let collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
+    const picturesPreset = (orderedSnapshot ?? []).find((f) => f?.name === 'pictures' && f?.is_enabled !== false);
+    if (picturesPreset) {
+      const hasPictures = collectedFromParsed.some((c) => c.name === 'pictures');
+      if (!hasPictures) {
+        const attachments = await chatAttachmentRepository.getByLeadId(req.tenantId, req.params.id);
+        if (attachments.length > 0) {
+          const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+          const urls = buildAttachmentUrls(attachments, baseUrl);
+          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+        }
+      }
+    }
     const { required_infos, collected_infos } = computeFieldsState(orderedSnapshot, collectedFromParsed);
     const collectedInfos = (collected_infos ?? []).map((c) => ({
       name: c.name,
@@ -162,6 +198,58 @@ router.get('/:id', async (req, res) => {
       collected_infos: collectedInfos,
     });
   } catch (err) {
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+router.post('/:id/attachments', upload.single('file'), async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
+    }
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'file field required' } });
+    }
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Only images allowed' } });
+    }
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'File too large (max 5MB)' } });
+    }
+    const conversation = await conversationRepository.getByLeadId(leadId);
+    const attachment = await chatAttachmentRepository.create(companyId, leadId, {
+      mimeType: file.mimetype,
+      fileName: file.originalname || null,
+      byteSize: file.size,
+      buffer: file.buffer,
+      conversationId: conversation?.id ?? null,
+    });
+    const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/public/attachments/${attachment.id}/${attachment.public_token}`;
+
+    let conv = conversation;
+    if (!conv) {
+      conv = await conversationRepository.createIfNotExists(leadId, companyId);
+    }
+    const parsed = conv?.parsed_fields ?? {};
+    const pictures = Array.isArray(parsed.pictures) ? [...parsed.pictures] : [];
+    pictures.push(url);
+    await conversationRepository.updateParsedFields(leadId, { ...parsed, pictures });
+
+    res.status(201).json({
+      attachment_id: attachment.id,
+      url,
+      mime_type: attachment.mime_type,
+      file_name: attachment.file_name || null,
+    });
+  } catch (err) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'File too large (max 5MB)' } });
+    }
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });

@@ -3,6 +3,7 @@ const {
   conversationRepository,
   chatbotBehaviorRepository,
   chatbotCompanyInfoRepository,
+  chatAttachmentRepository,
 } = require('../db/repositories');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
 const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
@@ -20,10 +21,18 @@ const { buildHighlights } = require('../src/chat/fieldsState');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
+function buildAttachmentUrls(attachments, baseUrl) {
+  return (attachments ?? []).map((a) => `${(baseUrl || '').replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
+}
+
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
-    .filter(([, v]) => v != null && (typeof v !== 'string' || v.trim() !== ''))
+    .filter(([, v]) => {
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return typeof v !== 'string' || v.trim() !== '';
+    })
     .map(([name, value]) => {
       const qf = quoteByName[name];
       let displayValue = value;
@@ -32,10 +41,11 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
         if (str) displayValue = str;
         else return null;
       }
+      const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
       return {
         name,
         value: displayValue,
-        type: qf?.type ?? 'text',
+        type,
         units: qf?.units ?? null,
         priority: qf?.priority ?? 100,
       };
@@ -109,7 +119,7 @@ async function generateAiReply(companyId, leadId) {
     conversation = await conversationRepository.createIfNotExists(leadId, companyId);
   }
 
-  const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
+  const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
   const orderedQuoteFields = (conversation.quote_snapshot ?? [])
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
@@ -184,7 +194,19 @@ async function generateAiReply(companyId, leadId) {
     allowedFieldNames,
   });
 
-  const finalCollectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
+  let finalCollectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
+  const picturesPreset = (orderedQuoteFields ?? []).find((f) => f?.name === 'pictures' && f?.is_enabled !== false);
+  if (picturesPreset) {
+    const hasPictures = finalCollectedFromParsed.some((c) => c.name === 'pictures');
+    if (!hasPictures) {
+      const attachments = await chatAttachmentRepository.getByLeadId(companyId, leadId);
+      if (attachments.length > 0) {
+        const baseUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+        const urls = buildAttachmentUrls(attachments, baseUrl);
+        finalCollectedFromParsed = [...finalCollectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+      }
+    }
+  }
   const { required_infos: finalRequired, collected_infos: finalCollected } = computeFieldsState(
     orderedQuoteFields,
     finalCollectedFromParsed

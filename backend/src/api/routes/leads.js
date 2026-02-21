@@ -1,11 +1,26 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router({ mergeParams: true });
+
+const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ATTACHMENT_MAX_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only images allowed'));
+    }
+    cb(null, true);
+  },
+});
+
 const {
   leadRepository,
   conversationRepository,
   chatbotBehaviorRepository,
   chatbotQuoteFieldsRepository,
   companyLeadStatusesRepository,
+  chatAttachmentRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
@@ -133,16 +148,25 @@ function toLeadPublic(lead) {
   };
 }
 
+function buildAttachmentUrls(attachments, baseUrl) {
+  return (attachments ?? []).map((a) => `${baseUrl.replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
+}
+
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
-    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .filter(([, v]) => {
+      if (v == null) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      return String(v).trim() !== '';
+    })
     .map(([name, value]) => {
       const qf = quoteByName[name];
+      const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
       return {
         name,
         value,
-        type: qf?.type ?? 'text',
+        type,
         units: qf?.units ?? null,
         priority: qf?.priority ?? 100,
       };
@@ -159,7 +183,19 @@ router.get('/:leadId', async (req, res) => {
     const snapshot = conversation?.quote_snapshot ?? null;
     const orderedSnapshot = Array.isArray(snapshot) ? snapshot : (snapshot?.fields ? snapshot.fields : []);
     const parsedFields = conversation?.parsed_fields ?? {};
-    const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
+    let collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedSnapshot);
+    const picturesPreset = (orderedSnapshot ?? []).find((f) => f?.name === 'pictures' && f?.is_enabled !== false);
+    if (picturesPreset) {
+      const hasPictures = collectedFromParsed.some((c) => c.name === 'pictures');
+      if (!hasPictures) {
+        const attachments = await chatAttachmentRepository.getByLeadId(req.tenantId, req.params.leadId);
+        if (attachments.length > 0) {
+          const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+          const urls = buildAttachmentUrls(attachments, baseUrl);
+          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+        }
+      }
+    }
     const { required_infos, collected_infos } = computeFieldsState(orderedSnapshot, collectedFromParsed);
     const collectedInfos = (collected_infos ?? []).map((c) => ({
       name: c.name,
@@ -196,12 +232,24 @@ router.get('/:leadId/conversation', async (req, res) => {
     let orderedQuoteFields = [];
     let lookingFor = [];
     let collected = [];
-    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
     if (conversation) {
       orderedQuoteFields = (conversation.quote_snapshot ?? [])
         .filter((f) => f && validTypes.includes(f.type))
         .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-      const collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields ?? {}, orderedQuoteFields);
+      let collectedFromParsed = parsedFieldsToCollected(conversation.parsed_fields ?? {}, orderedQuoteFields);
+      const picturesPreset = (orderedQuoteFields ?? []).find((f) => f?.name === 'pictures' && f?.is_enabled !== false);
+      if (picturesPreset) {
+        const hasPictures = collectedFromParsed.some((c) => c.name === 'pictures');
+        if (!hasPictures) {
+          const attachments = await chatAttachmentRepository.getByLeadId(companyId, leadId);
+          if (attachments.length > 0) {
+            const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+            const urls = buildAttachmentUrls(attachments, baseUrl);
+            collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+          }
+        }
+      }
       const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
       lookingFor = (missingRequired ?? []).map((f) => ({
         name: f.name ?? '',
@@ -219,7 +267,7 @@ router.get('/:leadId/conversation', async (req, res) => {
     } else {
       const fields = await chatbotQuoteFieldsRepository.list(companyId);
       const enabled = chatbotQuoteFieldsRepository.getEnabledFields(fields ?? []);
-      orderedQuoteFields = enabled.filter((f) => validTypes.includes(f.type)).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+      orderedQuoteFields = (enabled ?? []).filter((f) => validTypes.includes(f.type)).sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
       lookingFor = orderedQuoteFields
         .filter((f) => f?.required !== false)
         .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
@@ -238,6 +286,58 @@ router.get('/:leadId/conversation', async (req, res) => {
       message: 'Conversation failed',
       request_id: requestId,
     });
+  }
+});
+
+router.post('/:leadId/attachments', upload.single('file'), async (req, res) => {
+  try {
+    const leadId = req.params.leadId;
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
+    }
+    const file = req.file;
+    if (!file || !file.buffer) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'file field required' } });
+    }
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Only images allowed' } });
+    }
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'File too large (max 5MB)' } });
+    }
+    const conversation = await conversationRepository.getByLeadId(leadId);
+    const attachment = await chatAttachmentRepository.create(companyId, leadId, {
+      mimeType: file.mimetype,
+      fileName: file.originalname || null,
+      byteSize: file.size,
+      buffer: file.buffer,
+      conversationId: conversation?.id ?? null,
+    });
+    const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/public/attachments/${attachment.id}/${attachment.public_token}`;
+
+    let conv = conversation;
+    if (!conv) {
+      conv = await conversationRepository.createIfNotExists(leadId, companyId);
+    }
+    const parsed = conv?.parsed_fields ?? {};
+    const pictures = Array.isArray(parsed.pictures) ? [...parsed.pictures] : [];
+    pictures.push(url);
+    await conversationRepository.updateParsedFields(leadId, { ...parsed, pictures });
+
+    res.status(201).json({
+      attachment_id: attachment.id,
+      url,
+      mime_type: attachment.mime_type,
+      file_name: attachment.file_name || null,
+    });
+  } catch (err) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'File too large (max 5MB)' } });
+    }
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
@@ -328,7 +428,7 @@ router.post('/:leadId/messages', async (req, res) => {
     }
 
     conversation = await conversationRepository.getByLeadId(leadId);
-    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions'];
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean'];
     const orderedQuoteFields = (conversation?.quote_snapshot ?? [])
       .filter((f) => f && validTypes.includes(f.type))
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
