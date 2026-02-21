@@ -18,6 +18,7 @@ psql $DATABASE_URL -f backend/db/migrations/021_quote_presets_groups_and_new_fie
 psql $DATABASE_URL -f backend/db/migrations/022_chat_attachments.sql
 psql $DATABASE_URL -f backend/db/migrations/023_pictures_preset_type.sql
 psql $DATABASE_URL -f backend/db/migrations/024_notifications.sql
+psql $DATABASE_URL -f backend/db/migrations/025_notification_settings.sql
 ```
 
 ## Company Info
@@ -198,4 +199,20 @@ curl -s -X POST "$BASE_URL/api/notifications/read-all" \
   -H "Authorization: Bearer $TOKEN" \
   -H "x-company-id: COMPANY_ID"
 # Response: { ok: true }
+
+## Notification Settings
+
+# GET notification settings (returns defaults if none saved)
+curl -s -X GET "$BASE_URL/api/settings/notifications" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: COMPANY_ID"
+# Response: { email_enabled, email_recipients, notify_new_inquiry_inbox, notify_new_inquiry_simulation, updated_at }
+
+# PUT notification settings (owner/admin only)
+curl -s -X PUT "$BASE_URL/api/settings/notifications" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "x-company-id: COMPANY_ID" \
+  -d '{"email_enabled":true,"email_recipients":["admin@example.com"],"notify_new_inquiry_inbox":true,"notify_new_inquiry_simulation":false}'
+# Response: saved settings object
 ```

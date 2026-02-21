@@ -23,6 +23,7 @@ const {
   chatAttachmentRepository,
   notificationRepository,
 } = require('../../../db/repositories');
+const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
 const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
@@ -118,18 +119,7 @@ router.post('/', async (req, res) => {
       external_id: external_id ?? (normalizedName || undefined),
       source: source ?? 'inbox',
     });
-    const leadSource = lead.source ?? source ?? 'inbox';
-    if (leadSource === 'inbox') {
-      const leadName = lead.name ?? lead.external_id ?? 'Unknown';
-      const body = `${leadName} (${lead.channel})`;
-      await notificationRepository.create(req.tenantId, {
-        leadId: lead.id,
-        type: 'new_lead',
-        title: 'New inquiry',
-        body,
-        url: `/inbox/${lead.id}`,
-      }).catch(() => {});
-    }
+    notifyNewLeadCreated(req.tenantId, lead, { userEmail: req.user?.email }).catch(() => {});
     const out = {
       id: lead.id,
       channel: lead.channel,

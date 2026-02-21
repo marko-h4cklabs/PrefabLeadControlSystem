@@ -197,3 +197,10 @@ When pictures preset is enabled and attachments exist, `collected_infos` (or `co
 **Response:** `{ notifications: [...], total, unreadCount }` — each notification: `{ id, type, title, body, url, is_read, created_at, lead_id }`
 
 **Types:** `new_lead`, `new_message`. Use `url` to navigate (e.g. `/inbox/<leadId>`, `/inbox/<leadId>/conversation`).
+
+---
+
+## F) Notification Settings (owner/admin)
+
+- **GET** `/api/settings/notifications` — returns `{ email_enabled, email_recipients, notify_new_inquiry_inbox, notify_new_inquiry_simulation, updated_at }`. Defaults if no row.
+- **PUT** `/api/settings/notifications` — save settings (owner/admin only). Body: `{ email_enabled?, email_recipients?, notify_new_inquiry_inbox?, notify_new_inquiry_simulation? }`.

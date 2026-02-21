@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { webhookEventsRepository, leadRepository, notificationRepository } = require('../../../db/repositories');
+const { webhookEventsRepository, leadRepository } = require('../../../db/repositories');
 const { webhookAuthMiddleware } = require('../middleware/webhookAuth');
-const { notifyNewLead } = require('../../services/notifier');
+const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { errorJson } = require('../middleware/errors');
 
 const ALLOWED_CHANNELS = new Set(['instagram', 'messenger', 'whatsapp', 'telegram', 'email']);
@@ -34,16 +34,7 @@ router.post('/:channel/webhook', webhookAuthMiddleware, async (req, res) => {
           external_id: String(externalId),
           source: 'inbox',
         });
-        notifyNewLead(lead, 'webhook');
-        const leadName = lead.name ?? lead.external_id ?? 'Unknown';
-        const body = `${leadName} (${lead.channel})`;
-        await notificationRepository.create(companyId, {
-          leadId: lead.id,
-          type: 'new_lead',
-          title: 'New inquiry',
-          body,
-          url: `/inbox/${lead.id}`,
-        }).catch(() => {});
+        notifyNewLeadCreated(companyId, lead).catch(() => {});
       }
     }
 
