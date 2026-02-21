@@ -3,6 +3,7 @@ const router = express.Router();
 const { webhookEventsRepository, leadRepository } = require('../../../db/repositories');
 const { webhookAuthMiddleware } = require('../middleware/webhookAuth');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
+const { logLeadActivity } = require('../../../services/activityLogger');
 const { errorJson } = require('../middleware/errors');
 
 const ALLOWED_CHANNELS = new Set(['instagram', 'messenger', 'whatsapp', 'telegram', 'email']);
@@ -35,6 +36,15 @@ router.post('/:channel/webhook', webhookAuthMiddleware, async (req, res) => {
           source: 'inbox',
         });
         notifyNewLeadCreated(companyId, lead).catch(() => {});
+        logLeadActivity({
+          companyId,
+          leadId: lead.id,
+          eventType: 'lead_created',
+          actorType: 'system',
+          source: 'webhook',
+          channel: lead.channel,
+          metadata: {},
+        }).catch(() => {});
       }
     }
 

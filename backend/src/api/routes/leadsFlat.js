@@ -8,6 +8,7 @@ const {
   chatAttachmentRepository,
 } = require('../../../db/repositories');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
+const { logLeadActivity } = require('../../../services/activityLogger');
 
 const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -273,6 +274,16 @@ router.post('/', async (req, res) => {
       source: source ?? 'inbox',
     });
     notifyNewLeadCreated(req.tenantId, lead, { userEmail: req.user?.email }).catch(() => {});
+    logLeadActivity({
+      companyId: req.tenantId,
+      leadId: lead.id,
+      eventType: 'lead_created',
+      actorType: 'user',
+      actorUserId: req.user?.id,
+      source: lead.source ?? 'inbox',
+      channel: lead.channel,
+      metadata: {},
+    }).catch(() => {});
     res.status(201).json(toLeadResponse(lead));
   } catch (err) {
     if (err.code === '23505') {
@@ -291,10 +302,24 @@ router.patch('/:id/status', async (req, res) => {
       const msg = parsed.error.flatten().formErrors?.join?.(' ') || 'status_id (uuid) is required';
       return res.status(400).json({ error: msg });
     }
+    const existing = await leadRepository.findById(req.tenantId, req.params.id);
     const lead = await leadRepository.setStatus(req.tenantId, req.params.id, parsed.data.status_id);
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found or status invalid for company' });
     }
+    logLeadActivity({
+      companyId: req.tenantId,
+      leadId: lead.id,
+      eventType: 'lead_status_changed',
+      actorType: 'user',
+      actorUserId: req.user?.id,
+      source: lead.source ?? null,
+      channel: lead.channel,
+      metadata: {
+        previous_status: existing?.status_name ?? existing?.status_id ?? null,
+        new_status: lead.status_name ?? lead.status_id ?? null,
+      },
+    }).catch(() => {});
     res.json(toLeadResponse(lead));
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);

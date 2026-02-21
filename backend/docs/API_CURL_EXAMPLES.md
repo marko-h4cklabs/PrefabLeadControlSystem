@@ -94,3 +94,60 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
 **Errors:**
 - `400` — presets array required (when payload missing or empty)
 - `400` — Unknown preset names (when name not in allowed list)
+
+---
+
+## CRM (Lead Detail)
+
+All CRM endpoints require JWT auth and tenant context (`x-company-id` or JWT company). Base path: `/api/crm/leads/:leadId`
+
+### GET /api/crm/leads/:leadId/summary
+
+Returns combined activity, notes, and tasks for the lead CRM panel.
+
+**Response:**
+```json
+{
+  "activity": { "items": [...], "total": number },
+  "notes": { "items": [...], "total": number },
+  "tasks": { "items": [...], "total": number }
+}
+```
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" -H "x-company-id: $COMPANY_ID" \
+  "http://localhost:3000/api/crm/leads/LEAD_UUID/summary"
+```
+
+### POST /api/crm/leads/:leadId/notes
+
+Create a note. Body: `{ "body": "..." }` (1–5000 chars).
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "x-company-id: $COMPANY_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"body": "Called lead, they want to schedule a site visit next week."}' \
+  "http://localhost:3000/api/crm/leads/LEAD_UUID/notes"
+```
+
+### POST /api/crm/leads/:leadId/tasks
+
+Create a task. Body: `{ "title": "...", "description": "...", "due_at": "ISO string", "assigned_user_id": "uuid" }` (all optional except title).
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "x-company-id: $COMPANY_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Follow up call", "due_at": "2025-02-25T14:00:00.000Z"}' \
+  "http://localhost:3000/api/crm/leads/LEAD_UUID/tasks"
+```
+
+### PATCH /api/crm/leads/:leadId/tasks/:taskId
+
+Update task status to done. Body: `{ "status": "done" }`.
+
+```bash
+curl -X PATCH -H "Authorization: Bearer $TOKEN" -H "x-company-id: $COMPANY_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "done"}' \
+  "http://localhost:3000/api/crm/leads/LEAD_UUID/tasks/TASK_UUID"
+```

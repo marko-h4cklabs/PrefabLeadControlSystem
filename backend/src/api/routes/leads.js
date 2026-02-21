@@ -24,6 +24,7 @@ const {
   notificationRepository,
 } = require('../../../db/repositories');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
+const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
 const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
@@ -120,6 +121,16 @@ router.post('/', async (req, res) => {
       source: source ?? 'inbox',
     });
     notifyNewLeadCreated(req.tenantId, lead, { userEmail: req.user?.email }).catch(() => {});
+    logLeadActivity({
+      companyId: req.tenantId,
+      leadId: lead.id,
+      eventType: 'lead_created',
+      actorType: 'user',
+      actorUserId: req.user?.id,
+      source: lead.source ?? 'inbox',
+      channel: lead.channel,
+      metadata: {},
+    }).catch(() => {});
     const out = {
       id: lead.id,
       channel: lead.channel,
@@ -354,6 +365,15 @@ router.post('/:leadId/ai-reply', async (req, res) => {
 
     await conversationRepository.appendMessage(leadId, 'assistant', result.assistant_message);
     await leadRepository.touchUpdatedAt(companyId, leadId);
+    logLeadActivity({
+      companyId,
+      leadId,
+      eventType: 'ai_reply_sent',
+      actorType: 'ai',
+      source: lead.source ?? null,
+      channel: lead.channel,
+      metadata: {},
+    }).catch(() => {});
 
     let conversation = await conversationRepository.getByLeadId(leadId);
     const merged = result.parsed_fields ?? result.field_updates ?? {};
@@ -417,6 +437,18 @@ router.post('/:leadId/messages', async (req, res) => {
     }
     await conversationRepository.appendMessage(leadId, role, content);
     await leadRepository.touchUpdatedAt(companyId, leadId);
+    if (role === 'user') {
+      logLeadActivity({
+        companyId,
+        leadId,
+        eventType: 'message_received',
+        actorType: 'user',
+        actorUserId: req.user?.id,
+        source: lead.source ?? null,
+        channel: lead.channel,
+        metadata: {},
+      }).catch(() => {});
+    }
 
     if (role === 'user' && (lead.source ?? 'inbox') === 'inbox') {
       const leadName = lead.name ?? lead.external_id ?? 'Unknown';
@@ -493,10 +525,24 @@ router.patch('/:leadId/status', async (req, res) => {
       const msg = parsed.error.flatten().formErrors?.join?.(' ') || 'status_id (uuid) is required';
       return res.status(400).json({ error: msg });
     }
+    const existing = await leadRepository.findById(req.tenantId, req.params.leadId);
     const lead = await leadRepository.setStatus(req.tenantId, req.params.leadId, parsed.data.status_id);
     if (!lead) {
       return res.status(404).json({ error: 'Lead not found or status invalid for company' });
     }
+    logLeadActivity({
+      companyId: req.tenantId,
+      leadId: lead.id,
+      eventType: 'lead_status_changed',
+      actorType: 'user',
+      actorUserId: req.user?.id,
+      source: lead.source ?? null,
+      channel: lead.channel,
+      metadata: {
+        previous_status: existing?.status_name ?? existing?.status_id ?? null,
+        new_status: lead.status_name ?? lead.status_id ?? null,
+      },
+    }).catch(() => {});
     res.json(lead);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);

@@ -12,6 +12,7 @@ const adminRouter = require('./api/routes/admin');
 const chatbotRouter = require('./api/routes/chatbot');
 const notificationsRouter = require('./api/routes/notifications');
 const settingsRouter = require('./api/routes/settings');
+const crmRouter = require('./api/routes/crmIndex');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -109,6 +110,7 @@ app.use('/api/admin', authMiddleware, tenantMiddleware, apiLimiter, adminRouter)
 app.use('/api/chatbot', authMiddleware, tenantMiddleware, apiLimiter, chatbotRouter);
 app.use('/api/notifications', authMiddleware, tenantMiddleware, apiLimiter, notificationsRouter);
 app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsRouter);
+app.use('/api/crm', authMiddleware, tenantMiddleware, apiLimiter, crmRouter);
 
 app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {

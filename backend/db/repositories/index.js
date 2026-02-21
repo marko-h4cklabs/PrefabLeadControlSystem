@@ -15,6 +15,9 @@ const chatMessagesRepository = require('./chatMessagesRepository');
 const chatAttachmentRepository = require('./chatAttachmentRepository');
 const notificationRepository = require('./notificationRepository');
 const notificationSettingsRepository = require('./notificationSettingsRepository');
+const leadActivitiesRepository = require('./leadActivitiesRepository');
+const leadNotesRepository = require('./leadNotesRepository');
+const leadTasksRepository = require('./leadTasksRepository');
 
 module.exports = {
   companyRepository,
@@ -34,4 +37,7 @@ module.exports = {
   chatAttachmentRepository,
   notificationRepository,
   notificationSettingsRepository,
+  leadActivitiesRepository,
+  leadNotesRepository,
+  leadTasksRepository,
 };
