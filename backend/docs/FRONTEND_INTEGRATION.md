@@ -202,7 +202,18 @@ When pictures preset is enabled and attachments exist, `collected_infos` (or `co
 
 ## F) CRM – Lead Detail (Activity / Notes / Tasks)
 
-Use the **lead UUID** from the current lead (e.g. from route `/inbox/:leadId` or loaded lead detail). Do not use company ID.
+**CRITICAL:** Use the **lead.id** from the loaded Lead Detail. Do NOT use:
+- `companyId` or `company.id`
+- `conversation.id` or `conversation_id`
+- Any ID from the URL that is not the lead UUID
+
+**Frontend guard:** Before calling CRM endpoints, validate `leadId`:
+```js
+if (!leadId || typeof leadId !== 'string' || !/^[0-9a-f-]{36}$/i.test(leadId)) {
+  // Show friendly message: "Unable to load CRM data"
+  return;
+}
+```
 
 ### Endpoints (flat route – recommended)
 
