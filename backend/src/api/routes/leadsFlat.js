@@ -6,6 +6,7 @@ const {
   companyLeadStatusesRepository,
   conversationRepository,
   chatAttachmentRepository,
+  notificationRepository,
 } = require('../../../db/repositories');
 
 const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
@@ -271,6 +272,18 @@ router.post('/', async (req, res) => {
       external_id: external_id ?? (normalizedName || undefined),
       source: source ?? 'inbox',
     });
+    const leadSource = lead.source ?? source ?? 'inbox';
+    if (leadSource === 'inbox') {
+      const leadName = lead.name ?? lead.external_id ?? 'Unknown';
+      const body = `${leadName} (${lead.channel})`;
+      await notificationRepository.create(req.tenantId, {
+        leadId: lead.id,
+        type: 'new_lead',
+        title: 'New inquiry',
+        body,
+        url: `/inbox/${lead.id}`,
+      }).catch(() => {});
+    }
     res.status(201).json(toLeadResponse(lead));
   } catch (err) {
     if (err.code === '23505') {

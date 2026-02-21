@@ -17,6 +17,7 @@ psql $DATABASE_URL -f backend/db/migrations/019_quote_presets.sql
 psql $DATABASE_URL -f backend/db/migrations/021_quote_presets_groups_and_new_fields.sql
 psql $DATABASE_URL -f backend/db/migrations/022_chat_attachments.sql
 psql $DATABASE_URL -f backend/db/migrations/023_pictures_preset_type.sql
+psql $DATABASE_URL -f backend/db/migrations/024_notifications.sql
 ```
 
 ## Company Info
@@ -177,4 +178,24 @@ curl -s -X POST "$BASE_URL/api/leads/LEAD_ID/attachments" \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@/path/to/image.jpg"
 # Response: { attachment_id, url, mime_type, file_name }
+
+## Notifications
+
+# List notifications (limit, offset, unreadOnly)
+curl -s -X GET "$BASE_URL/api/notifications?limit=20&offset=0&unreadOnly=false" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: COMPANY_ID"
+# Response: { notifications: [{ id, type, title, body, url, is_read, created_at, lead_id }], total, unreadCount }
+
+# Mark one notification as read
+curl -s -X POST "$BASE_URL/api/notifications/NOTIFICATION_ID/read" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: COMPANY_ID"
+# Response: { id, type, title, body, url, is_read, created_at, lead_id }
+
+# Mark all notifications as read
+curl -s -X POST "$BASE_URL/api/notifications/read-all" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-company-id: COMPANY_ID"
+# Response: { ok: true }
 ```

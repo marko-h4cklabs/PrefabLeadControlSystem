@@ -13,6 +13,7 @@ const chatConversationRepository = require('./chatConversationRepository');
 const chatConversationFieldsRepository = require('./chatConversationFieldsRepository');
 const chatMessagesRepository = require('./chatMessagesRepository');
 const chatAttachmentRepository = require('./chatAttachmentRepository');
+const notificationRepository = require('./notificationRepository');
 
 module.exports = {
   companyRepository,
@@ -30,4 +31,5 @@ module.exports = {
   chatConversationFieldsRepository,
   chatMessagesRepository,
   chatAttachmentRepository,
+  notificationRepository,
 };

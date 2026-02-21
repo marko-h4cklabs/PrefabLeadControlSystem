@@ -21,6 +21,7 @@ const {
   chatbotQuoteFieldsRepository,
   companyLeadStatusesRepository,
   chatAttachmentRepository,
+  notificationRepository,
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
@@ -117,6 +118,18 @@ router.post('/', async (req, res) => {
       external_id: external_id ?? (normalizedName || undefined),
       source: source ?? 'inbox',
     });
+    const leadSource = lead.source ?? source ?? 'inbox';
+    if (leadSource === 'inbox') {
+      const leadName = lead.name ?? lead.external_id ?? 'Unknown';
+      const body = `${leadName} (${lead.channel})`;
+      await notificationRepository.create(req.tenantId, {
+        leadId: lead.id,
+        type: 'new_lead',
+        title: 'New inquiry',
+        body,
+        url: `/inbox/${lead.id}`,
+      }).catch(() => {});
+    }
     const out = {
       id: lead.id,
       channel: lead.channel,
@@ -414,6 +427,19 @@ router.post('/:leadId/messages', async (req, res) => {
     }
     await conversationRepository.appendMessage(leadId, role, content);
     await leadRepository.touchUpdatedAt(companyId, leadId);
+
+    if (role === 'user' && (lead.source ?? 'inbox') === 'inbox') {
+      const leadName = lead.name ?? lead.external_id ?? 'Unknown';
+      const snippet = String(content ?? '').slice(0, 80);
+      const body = snippet ? `${leadName}: ${snippet}${snippet.length >= 80 ? '…' : ''}` : leadName;
+      await notificationRepository.create(companyId, {
+        leadId,
+        type: 'new_message',
+        title: 'New message',
+        body,
+        url: `/inbox/${leadId}/conversation`,
+      }).catch(() => {});
+    }
 
     if (role === 'user') {
       conversation = await conversationRepository.getByLeadId(leadId);

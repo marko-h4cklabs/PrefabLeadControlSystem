@@ -185,3 +185,15 @@ When pictures preset is enabled and attachments exist, `collected_infos` (or `co
     <a key={url} href={url} target="_blank" rel="noopener noreferrer">{label}</a>
   ))}
 ```
+
+---
+
+## E) In-app Notifications
+
+- **GET** `/api/notifications?limit=20&offset=0&unreadOnly=false` — list notifications
+- **POST** `/api/notifications/:id/read` — mark one as read
+- **POST** `/api/notifications/read-all` — mark all as read
+
+**Response:** `{ notifications: [...], total, unreadCount }` — each notification: `{ id, type, title, body, url, is_read, created_at, lead_id }`
+
+**Types:** `new_lead`, `new_message`. Use `url` to navigate (e.g. `/inbox/<leadId>`, `/inbox/<leadId>/conversation`).
