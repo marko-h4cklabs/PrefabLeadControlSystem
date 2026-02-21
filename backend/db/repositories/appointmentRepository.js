@@ -17,28 +17,41 @@ const FROM_JOINED = `
 
 function toDto(row) {
   if (!row) return null;
+  const leadObj = row.lead_name != null || row.lead_channel != null ? {
+    id: row.lead_id,
+    name: row.lead_name ?? null,
+    channel: row.lead_channel ?? null,
+    status: row.lead_status ?? null,
+  } : null;
   return {
     id: row.id,
+    // snake_case
     company_id: row.company_id,
     lead_id: row.lead_id,
-    lead: row.lead_name != null || row.lead_channel != null ? {
-      id: row.lead_id,
-      name: row.lead_name ?? null,
-      channel: row.lead_channel ?? null,
-      status: row.lead_status ?? null,
-    } : null,
-    title: row.title ?? null,
     appointment_type: row.appointment_type ?? 'call',
-    status: row.status ?? 'scheduled',
     start_at: row.start_at ?? null,
     end_at: row.end_at ?? null,
-    timezone: row.timezone ?? 'Europe/Zagreb',
-    notes: row.notes ?? null,
-    source: row.source ?? 'manual',
     reminder_minutes_before: row.reminder_minutes_before ?? null,
     created_by_user_id: row.created_by_user_id ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // camelCase
+    companyId: row.company_id,
+    leadId: row.lead_id,
+    appointmentType: row.appointment_type ?? 'call',
+    startAt: row.start_at ?? null,
+    endAt: row.end_at ?? null,
+    reminderMinutesBefore: row.reminder_minutes_before ?? null,
+    createdByUserId: row.created_by_user_id ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    // shared (already single-word)
+    lead: leadObj,
+    title: row.title ?? null,
+    status: row.status ?? 'scheduled',
+    timezone: row.timezone ?? 'Europe/Zagreb',
+    notes: row.notes ?? null,
+    source: row.source ?? 'manual',
   };
 }
 

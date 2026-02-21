@@ -11,10 +11,16 @@ const {
 } = require('../validators/appointmentSchemas');
 const { errorJson } = require('../middleware/errors');
 
-function validationError(res, parsed) {
+function validationError(res, parsed, debugCtx) {
   const err = parsed.error.flatten();
-  const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {}).flat()?.[0] ?? 'Validation failed';
-  return errorJson(res, 400, 'VALIDATION_ERROR', msg);
+  const fieldMsgs = Object.entries(err.fieldErrors ?? {})
+    .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
+    .filter(Boolean);
+  const msg = err.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
+  if (process.env.NODE_ENV !== 'production') {
+    console.debug('[appointments] validation failed:', { msg, fields: Object.keys(err.fieldErrors ?? {}), ...debugCtx });
+  }
+  return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg, fields: err.fieldErrors } });
 }
 
 function fmtTime(iso) {
@@ -39,7 +45,7 @@ function logDbError(tag, err, extra = {}) {
 router.post('/', async (req, res) => {
   try {
     const parsed = createAppointmentSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed);
+    if (!parsed.success) return validationError(res, parsed, { route: 'POST /', bodyKeys: Object.keys(req.body || {}) });
 
     const { lead_id, title, appointment_type, status, start_at, end_at, timezone, notes, source, reminder_minutes_before } = parsed.data;
     const companyId = req.tenantId;
@@ -93,7 +99,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const parsed = listAppointmentsSchema.safeParse(req.query);
-    if (!parsed.success) return validationError(res, parsed);
+    if (!parsed.success) return validationError(res, parsed, { route: 'GET /', queryKeys: Object.keys(req.query || {}) });
 
     const { from, to, status, appointment_type, source, lead_id, limit, offset } = parsed.data;
     const companyId = req.tenantId;
@@ -119,7 +125,7 @@ router.get('/', async (req, res) => {
 router.get('/upcoming', async (req, res) => {
   try {
     const parsed = upcomingSchema.safeParse(req.query);
-    if (!parsed.success) return validationError(res, parsed);
+    if (!parsed.success) return validationError(res, parsed, { route: 'GET /upcoming' });
 
     const items = await appointmentRepository.upcoming(req.tenantId, {
       limit: parsed.data.limit,
@@ -149,7 +155,7 @@ router.get('/:id', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const parsed = updateAppointmentSchema.safeParse(req.body);
-    if (!parsed.success) return validationError(res, parsed);
+    if (!parsed.success) return validationError(res, parsed, { route: 'PATCH /:id', bodyKeys: Object.keys(req.body || {}) });
 
     const companyId = req.tenantId;
     const existing = await appointmentRepository.findById(companyId, req.params.id);
@@ -199,7 +205,7 @@ router.patch('/:id', async (req, res) => {
 router.post('/:id/cancel', async (req, res) => {
   try {
     const parsed = cancelSchema.safeParse(req.body || {});
-    if (!parsed.success) return validationError(res, parsed);
+    if (!parsed.success) return validationError(res, parsed, { route: 'POST /:id/cancel' });
 
     const companyId = req.tenantId;
     const existing = await appointmentRepository.findById(companyId, req.params.id);
