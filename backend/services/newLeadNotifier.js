@@ -5,6 +5,7 @@
 
 const { notificationRepository, notificationSettingsRepository, companyRepository } = require('../db/repositories');
 const { sendNewLeadEmail } = require('./emailService');
+const { getCollectedInfosForLead } = require('./collectedInfoService');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -74,8 +75,15 @@ async function notifyNewLeadCreated(companyId, lead, opts = {}) {
   const recipients = await getRecipientEmails(companyId, settings, fallbackEmails);
   if (recipients.length === 0) return;
 
+  let collectedInfos = [];
+  try {
+    collectedInfos = await getCollectedInfosForLead(companyId, lead.id);
+  } catch (err) {
+    console.error('[newLeadNotifier] Failed to load collected info:', err.message);
+  }
+
   const baseUrl = process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0]?.trim() : null;
-  await sendNewLeadEmail(recipients, lead, baseUrl);
+  await sendNewLeadEmail(recipients, lead, { baseUrl, collectedInfos });
 }
 
 module.exports = { notifyNewLeadCreated };
