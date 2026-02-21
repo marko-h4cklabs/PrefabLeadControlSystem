@@ -40,6 +40,7 @@ function computeFieldsState(quoteFields, collectedFields) {
       units: c.units ?? null,
       value: c.value,
       priority: c.priority ?? 100,
+      ...(c.links != null && { links: c.links }),
     }));
 
   return { required_infos, collected_infos };
@@ -68,6 +69,7 @@ function buildHighlights(quoteFields, collectedInfos, requiredInfos, behavior) {
     type: c.type ?? 'text',
     units: c.units ?? null,
     value: c.value,
+    ...(c.links != null && { links: c.links }),
   }));
   const step_index = collected.length;
   const is_complete = (requiredInfos ?? []).length === 0;

@@ -24,6 +24,7 @@ const {
 } = require('../../../db/repositories');
 const aiReplyService = require('../../../services/aiReplyService');
 const { computeFieldsState } = require('../../chat/fieldsState');
+const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
 const { errorJson } = require('../middleware/errors');
 const {
   VALID_CHANNELS,
@@ -148,10 +149,6 @@ function toLeadPublic(lead) {
   };
 }
 
-function buildAttachmentUrls(attachments, baseUrl) {
-  return (attachments ?? []).map((a) => `${baseUrl.replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
-}
-
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
@@ -163,13 +160,12 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     .map(([name, value]) => {
       const qf = quoteByName[name];
       const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
-      return {
-        name,
-        value,
-        type,
-        units: qf?.units ?? null,
-        priority: qf?.priority ?? 100,
-      };
+      const base = { name, type, units: qf?.units ?? null, priority: qf?.priority ?? 100 };
+      if (name === 'pictures') {
+        const { value: urls, links } = picturesToCollected(value);
+        return { ...base, value: urls, links };
+      }
+      return { ...base, value };
     });
 }
 
@@ -191,8 +187,8 @@ router.get('/:leadId', async (req, res) => {
         const attachments = await chatAttachmentRepository.getByLeadId(req.tenantId, req.params.leadId);
         if (attachments.length > 0) {
           const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
-          const urls = buildAttachmentUrls(attachments, baseUrl);
-          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+          const { value: urls, links } = attachmentsToPicturesCollected(attachments, baseUrl);
+          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, links, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
         }
       }
     }
@@ -202,6 +198,7 @@ router.get('/:leadId', async (req, res) => {
       type: c.type ?? 'text',
       value: c.value,
       units: c.units ?? null,
+      ...(c.links && { links: c.links }),
     }));
     res.json({
       id: lead.id,
@@ -245,8 +242,8 @@ router.get('/:leadId/conversation', async (req, res) => {
           const attachments = await chatAttachmentRepository.getByLeadId(companyId, leadId);
           if (attachments.length > 0) {
             const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
-            const urls = buildAttachmentUrls(attachments, baseUrl);
-            collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+            const { value: urls, links } = attachmentsToPicturesCollected(attachments, baseUrl);
+            collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, links, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
           }
         }
       }
@@ -263,6 +260,7 @@ router.get('/:leadId/conversation', async (req, res) => {
         type: c.type ?? 'text',
         value: c.value,
         units: c.units ?? null,
+        ...(c.links && { links: c.links }),
       }));
     } else {
       const fields = await chatbotQuoteFieldsRepository.list(companyId);
@@ -323,8 +321,7 @@ router.post('/:leadId/attachments', upload.single('file'), async (req, res) => {
       conv = await conversationRepository.createIfNotExists(leadId, companyId);
     }
     const parsed = conv?.parsed_fields ?? {};
-    const pictures = Array.isArray(parsed.pictures) ? [...parsed.pictures] : [];
-    pictures.push(url);
+    const pictures = appendPictureToParsed(parsed.pictures, url);
     await conversationRepository.updateParsedFields(leadId, { ...parsed, pictures });
 
     res.status(201).json({
@@ -378,6 +375,7 @@ router.post('/:leadId/ai-reply', async (req, res) => {
       type: c.type ?? 'text',
       value: c.value,
       units: c.units ?? null,
+      ...(c.links && { links: c.links }),
     }));
     res.json({
       assistant_message: result.assistant_message,
@@ -428,14 +426,32 @@ router.post('/:leadId/messages', async (req, res) => {
     }
 
     conversation = await conversationRepository.getByLeadId(leadId);
-    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean'];
+    const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
     const orderedQuoteFields = (conversation?.quote_snapshot ?? [])
       .filter((f) => f && validTypes.includes(f.type))
       .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-    const collectedFromParsed = parsedFieldsToCollected(conversation?.parsed_fields ?? {}, orderedQuoteFields);
+    let collectedFromParsed = parsedFieldsToCollected(conversation?.parsed_fields ?? {}, orderedQuoteFields);
+    const picturesPreset = (orderedQuoteFields ?? []).find((f) => f?.name === 'pictures' && f?.is_enabled !== false);
+    if (picturesPreset) {
+      const hasPictures = collectedFromParsed.some((c) => c.name === 'pictures');
+      if (!hasPictures) {
+        const attachments = await chatAttachmentRepository.getByLeadId(companyId, leadId);
+        if (attachments.length > 0) {
+          const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
+          const { value: urls, links } = attachmentsToPicturesCollected(attachments, baseUrl);
+          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, links, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+        }
+      }
+    }
     const { required_infos: missingRequired, collected_infos: collectedInfos } = computeFieldsState(orderedQuoteFields, collectedFromParsed);
     const lookingFor = (missingRequired ?? []).map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
-    const collected = (collectedInfos ?? []).map((c) => ({ name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null }));
+    const collected = (collectedInfos ?? []).map((c) => ({
+      name: c.name,
+      type: c.type ?? 'text',
+      value: c.value,
+      units: c.units ?? null,
+      ...(c.links && { links: c.links }),
+    }));
 
     res.json({
       lead_id: leadId,

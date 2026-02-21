@@ -157,14 +157,31 @@ When pictures preset is enabled and attachments exist, `collected_infos` (or `co
 {
   "name": "pictures",
   "type": "pictures",
-  "value": ["https://.../public/attachments/...", "https://.../public/attachments/..."]
+  "value": ["https://.../public/attachments/...", "https://.../public/attachments/..."],
+  "links": [
+    { "label": "Picture 1", "url": "https://..." },
+    { "label": "Picture 2", "url": "https://..." }
+  ]
 }
 ```
 
-**Display example:**
+- `value`: array of URLs for thumbnails (`<img src="...">`)
+- `links`: array of `{label, url}` for hyperlink rendering
+
+**Thumbnail display:**
 ```jsx
 {collected_infos
   ?.filter(c => c.name === 'pictures' && Array.isArray(c.value))
   ?.flatMap(c => c.value)
   ?.map(url => <img key={url} src={url} alt="Attachment" />)}
+```
+
+**Hyperlink display:**
+```jsx
+{collected_infos
+  ?.find(c => c.name === 'pictures')
+  ?.links
+  ?.map(({ label, url }) => (
+    <a key={url} href={url} target="_blank" rel="noopener noreferrer">{label}</a>
+  ))}
 ```

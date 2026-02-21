@@ -22,6 +22,7 @@ const upload = multer({
 });
 const { errorJson } = require('../middleware/errors');
 const { computeFieldsState } = require('../../chat/fieldsState');
+const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
 const {
   listLeadsQuerySchema,
   createLeadBodySchema,
@@ -130,10 +131,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-function buildAttachmentUrls(attachments, baseUrl) {
-  return (attachments ?? []).map((a) => `${baseUrl.replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
-}
-
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
@@ -145,13 +142,12 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     .map(([name, value]) => {
       const qf = quoteByName[name];
       const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
-      return {
-        name,
-        value,
-        type,
-        units: qf?.units ?? null,
-        priority: qf?.priority ?? 100,
-      };
+      const base = { name, type, units: qf?.units ?? null, priority: qf?.priority ?? 100 };
+      if (name === 'pictures') {
+        const { value: urls, links } = picturesToCollected(value);
+        return { ...base, value: urls, links };
+      }
+      return { ...base, value };
     });
 }
 
@@ -174,8 +170,8 @@ router.get('/:id', async (req, res) => {
         const attachments = await chatAttachmentRepository.getByLeadId(req.tenantId, req.params.id);
         if (attachments.length > 0) {
           const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
-          const urls = buildAttachmentUrls(attachments, baseUrl);
-          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+          const { value: urls, links } = attachmentsToPicturesCollected(attachments, baseUrl);
+          collectedFromParsed = [...collectedFromParsed, { name: 'pictures', value: urls, links, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
         }
       }
     }
@@ -185,6 +181,7 @@ router.get('/:id', async (req, res) => {
       type: c.type ?? 'text',
       value: c.value,
       units: c.units ?? null,
+      ...(c.links && { links: c.links }),
     }));
     res.json({
       id: lead.id,
@@ -236,8 +233,7 @@ router.post('/:id/attachments', upload.single('file'), async (req, res) => {
       conv = await conversationRepository.createIfNotExists(leadId, companyId);
     }
     const parsed = conv?.parsed_fields ?? {};
-    const pictures = Array.isArray(parsed.pictures) ? [...parsed.pictures] : [];
-    pictures.push(url);
+    const pictures = appendPictureToParsed(parsed.pictures, url);
     await conversationRepository.updateParsedFields(leadId, { ...parsed, pictures });
 
     res.status(201).json({

@@ -18,12 +18,9 @@ const {
 } = require('../src/chat/conversationHelpers');
 const { generateGreeting, generateClosing } = require('../src/chat/greetingClosingService');
 const { buildHighlights } = require('../src/chat/fieldsState');
+const { picturesToCollected, attachmentsToPicturesCollected } = require('../src/chat/picturesHelpers');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-
-function buildAttachmentUrls(attachments, baseUrl) {
-  return (attachments ?? []).map((a) => `${(baseUrl || '').replace(/\/+$/, '')}/public/attachments/${a.id}/${a.public_token}`);
-}
 
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
@@ -42,13 +39,12 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
         else return null;
       }
       const type = name === 'pictures' ? 'pictures' : (qf?.type ?? 'text');
-      return {
-        name,
-        value: displayValue,
-        type,
-        units: qf?.units ?? null,
-        priority: qf?.priority ?? 100,
-      };
+      const base = { name, type, units: qf?.units ?? null, priority: qf?.priority ?? 100 };
+      if (name === 'pictures') {
+        const { value: urls, links } = picturesToCollected(displayValue);
+        return { ...base, value: urls, links };
+      }
+      return { ...base, value: displayValue };
     })
     .filter(Boolean);
 }
@@ -202,8 +198,8 @@ async function generateAiReply(companyId, leadId) {
       const attachments = await chatAttachmentRepository.getByLeadId(companyId, leadId);
       if (attachments.length > 0) {
         const baseUrl = process.env.BACKEND_URL || 'http://localhost:3000';
-        const urls = buildAttachmentUrls(attachments, baseUrl);
-        finalCollectedFromParsed = [...finalCollectedFromParsed, { name: 'pictures', value: urls, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
+        const { value: urls, links } = attachmentsToPicturesCollected(attachments, baseUrl);
+        finalCollectedFromParsed = [...finalCollectedFromParsed, { name: 'pictures', value: urls, links, type: 'pictures', units: null, priority: picturesPreset.priority ?? 100 }];
       }
     }
   }
