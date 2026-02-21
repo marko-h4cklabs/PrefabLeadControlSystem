@@ -2,7 +2,7 @@ const { pool } = require('../index');
 
 async function getOrCreateActiveConversation(companyId) {
   const existing = await pool.query(
-    `SELECT id, company_id, created_at, updated_at
+    `SELECT id, company_id, created_at, updated_at, quote_snapshot
      FROM chat_conversations
      WHERE company_id = $1
      ORDER BY updated_at DESC
@@ -18,7 +18,7 @@ async function createConversation(companyId) {
   const result = await pool.query(
     `INSERT INTO chat_conversations (company_id, updated_at)
      VALUES ($1, NOW())
-     RETURNING id, company_id, created_at, updated_at`,
+     RETURNING id, company_id, created_at, updated_at, quote_snapshot`,
     [companyId]
   );
   return result.rows[0];
@@ -26,10 +26,17 @@ async function createConversation(companyId) {
 
 async function getConversation(conversationId, companyId) {
   const result = await pool.query(
-    'SELECT id, company_id, created_at, updated_at FROM chat_conversations WHERE id = $1 AND company_id = $2',
+    'SELECT id, company_id, created_at, updated_at, quote_snapshot FROM chat_conversations WHERE id = $1 AND company_id = $2',
     [conversationId, companyId]
   );
   return result.rows[0] ?? null;
+}
+
+async function updateQuoteSnapshot(conversationId, companyId, snapshot) {
+  await pool.query(
+    'UPDATE chat_conversations SET quote_snapshot = $3, updated_at = NOW() WHERE id = $1 AND company_id = $2',
+    [conversationId, companyId, JSON.stringify(snapshot)]
+  );
 }
 
 async function getOrCreateState(conversationId, companyId) {
@@ -80,4 +87,4 @@ async function updateState(conversationId, companyId, patch) {
   return res.rows[0];
 }
 
-module.exports = { createConversation, getConversation, getOrCreateState, updateState };
+module.exports = { createConversation, getConversation, getOrCreateState, updateState, updateQuoteSnapshot };

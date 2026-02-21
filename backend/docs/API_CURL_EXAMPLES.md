@@ -12,10 +12,10 @@ Both `/quote-fields` and `/quote-presets` expose the same behavior. Use whicheve
 
 ### GET /api/chatbot/quote-fields (or /api/chatbot/quote-presets)
 
-Returns the 11 preset quote fields with `is_enabled` and `config`.
+Returns all preset quote fields with `is_enabled`, `config`, and `priority` (ask-order).
 
 **Response:** `{ presets: [...], fields: [...] }` — each preset has:
-- `name`, `label`, `description`, `type`, `is_enabled`, `config`, `priority`, `required`
+- `name`, `label`, `description`, `type`, `units`, `priority`, `required`, `is_enabled`, `config` (includes `group`: basic|detailed)
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3000/api/chatbot/quote-fields"
@@ -32,9 +32,9 @@ Save preset settings. Accepts multiple payload shapes for backward compatibility
 2. `{ "fields": [...] }`
 3. `[...]` (raw array)
 
-**Preset object:** `{ "name": string, "is_enabled"?: boolean, "config"?: object }`
+**Preset object:** `{ "name": string, "is_enabled"?: boolean, "priority"?: number, "config"?: object }`
 
-**Allowed preset names:** budget, location, email_address, phone_number, full_name, additional_notes, doors, windows, colors, dimensions, roof
+**Allowed preset names:** budget, location, time_window, email_address, phone_number, full_name, additional_notes, pictures, object_type, doors, windows, colors, dimensions, roof, ground_condition, utility_connections, completion_level
 
 ```bash
 # Canonical shape: { presets: [...] }

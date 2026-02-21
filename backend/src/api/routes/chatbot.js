@@ -234,7 +234,6 @@ router.post('/chat', async (req, res) => {
 
     const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
     const orderedQuoteFields = enabledFields.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-    const quoteFieldMeta = Object.fromEntries(orderedQuoteFields.map((f) => [f.name, { type: f.type, units: f.units }]));
 
     let conversation;
     if (reqConversationId) {
@@ -246,17 +245,36 @@ router.post('/chat', async (req, res) => {
       conversation = await chatConversationRepository.getOrCreateActiveConversation(companyId);
     }
     const conversationId = conversation.id;
+
+    let fieldsForChat = orderedQuoteFields;
+    const snapshot = conversation.quote_snapshot;
+    if (snapshot != null && Array.isArray(snapshot) && snapshot.length > 0) {
+      fieldsForChat = snapshot.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    } else {
+      const snapshotData = orderedQuoteFields.map((f) => ({
+        name: f.name,
+        type: f.type,
+        units: f.units ?? null,
+        priority: f.priority ?? 100,
+        required: f.required !== false,
+        is_enabled: true,
+        config: f.config ?? {},
+      }));
+      await chatConversationRepository.updateQuoteSnapshot(conversationId, companyId, snapshotData);
+    }
+    const orderedQuoteFieldsForChat = fieldsForChat;
+    const quoteFieldMeta = Object.fromEntries(orderedQuoteFieldsForChat.map((f) => [f.name, { type: f.type, units: f.units }]));
     const assistantCountBefore = await chatMessagesRepository.countByRole(conversationId, 'assistant');
-    const allowedFieldNames = getAllowedFieldNames(orderedQuoteFields);
+    const allowedFieldNames = getAllowedFieldNames(orderedQuoteFieldsForChat);
 
     await chatMessagesRepository.appendMessage(conversationId, 'user', message);
 
-    const { extracted: extractedArr } = await extractFieldsWithClaude(message, orderedQuoteFields);
+    const { extracted: extractedArr } = await extractFieldsWithClaude(message, orderedQuoteFieldsForChat);
     await chatConversationFieldsRepository.upsertMany(conversationId, extractedArr ?? [], quoteFieldMeta);
 
-    const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
+    const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFieldsForChat);
     const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
-      orderedQuoteFields,
+      orderedQuoteFieldsForChat,
       collectedFromDb
     );
     const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
@@ -265,7 +283,7 @@ router.post('/chat', async (req, res) => {
     console.info('[chat]', {
       companyId,
       conversationId,
-      quoteFieldsLoaded: { count: orderedQuoteFields.length, names: orderedQuoteFields.map((f) => f.name) },
+      quoteFieldsLoaded: { count: orderedQuoteFieldsForChat.length, names: orderedQuoteFieldsForChat.map((f) => f.name) },
       extractionOutput: extractedArr,
       required_infos_length: requiredInfos.length,
       collected_infos_length: collectedInfos.length,
@@ -276,7 +294,7 @@ router.post('/chat', async (req, res) => {
       },
     });
 
-    const highlights = buildHighlights(orderedQuoteFields, collectedInfos, requiredInfos, behavior);
+    const highlights = buildHighlights(orderedQuoteFieldsForChat, collectedInfos, requiredInfos, behavior);
 
     if (missingFields.length > 0) {
       const nextField = missingFields[0];
@@ -298,7 +316,7 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
+    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, []);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
     if (shouldGreet(assistantCountBefore)) {
@@ -338,12 +356,17 @@ router.get('/conversation/:conversationId/fields', async (req, res) => {
     ]);
     const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
     const orderedQuoteFields = enabledFields.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-    const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, orderedQuoteFields);
+    let fieldsForChat = orderedQuoteFields;
+    const snapshot = conv.quote_snapshot;
+    if (snapshot != null && Array.isArray(snapshot) && snapshot.length > 0) {
+      fieldsForChat = snapshot.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    }
+    const collectedFromDb = await chatConversationFieldsRepository.getFields(conversationId, fieldsForChat);
     const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
-      orderedQuoteFields,
+      fieldsForChat,
       collectedFromDb
     );
-    const highlights = buildHighlights(orderedQuoteFields, collectedInfos, requiredInfos, behavior);
+    const highlights = buildHighlights(fieldsForChat, collectedInfos, requiredInfos, behavior);
     return res.json({
       conversation_id: conversationId,
       required_infos: requiredInfos,

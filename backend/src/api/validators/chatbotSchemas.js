@@ -32,8 +32,9 @@ const behaviorBodySchema = z.object({
 });
 
 const PRESET_NAMES = [
-  'budget', 'location', 'email_address', 'phone_number', 'full_name',
-  'additional_notes', 'doors', 'windows', 'colors', 'dimensions', 'roof',
+  'budget', 'location', 'time_window', 'email_address', 'phone_number', 'full_name',
+  'additional_notes', 'pictures', 'object_type', 'doors', 'windows', 'colors',
+  'dimensions', 'roof', 'ground_condition', 'utility_connections', 'completion_level',
 ];
 
 const BUDGET_UNITS = ['EUR', 'USD'];
@@ -57,14 +58,14 @@ function normalizePresetConfig(name, raw) {
     let defaultUnit = raw.defaultUnit;
     if (!defaultUnit || !BUDGET_UNITS.includes(defaultUnit)) defaultUnit = 'EUR';
     if (!units.includes(defaultUnit)) defaultUnit = units[0] ?? 'EUR';
-    return { units, defaultUnit };
+    return { units, defaultUnit, group: 'basic' };
   }
 
-  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(name)) {
+  if (['location', 'time_window', 'doors', 'windows', 'colors', 'roof', 'object_type', 'ground_condition', 'utility_connections', 'completion_level'].includes(name)) {
     const options = Array.isArray(raw.options)
       ? raw.options.map((o) => String(o).trim()).filter((s) => s.length >= 1 && s.length <= 40).slice(0, 100)
-      : [];
-    return { options };
+      : (name === 'completion_level' ? ['Structural phase', 'Fully finished turnkey'] : []);
+    return { options, group: ['location', 'time_window', 'object_type'].includes(name) ? 'basic' : 'detailed' };
   }
 
   if (name === 'dimensions') {
@@ -73,20 +74,27 @@ function normalizePresetConfig(name, raw) {
       : [...DIMENSION_PARTS];
     if (enabledParts.length === 0) enabledParts = [...DIMENSION_PARTS];
     const unit = raw.unit === 'cm' ? 'cm' : 'm';
-    return { enabledParts, unit };
+    return { enabledParts, unit, group: 'detailed' };
   }
 
   if (['email_address', 'phone_number', 'full_name', 'additional_notes'].includes(name)) {
-    return {};
+    return { group: 'basic' };
+  }
+
+  if (name === 'pictures') {
+    return { group: 'basic' };
   }
 
   return {};
 }
 
 function getDefaultConfigForPreset(name) {
-  if (name === 'budget') return { units: ['EUR', 'USD'], defaultUnit: 'EUR' };
-  if (['location', 'doors', 'windows', 'colors', 'roof'].includes(name)) return { options: [] };
-  if (name === 'dimensions') return { enabledParts: ['length', 'width', 'height'], unit: 'm' };
+  if (name === 'budget') return { units: ['EUR', 'USD'], defaultUnit: 'EUR', group: 'basic' };
+  if (['location', 'time_window', 'doors', 'windows', 'colors', 'roof', 'object_type', 'ground_condition', 'utility_connections'].includes(name)) return { options: [], group: ['location', 'time_window', 'object_type'].includes(name) ? 'basic' : 'detailed' };
+  if (name === 'completion_level') return { options: ['Structural phase', 'Fully finished turnkey'], group: 'detailed' };
+  if (name === 'dimensions') return { enabledParts: ['length', 'width', 'height'], unit: 'm', group: 'detailed' };
+  if (name === 'pictures') return { group: 'basic' };
+  if (['email_address', 'phone_number', 'full_name', 'additional_notes'].includes(name)) return { group: 'basic' };
   return {};
 }
 
@@ -94,11 +102,13 @@ const presetUpdateSchema = z
   .object({
     name: z.enum(PRESET_NAMES),
     is_enabled: z.boolean().optional(),
+    priority: z.number().int().min(0).optional(),
     config: z.unknown().optional(),
   })
   .transform((d) => ({
     name: d.name,
     is_enabled: d.is_enabled,
+    priority: d.priority,
     config: normalizePresetConfig(d.name, d.config),
   }));
 
@@ -114,7 +124,7 @@ const quotePresetsBodySchema = z.preprocess(
     return { presets: [] };
   },
   z.object({
-    presets: z.array(presetUpdateSchema).max(11),
+    presets: z.array(presetUpdateSchema).max(20),
   })
 );
 

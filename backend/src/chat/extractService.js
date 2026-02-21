@@ -12,6 +12,7 @@ function buildExtractionPrompt(quoteFields) {
       if (f.config?.units) line += ` allowed units: ${(f.config.units || []).join(', ')}`;
       if (f.config?.options?.length) line += ` allowed values: ${(f.config.options || []).slice(0, 20).join(', ')}${(f.config.options || []).length > 20 ? '...' : ''}`;
       if (f.config?.enabledParts?.length) line += ` parts: ${(f.config.enabledParts || []).join(', ')}`;
+      if (f.type === 'boolean') line += ' (yes/no, true/false)';
       if (f.required !== false) line += ' [required]';
       return line;
     })
@@ -27,12 +28,13 @@ Rules:
 - ONLY output values for the enabled fields above. Do NOT extract any field not in the list.
 - For type "number": extract numeric value. Use exact field names.
 - For type "text": extract the value. For email_address validate email format; for phone_number validate phone format.
-- For type "select_multi": if options list exists, value must be from that list or a valid subset.
+- For type "boolean" (e.g. pictures): extract yes/no or true/false. Store as "true" or "false" string.
+- For type "select_multi": if options list exists, value must be from that list or a valid subset. For time_window, object_type, ground_condition, utility_connections, completion_level: extract as string or list.
 - For type "composite_dimensions": extract only enabled parts (length/width/height) and unit.
 - Include confidence 0-1 for each extracted value.
 
 Output format:
-{"extracted":[{"name":"fieldName","value":<value>,"type":"text|number","units":null,"confidence":0.9}]}
+{"extracted":[{"name":"fieldName","value":<value>,"type":"text|number|boolean","units":null,"confidence":0.9}]}
 
 If nothing found: {"extracted":[]}`;
 }
@@ -78,11 +80,15 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
       .filter((e) => e?.name != null && e?.value != null)
       .map((e) => {
         const name = String(e.name ?? '').trim();
-        const type = (e.type ?? 'text').toLowerCase() === 'number' ? 'number' : 'text';
+        const rawType = (e.type ?? 'text').toLowerCase();
+        const type = rawType === 'number' ? 'number' : rawType === 'boolean' ? 'boolean' : 'text';
         let value = e.value;
         if (type === 'number' && value != null) {
           const num = Number(value);
           value = Number.isFinite(num) ? num : value;
+        } else if (type === 'boolean' && value != null) {
+          const v = String(value).toLowerCase();
+          value = ['true', 'yes', '1'].includes(v) ? 'true' : 'false';
         } else if (type === 'text' && value != null) {
           value = String(value).trim();
         }
