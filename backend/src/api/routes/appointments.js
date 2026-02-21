@@ -19,8 +19,20 @@ function validationError(res, parsed) {
 
 function fmtTime(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch { return String(iso); }
+}
+
+function logDbError(tag, err, extra = {}) {
+  console.error(`[appointments] ${tag}:`, {
+    message: err.message,
+    code: err.code,
+    detail: err.detail,
+    where: err.where,
+    ...extra,
+  });
 }
 
 // POST /api/appointments
@@ -72,7 +84,7 @@ router.post('/', async (req, res) => {
 
     res.status(201).json(appointment);
   } catch (err) {
-    console.error('[appointments] create error:', err.message);
+    logDbError('create', err);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create appointment');
   }
 });
@@ -98,12 +110,12 @@ router.get('/', async (req, res) => {
       range: { from: from ?? null, to: to ?? null },
     });
   } catch (err) {
-    console.error('[appointments] list error:', err.message);
+    logDbError('list', err, { query: req.query, tenantId: req.tenantId });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list appointments');
   }
 });
 
-// GET /api/appointments/upcoming
+// GET /api/appointments/upcoming  (must be before /:id)
 router.get('/upcoming', async (req, res) => {
   try {
     const parsed = upcomingSchema.safeParse(req.query);
@@ -116,7 +128,7 @@ router.get('/upcoming', async (req, res) => {
 
     res.json({ items });
   } catch (err) {
-    console.error('[appointments] upcoming error:', err.message);
+    logDbError('upcoming', err, { tenantId: req.tenantId });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to fetch upcoming appointments');
   }
 });
@@ -128,7 +140,7 @@ router.get('/:id', async (req, res) => {
     if (!appointment) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
     res.json(appointment);
   } catch (err) {
-    console.error('[appointments] get error:', err.message);
+    logDbError('get', err, { id: req.params.id });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to fetch appointment');
   }
 });
@@ -178,7 +190,7 @@ router.patch('/:id', async (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error('[appointments] update error:', err.message);
+    logDbError('update', err, { id: req.params.id });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update appointment');
   }
 });
@@ -217,7 +229,7 @@ router.post('/:id/cancel', async (req, res) => {
 
     res.json(cancelled);
   } catch (err) {
-    console.error('[appointments] cancel error:', err.message);
+    logDbError('cancel', err, { id: req.params.id });
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to cancel appointment');
   }
 });
