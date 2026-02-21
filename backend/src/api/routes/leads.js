@@ -183,6 +183,10 @@ function parsedFieldsToCollected(parsedFields, quoteFields) {
     });
 }
 
+// CRM routes: /api/companies/:companyId/leads/:leadId/crm/activity, /crm/notes, /crm/tasks
+const crmLeadRouter = require('./crm');
+router.use('/:leadId/crm', crmLeadRouter);
+
 router.get('/:leadId', async (req, res) => {
   try {
     const lead = await leadRepository.findById(req.tenantId, req.params.leadId);

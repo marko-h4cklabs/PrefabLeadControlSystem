@@ -145,6 +145,13 @@ router.get('/', async (req, res) => {
   }
 });
 
+// --- CRM routes: MUST be before GET /:id so /:id/crm/... matches first ---
+const crmLeadRouter = require('./crm');
+router.use('/:id/crm', (req, res, next) => {
+  req.params.leadId = req.params.id;
+  next();
+}, crmLeadRouter);
+
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
@@ -381,13 +388,6 @@ router.patch('/:id', async (req, res) => {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
-
-// --- CRM routes: frontend uses /api/leads/:id/crm/activity, /crm/notes, /crm/tasks ---
-const crmLeadRouter = require('./crm');
-router.use('/:id/crm', (req, res, next) => {
-  req.params.leadId = req.params.id;
-  next();
-}, crmLeadRouter);
 
 // --- Also support /api/leads/:id/activity, /notes, /tasks (no /crm/) for backward compatibility ---
 function toCrmActivityItem(row) {

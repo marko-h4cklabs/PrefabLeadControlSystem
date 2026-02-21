@@ -112,6 +112,16 @@ app.use('/api/notifications', authMiddleware, tenantMiddleware, apiLimiter, noti
 app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsRouter);
 app.use('/api/crm', authMiddleware, tenantMiddleware, apiLimiter, crmRouter);
 
+app.use((req, res) => {
+  if (!res.headersSent) {
+    if (req.path.startsWith('/api/')) {
+      res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Endpoint not found' } });
+    } else {
+      res.status(404).send('Not found');
+    }
+  }
+});
+
 app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ error: { code: 'CORS_ERROR', message: 'Origin not allowed' } });

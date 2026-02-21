@@ -200,7 +200,33 @@ When pictures preset is enabled and attachments exist, `collected_infos` (or `co
 
 ---
 
-## F) Notification Settings (owner/admin)
+## F) CRM – Lead Detail (Activity / Notes / Tasks)
+
+Use the **lead UUID** from the current lead (e.g. from route `/inbox/:leadId` or loaded lead detail). Do not use company ID.
+
+### Endpoints (flat route – recommended)
+
+| Method | Path | Body |
+|--------|------|------|
+| GET | `/api/leads/:leadId/crm/activity?limit=30&offset=0` | - |
+| GET | `/api/leads/:leadId/crm/notes?limit=50&offset=0` | - |
+| GET | `/api/leads/:leadId/crm/tasks?limit=50&offset=0&status=open` | - |
+| POST | `/api/leads/:leadId/crm/notes` | `{ "body": "..." }` |
+| PATCH | `/api/leads/:leadId/crm/notes/:noteId` | `{ "body": "..." }` |
+| DELETE | `/api/leads/:leadId/crm/notes/:noteId` | - |
+| POST | `/api/leads/:leadId/crm/tasks` | `{ "title": "...", "description?", "due_at?", "assigned_user_id?" }` |
+| PATCH | `/api/leads/:leadId/crm/tasks/:taskId` | `{ "title?", "description?", "status?", "due_at?", "assigned_user_id?" }` |
+| DELETE | `/api/leads/:leadId/crm/tasks/:taskId` | - |
+
+**Response shapes:** `{ items: [...], total: number }` for GET. Empty lists: `{ items: [], total: 0 }`.
+
+**Headers:** `Authorization: Bearer <token>`, optional `x-company-id` (must match JWT company if sent).
+
+**404:** If lead not found or not in tenant, returns `{ error: { code: "NOT_FOUND", message: "Lead not found" } }` (JSON, not HTML).
+
+---
+
+## G) Notification Settings (owner/admin)
 
 - **GET** `/api/settings/notifications` — returns `{ email_enabled, email_recipients, notify_new_inquiry_inbox, notify_new_inquiry_simulation, updated_at }`. Defaults if no row.
 - **PUT** `/api/settings/notifications` — save settings (owner/admin only). Body: `{ email_enabled?, email_recipients?, notify_new_inquiry_inbox?, notify_new_inquiry_simulation? }`.
