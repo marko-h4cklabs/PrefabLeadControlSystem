@@ -69,6 +69,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 # Create simulation lead
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"channel":"whatsapp","name":"Test","source":"simulation"}' "http://localhost:3000/api/leads"
+
+# Name normalization: underscores become spaces (e.g. test_keona -> "test keona" in DB)
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel":"email","name":"test_keona"}' "http://localhost:3000/api/leads"
 ```
 
 ---

@@ -94,11 +94,11 @@ router.post('/', async (req, res) => {
       });
     }
     const { channel, name, external_id, source } = parsed.data;
-    const displayValue = (name ?? external_id ?? '').trim();
+    const normalizedName = (name ?? '').trim();
     const lead = await leadRepository.create(req.tenantId, {
       channel,
-      name: displayValue || undefined,
-      external_id: displayValue || external_id || undefined,
+      name: normalizedName || undefined,
+      external_id: external_id ?? (normalizedName || undefined),
       source: source ?? 'inbox',
     });
     const out = {

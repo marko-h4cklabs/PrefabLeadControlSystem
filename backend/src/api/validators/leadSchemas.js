@@ -4,11 +4,18 @@ const VALID_CHANNELS = ['messenger', 'instagram', 'whatsapp', 'telegram', 'email
 const VALID_STATUSES = ['new', 'contacted', 'qualified', 'booked', 'closed_won', 'closed_lost'];
 
 const externalIdRegex = /^[a-z0-9_\-]{2,64}$/;
-// Human name: Unicode letters, diacritics, spaces, apostrophe, hyphen, dot; trim + collapse spaces
+// Human name: Unicode letters, diacritics, spaces, apostrophe, hyphen, dot; trim + collapse spaces (no underscore).
+// Underscores in input are normalized to spaces before validation; stored name never contains _.
 const createLeadNameRegex = /^[\p{L}\p{M}\u0027\u2019.\-\s]+$/u;
 
 function collapseSpaces(s) {
   return String(s ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Replace _ with space, collapse spaces, trim. Stored name must never contain _. */
+function normalizeName(s) {
+  if (s == null || typeof s !== 'string') return '';
+  return String(s).replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 const uuidOptional = z
@@ -45,7 +52,7 @@ const createLeadBodySchema = z
     name: z
       .string()
       .optional()
-      .transform((v) => (v != null ? collapseSpaces(v) : undefined))
+      .transform((v) => (v != null && String(v).trim() ? normalizeName(v) : undefined))
       .refine((v) => !v || v.length >= 2, 'name must be at least 2 characters')
       .refine((v) => !v || v.length <= 80, 'name must be at most 80 characters')
       .refine((v) => !v || createLeadNameRegex.test(v), 'name may only contain letters, spaces, apostrophe, hyphen, dot')
@@ -62,6 +69,12 @@ const createLeadBodySchema = z
   .refine((data) => data.name || data.external_id, {
     message: 'Either name or external_id is required',
     path: ['name'],
+  })
+  .transform((data) => {
+    if (!data.name && data.external_id) {
+      return { ...data, name: normalizeName(data.external_id) };
+    }
+    return data;
   });
 
 const updateLeadBodySchema = z.object({
