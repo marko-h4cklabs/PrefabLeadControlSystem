@@ -33,17 +33,19 @@ function normalizeChannel(c) {
 
 /**
  * Build consistent WHERE clause for analytics (tenant + date range + optional source/channel).
+ * Uses PostgreSQL CURRENT_DATE for timestamptz-safe boundaries (avoids Node timezone issues).
  * Legacy: NULL/empty source treated as inbox. Channel filter case-insensitive.
  * @param {string} companyId
- * @param {{ startDate, endDate, source?, channel? }} options
- * @param {{ withChannelFilter?: boolean }} opts - if false, omit channel filter (for available_channels)
+ * @param {{ days, startDate?, endDate?, source?, channel? }} options - days preferred for DB; startDate/endDate for response
+ * @param {{ withChannelFilter?: boolean }} opts
  */
 function buildWhere(companyId, options, opts = {}) {
-  const { startDate, endDate, source, channel } = options;
+  const { days = 30, startDate, endDate, source, channel } = options;
   const { withChannelFilter = true } = opts;
-  const params = [companyId, startDate, endDate];
-  let paramIndex = 4;
-  let where = `l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($3::date + interval '1 day')`;
+  const d = Math.min(365, Math.max(1, parseInt(days, 10) || 30));
+  const params = [companyId, d];
+  let paramIndex = 3;
+  let where = `l.company_id = $1 AND l.created_at >= CURRENT_DATE - ($2 || ' days')::interval AND l.created_at < CURRENT_DATE + interval '1 day'`;
   const src = normalizeSource(source);
   if (src.filter) {
     where += ` AND COALESCE(NULLIF(TRIM(l.source), ''), 'inbox') = $${paramIndex++}`;
@@ -110,7 +112,6 @@ function countCollectedFields(parsedFields, quoteSnapshot, hasAttachments) {
  */
 async function getSummary(companyId, options) {
   const { where, params } = buildWhere(companyId, options);
-  const todayStart = new Date().toISOString().slice(0, 10);
 
   const [summaryRes, newTodayRes, convRes] = await Promise.all([
     pool.query(
@@ -119,8 +120,8 @@ async function getSummary(companyId, options) {
     ),
     pool.query(
       `SELECT COUNT(*)::int AS cnt FROM leads l
-       WHERE l.company_id = $1 AND l.created_at >= $2::date AND l.created_at < ($2::date + interval '1 day')`,
-      [companyId, todayStart]
+       WHERE l.company_id = $1 AND l.created_at >= CURRENT_DATE AND l.created_at < CURRENT_DATE + interval '1 day'`,
+      [companyId]
     ),
     pool.query(
       `SELECT COUNT(DISTINCT l.id)::int AS cnt

@@ -7,7 +7,10 @@ const CHANNEL_OPTIONS = ['all', 'whatsapp', 'messenger', 'instagram', 'telegram'
 const analyticsQuerySchema = z.object({
   range: z.preprocess(
     (v) => {
-      const s = v != null ? String(v).trim() : undefined;
+      if (v == null) return undefined;
+      const n = parseInt(String(v).trim(), 10);
+      if ([7, 30, 90].includes(n)) return String(n);
+      const s = String(v).trim();
       return s === '' ? undefined : s;
     },
     z.enum(RANGE_OPTIONS).optional().default('30')
@@ -15,7 +18,9 @@ const analyticsQuerySchema = z.object({
   source: z.preprocess(
     (v) => {
       const s = v != null ? String(v).trim().toLowerCase() : undefined;
-      return (s === '' || !s) ? undefined : s;
+      if (!s || s === '') return undefined;
+      if (['all', 'inbox', 'simulation'].includes(s)) return s;
+      return undefined;
     },
     z.enum(SOURCE_OPTIONS).optional().default('all')
   ),
@@ -29,16 +34,15 @@ const analyticsQuerySchema = z.object({
   ),
 }).transform((o) => {
   const days = parseInt(o.range, 10) || 30;
-  const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - days);
-  const today = end.toISOString().slice(0, 10);
+  const now = new Date();
+  const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
   const startDate = start.toISOString().slice(0, 10);
-  const endDate = end.toISOString().slice(0, 10);
+  const endDate = now.toISOString().slice(0, 10);
   return {
     ...o,
+    days,
     startDate,
-    endDate: endDate > today ? today : endDate,
+    endDate,
   };
 });
 

@@ -14,9 +14,10 @@ router.get('/dashboard', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
+    const { startDate, endDate, days, source, channel } = parsed.data;
     const companyId = req.tenantId;
     const appliedFilters = { range: parsed.data.range ?? '30', source: source ?? 'all', channel: channel ?? 'all' };
+    const opts = { days, startDate, endDate, source, channel };
 
     const [
       summary,
@@ -28,14 +29,14 @@ router.get('/dashboard', async (req, res) => {
       availableChannels,
       rawCounts,
     ] = await Promise.all([
-      analyticsRepository.getFullSummary(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getLeadsOverTime(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getChannelBreakdown(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getStatusBreakdown(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getFieldCompletion(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getTopSignals(companyId, { startDate, endDate, source, channel }),
-      analyticsRepository.getAvailableChannels(companyId, { startDate, endDate, source }),
-      ANALYTICS_DEBUG ? analyticsRepository.getRawCounts(companyId, { startDate, endDate, source, channel }) : Promise.resolve(null),
+      analyticsRepository.getFullSummary(companyId, opts),
+      analyticsRepository.getLeadsOverTime(companyId, opts),
+      analyticsRepository.getChannelBreakdown(companyId, opts),
+      analyticsRepository.getStatusBreakdown(companyId, opts),
+      analyticsRepository.getFieldCompletion(companyId, opts),
+      analyticsRepository.getTopSignals(companyId, opts),
+      analyticsRepository.getAvailableChannels(companyId, opts),
+      ANALYTICS_DEBUG ? analyticsRepository.getRawCounts(companyId, opts) : Promise.resolve(null),
     ]);
 
     const dataAsOf = new Date().toISOString();
@@ -98,8 +99,8 @@ router.get('/summary', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const summary = await analyticsRepository.getFullSummary(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const summary = await analyticsRepository.getFullSummary(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(summary);
   } catch (err) {
     if (err.code === '42P01') {
@@ -117,8 +118,8 @@ router.get('/leads-over-time', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const data = await analyticsRepository.getLeadsOverTime(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const data = await analyticsRepository.getLeadsOverTime(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(data);
   } catch (err) {
     if (err.code === '42P01') return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
@@ -134,8 +135,8 @@ router.get('/channel-breakdown', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const data = await analyticsRepository.getChannelBreakdown(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const data = await analyticsRepository.getChannelBreakdown(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(data);
   } catch (err) {
     if (err.code === '42P01') return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
@@ -151,8 +152,8 @@ router.get('/status-breakdown', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const data = await analyticsRepository.getStatusBreakdown(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const data = await analyticsRepository.getStatusBreakdown(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(data);
   } catch (err) {
     if (err.code === '42P01') return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
@@ -168,8 +169,8 @@ router.get('/field-completion', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const data = await analyticsRepository.getFieldCompletion(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const data = await analyticsRepository.getFieldCompletion(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(data);
   } catch (err) {
     if (err.code === '42P01') return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
@@ -185,8 +186,8 @@ router.get('/top-signals', async (req, res) => {
       const msg = err.formErrors?.[0] ?? Object.values(err.fieldErrors ?? {})?.flat?.()?.[0] ?? 'Invalid query';
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
     }
-    const { startDate, endDate, source, channel } = parsed.data;
-    const data = await analyticsRepository.getTopSignals(req.tenantId, { startDate, endDate, source, channel });
+    const { startDate, endDate, days, source, channel } = parsed.data;
+    const data = await analyticsRepository.getTopSignals(req.tenantId, { days, startDate, endDate, source, channel });
     res.json(data);
   } catch (err) {
     if (err.code === '42P01') return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
