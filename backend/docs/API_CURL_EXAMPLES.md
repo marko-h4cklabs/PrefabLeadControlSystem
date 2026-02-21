@@ -1,6 +1,6 @@
 # API cURL Examples
 
-Base URL: `http://localhost:3000` (or your deployed URL)
+Base URL: `http://localhost:3000` (or your deployed URL). Updated 2026-02.
 
 All authenticated endpoints require: `Authorization: Bearer <token>`
 
@@ -101,7 +101,7 @@ curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json
 
 All CRM endpoints require JWT auth and tenant context (`x-company-id` or JWT company).
 
-**Primary paths (used by frontend):** `/api/leads/:id/activity`, `/api/leads/:id/notes`, `/api/leads/:id/tasks`
+**Primary paths (used by frontend):** `/api/leads/:id/crm/activity`, `/api/leads/:id/crm/notes`, `/api/leads/:id/crm/tasks`
 
 **Alternative paths (also supported):** `/api/crm/leads/:leadId/...`
 
