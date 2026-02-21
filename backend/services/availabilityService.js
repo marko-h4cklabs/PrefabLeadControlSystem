@@ -18,6 +18,22 @@ function dateToStr(d) {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Convert canonical workingHours array to per-day lookup:
+ *   [{ day:"monday", start:"09:00", end:"17:00" }]
+ *   → { monday: [{ start:"09:00", end:"17:00" }] }
+ */
+function arrayToDayMap(whArray) {
+  const map = {};
+  if (!Array.isArray(whArray)) return map;
+  for (const entry of whArray) {
+    if (!entry || !entry.day || !entry.start || !entry.end) continue;
+    if (!map[entry.day]) map[entry.day] = [];
+    map[entry.day].push({ start: entry.start, end: entry.end });
+  }
+  return map;
+}
+
 function buildSlotsForDay(dateStr, ranges, slotMins, tzOffset) {
   const slots = [];
   for (const range of ranges) {
@@ -45,7 +61,7 @@ async function getAvailability(companyId, { from, to, appointmentType }) {
   const bufferAfter = settings.bufferAfterMinutes || 0;
   const minNoticeHours = settings.minNoticeHours || 2;
   const maxDaysAhead = settings.maxDaysAhead || 30;
-  const workingHours = settings.workingHours || {};
+  const workingHoursByDay = arrayToDayMap(settings.workingHours || []);
 
   const now = new Date();
   const minNoticeMs = minNoticeHours * 3600_000;
@@ -76,7 +92,7 @@ async function getAvailability(companyId, { from, to, appointmentType }) {
   while (cursor <= toDate) {
     const dayName = DAY_NAMES[cursor.getDay()];
     const dateStr = dateToStr(cursor);
-    const ranges = workingHours[dayName];
+    const ranges = workingHoursByDay[dayName];
 
     if (ranges && ranges.length > 0) {
       const allSlots = buildSlotsForDay(dateStr, ranges, slotMins, tzOffset);

@@ -1,15 +1,19 @@
 const { pool } = require('../index');
 
+const DAYS_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+const DEFAULT_WORKING_HOURS = [
+  { day: 'monday', start: '09:00', end: '17:00' },
+  { day: 'tuesday', start: '09:00', end: '17:00' },
+  { day: 'wednesday', start: '09:00', end: '17:00' },
+  { day: 'thursday', start: '09:00', end: '17:00' },
+  { day: 'friday', start: '09:00', end: '17:00' },
+];
+
 const DEFAULTS = {
   enabled: false,
   timezone: 'Europe/Zagreb',
-  working_hours: {
-    monday: [{ start: '09:00', end: '17:00' }],
-    tuesday: [{ start: '09:00', end: '17:00' }],
-    wednesday: [{ start: '09:00', end: '17:00' }],
-    thursday: [{ start: '09:00', end: '17:00' }],
-    friday: [{ start: '09:00', end: '17:00' }],
-  },
+  working_hours: DEFAULT_WORKING_HOURS,
   slot_duration_minutes: 30,
   buffer_before_minutes: 0,
   buffer_after_minutes: 0,
@@ -29,14 +33,41 @@ const DEFAULTS = {
   chatbot_show_slots_when_available: true,
 };
 
+/**
+ * Ensure working_hours is always the canonical array shape,
+ * regardless of what's stored in DB (legacy object or new array).
+ */
+function ensureWorkingHoursArray(wh) {
+  if (wh == null) return [];
+  if (Array.isArray(wh)) return wh;
+  if (typeof wh === 'object') {
+    const result = [];
+    for (const day of DAYS_ORDER) {
+      const val = wh[day];
+      if (!val) continue;
+      if (Array.isArray(val)) {
+        for (const range of val) {
+          if (range && typeof range === 'object' && range.start && range.end) {
+            result.push({ day, start: range.start, end: range.end });
+          }
+        }
+      } else if (typeof val === 'object' && val.start && val.end) {
+        result.push({ day, start: val.start, end: val.end });
+      }
+    }
+    return result;
+  }
+  return [];
+}
+
 function toDto(row) {
-  if (!row) return { ...DEFAULTS };
+  if (!row) return { ...DEFAULTS, workingHours: DEFAULT_WORKING_HOURS };
   return {
     id: row.id,
     companyId: row.company_id,
     enabled: row.enabled ?? DEFAULTS.enabled,
     timezone: row.timezone ?? DEFAULTS.timezone,
-    workingHours: row.working_hours ?? DEFAULTS.working_hours,
+    workingHours: ensureWorkingHoursArray(row.working_hours ?? DEFAULTS.working_hours),
     slotDurationMinutes: row.slot_duration_minutes ?? DEFAULTS.slot_duration_minutes,
     bufferBeforeMinutes: row.buffer_before_minutes ?? DEFAULTS.buffer_before_minutes,
     bufferAfterMinutes: row.buffer_after_minutes ?? DEFAULTS.buffer_after_minutes,
@@ -65,10 +96,13 @@ async function get(companyId) {
     [companyId]
   );
   if (result.rows[0]) return toDto(result.rows[0]);
-  return { ...DEFAULTS, companyId };
+  return { ...DEFAULTS, workingHours: DEFAULT_WORKING_HOURS, companyId };
 }
 
 async function upsert(companyId, data) {
+  const wh = data.working_hours ?? data.workingHours ?? DEFAULTS.working_hours;
+  const whNormalized = ensureWorkingHoursArray(wh);
+
   const result = await pool.query(
     `INSERT INTO company_scheduling_settings
        (company_id, enabled, timezone, working_hours, slot_duration_minutes,
@@ -106,7 +140,7 @@ async function upsert(companyId, data) {
       companyId,
       data.enabled ?? DEFAULTS.enabled,
       data.timezone ?? DEFAULTS.timezone,
-      JSON.stringify(data.working_hours ?? data.workingHours ?? DEFAULTS.working_hours),
+      JSON.stringify(whNormalized),
       data.slot_duration_minutes ?? data.slotDurationMinutes ?? DEFAULTS.slot_duration_minutes,
       data.buffer_before_minutes ?? data.bufferBeforeMinutes ?? DEFAULTS.buffer_before_minutes,
       data.buffer_after_minutes ?? data.bufferAfterMinutes ?? DEFAULTS.buffer_after_minutes,
@@ -129,4 +163,4 @@ async function upsert(companyId, data) {
   return toDto(result.rows[0]);
 }
 
-module.exports = { get, upsert, DEFAULTS };
+module.exports = { get, upsert, DEFAULTS, ensureWorkingHoursArray };

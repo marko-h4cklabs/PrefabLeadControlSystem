@@ -5,15 +5,55 @@ const BOOKING_MODES = ['off', 'manual_request', 'direct_booking'];
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const TIME_RE = /^\d{2}:\d{2}$/;
 
-const timeRangeSchema = z.object({
+const dayHoursEntrySchema = z.object({
+  day: z.enum(DAYS),
   start: z.string().regex(TIME_RE, 'must be HH:MM format'),
   end: z.string().regex(TIME_RE, 'must be HH:MM format'),
 }).refine((r) => r.start < r.end, { message: 'start must be before end' });
 
-const workingHoursSchema = z.record(
-  z.enum(DAYS),
-  z.array(timeRangeSchema)
-).optional();
+/**
+ * Normalize working_hours from any supported shape to canonical array.
+ *
+ * Accepted inputs:
+ *   1) Array of { day, start, end }  (canonical)
+ *   2) Object keyed by weekday with array of { start, end } per day
+ *      e.g. { monday: [{ start:"09:00", end:"17:00" }] }
+ *   3) Object keyed by weekday with single { start, end } per day
+ *      e.g. { monday: { start:"09:00", end:"17:00" } }
+ *   4) null / undefined / empty → []
+ *
+ * Output: Array of { day, start, end }
+ */
+function normalizeWorkingHours(wh) {
+  if (wh == null) return [];
+
+  if (Array.isArray(wh)) return wh;
+
+  if (typeof wh === 'object') {
+    const result = [];
+    for (const day of DAYS) {
+      const val = wh[day];
+      if (!val) continue;
+      if (Array.isArray(val)) {
+        for (const range of val) {
+          if (range && typeof range === 'object' && range.start && range.end) {
+            result.push({ day, start: range.start, end: range.end });
+          }
+        }
+      } else if (typeof val === 'object' && val.start && val.end) {
+        result.push({ day, start: val.start, end: val.end });
+      }
+    }
+    return result;
+  }
+
+  return [];
+}
+
+const workingHoursSchema = z.preprocess(
+  normalizeWorkingHours,
+  z.array(dayHoursEntrySchema).optional().default([])
+);
 
 const reminderDefaultsSchema = z.object({
   email: z.boolean().optional().default(true),
@@ -73,4 +113,4 @@ const schedulingSettingsSchema = z.preprocess(camelOrSnake, z.object({
   chatbot_show_slots_when_available: z.boolean().optional(),
 }));
 
-module.exports = { schedulingSettingsSchema };
+module.exports = { schedulingSettingsSchema, normalizeWorkingHours };
