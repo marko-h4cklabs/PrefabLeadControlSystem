@@ -633,4 +633,37 @@ router.post('/:leadId/appointments', ensureLeadForCrm, (req, res) => {
   return createAppointmentHandler(req, res, req.crmLeadId);
 });
 
+// ---- Lead Scheduling Requests ----
+const { schedulingRequestRepository } = require('../../../db/repositories');
+const { listSchedulingRequestsSchema } = require('../validators/schedulingRequestSchemas');
+
+router.get('/:leadId/scheduling-requests', ensureLeadForCrm, async (req, res) => {
+  try {
+    const parsed = listSchedulingRequestsSchema.safeParse(req.query);
+    if (!parsed.success) {
+      const flat = parsed.error.flatten();
+      const fieldMsgs = Object.entries(flat.fieldErrors ?? {})
+        .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
+        .filter(Boolean);
+      const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: msg } });
+    }
+
+    const companyId = req.tenantId;
+    const leadId = req.crmLeadId;
+    const { status, request_type, limit, offset } = parsed.data;
+    const opts = { status, leadId, requestType: request_type, limit, offset };
+
+    const [items, total] = await Promise.all([
+      schedulingRequestRepository.list(companyId, opts),
+      schedulingRequestRepository.count(companyId, opts),
+    ]);
+
+    res.json({ items, total });
+  } catch (err) {
+    console.error('[leads/:leadId/scheduling-requests] list error:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list lead scheduling requests');
+  }
+});
+
 module.exports = router;

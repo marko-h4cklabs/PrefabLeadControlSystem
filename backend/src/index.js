@@ -15,6 +15,8 @@ const settingsRouter = require('./api/routes/settings');
 const crmRouter = require('./api/routes/crmIndex');
 const analyticsRouter = require('./api/routes/analytics');
 const appointmentsRouter = require('./api/routes/appointments');
+const schedulingRequestsRouter = require('./api/routes/schedulingRequests');
+const chatbotSchedulingRouter = require('./api/routes/chatbotScheduling');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -115,6 +117,8 @@ app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsR
 app.use('/api/crm', authMiddleware, tenantMiddleware, apiLimiter, crmRouter);
 app.use('/api/analytics', authMiddleware, tenantMiddleware, apiLimiter, analyticsRouter);
 app.use('/api/appointments', authMiddleware, tenantMiddleware, apiLimiter, appointmentsRouter);
+app.use('/api/scheduling-requests', authMiddleware, tenantMiddleware, apiLimiter, schedulingRequestsRouter);
+app.use('/api/chatbot/scheduling', authMiddleware, tenantMiddleware, apiLimiter, chatbotSchedulingRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {

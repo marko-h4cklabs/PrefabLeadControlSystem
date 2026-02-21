@@ -1,6 +1,7 @@
 const { z } = require('zod');
 
 const APPOINTMENT_TYPES = ['call', 'site_visit', 'meeting', 'follow_up'];
+const BOOKING_MODES = ['off', 'manual_request', 'direct_booking'];
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const TIME_RE = /^\d{2}:\d{2}$/;
 
@@ -33,6 +34,14 @@ function camelOrSnake(obj) {
     chatbotOfferBooking: 'chatbot_offer_booking',
     reminderDefaults: 'reminder_defaults',
     workingHours: 'working_hours',
+    chatbotBookingMode: 'chatbot_booking_mode',
+    chatbotBookingPromptStyle: 'chatbot_booking_prompt_style',
+    chatbotCollectBookingAfterQuote: 'chatbot_collect_booking_after_quote',
+    chatbotBookingRequiresName: 'chatbot_booking_requires_name',
+    chatbotBookingRequiresPhone: 'chatbot_booking_requires_phone',
+    chatbotBookingDefaultType: 'chatbot_booking_default_type',
+    chatbotAllowUserProposedTime: 'chatbot_allow_user_proposed_time',
+    chatbotShowSlotsWhenAvailable: 'chatbot_show_slots_when_available',
   };
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -54,6 +63,14 @@ const schedulingSettingsSchema = z.preprocess(camelOrSnake, z.object({
   allow_manual_booking_from_lead: z.boolean().optional(),
   chatbot_offer_booking: z.boolean().optional(),
   reminder_defaults: reminderDefaultsSchema,
+  chatbot_booking_mode: z.enum(BOOKING_MODES).optional(),
+  chatbot_booking_prompt_style: z.string().trim().min(1).max(100).optional(),
+  chatbot_collect_booking_after_quote: z.boolean().optional(),
+  chatbot_booking_requires_name: z.boolean().optional(),
+  chatbot_booking_requires_phone: z.boolean().optional(),
+  chatbot_booking_default_type: z.enum(APPOINTMENT_TYPES).optional(),
+  chatbot_allow_user_proposed_time: z.boolean().optional(),
+  chatbot_show_slots_when_available: z.boolean().optional(),
 }));
 
 module.exports = { schedulingSettingsSchema };
