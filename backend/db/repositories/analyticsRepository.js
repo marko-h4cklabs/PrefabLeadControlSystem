@@ -45,7 +45,7 @@ function buildWhere(companyId, options, opts = {}) {
   const d = Math.min(365, Math.max(1, parseInt(days, 10) || 30));
   const params = [companyId, d];
   let paramIndex = 3;
-  let where = `l.company_id = $1 AND l.created_at >= CURRENT_DATE - ($2 || ' days')::interval AND l.created_at < CURRENT_DATE + interval '1 day'`;
+  let where = `l.company_id = $1 AND l.created_at >= CURRENT_DATE - ($2::text || ' days')::interval AND l.created_at < CURRENT_DATE + interval '1 day'`;
   const src = normalizeSource(source);
   if (src.filter) {
     where += ` AND COALESCE(NULLIF(TRIM(l.source), ''), 'inbox') = $${paramIndex++}`;

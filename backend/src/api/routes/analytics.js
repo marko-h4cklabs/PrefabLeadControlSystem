@@ -41,26 +41,16 @@ router.get('/dashboard', async (req, res) => {
 
     const dataAsOf = new Date().toISOString();
     if (ANALYTICS_DEBUG) {
-      console.info('[analytics] dashboard DEBUG', {
+      console.info('[analytics] dashboard', {
+        userId: req.user?.id,
         tenantId: companyId,
-        parsedFilters: { range: appliedFilters.range, source: appliedFilters.source, channel: appliedFilters.channel },
-        normalizedFilters: { startDate, endDate, source, channel },
-        rawCounts: rawCounts ?? {},
-        summary: summary ? {
-          totalLeads: summary.totalLeads,
-          newLeadsToday: summary.newLeadsToday,
-          conversationsStarted: summary.conversationsStarted,
-          inboxCount: summary.inboxCount,
-          simulationCount: summary.simulationCount,
-        } : null,
-        lengths: {
-          leadsOverTime: leadsOverTime?.length ?? 0,
-          channelBreakdown: channelBreakdown?.length ?? 0,
-          statusBreakdown: statusBreakdown?.length ?? 0,
-          fieldCompletion: fieldCompletion?.length ?? 0,
-          topSignals: topSignals?.length ?? 0,
-          availableChannels: availableChannels?.length ?? 0,
-        },
+        range: appliedFilters.range,
+        source: appliedFilters.source,
+        channel: appliedFilters.channel,
+        rawLeadCount: rawCounts?.totalForTenant ?? 0,
+        filteredLeadCount: rawCounts?.totalAfterFilters ?? 0,
+        sourcesFound: summary ? { inbox: summary.inboxCount, simulation: summary.simulationCount } : null,
+        channelsFound: availableChannels?.length ?? 0,
       });
     }
 
@@ -77,7 +67,14 @@ router.get('/dashboard', async (req, res) => {
       topSignals,
     };
     if (ANALYTICS_DEBUG && rawCounts) {
-      payload._debug = { rawCounts, tenantId: companyId };
+      payload.debug = {
+        tenantId: companyId,
+        filters: appliedFilters,
+        rawLeadCount: rawCounts.totalForTenant,
+        filteredLeadCount: rawCounts.totalAfterFilters,
+        sourcesFound: summary ? { inbox: summary.inboxCount, simulation: summary.simulationCount } : null,
+        channelsFound: availableChannels ?? [],
+      };
     }
     res.json(payload);
   } catch (err) {

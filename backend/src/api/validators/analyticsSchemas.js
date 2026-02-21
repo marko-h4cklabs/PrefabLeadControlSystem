@@ -27,7 +27,7 @@ const analyticsQuerySchema = z.object({
   channel: z.preprocess(
     (v) => {
       const s = v != null ? String(v).trim().toLowerCase() : undefined;
-      if (!s || s === '' || s === 'all channels') return undefined;
+      if (!s || s === '' || s === 'all' || s === 'all channels') return undefined;
       return s;
     },
     z.string().optional().default('all')
