@@ -9,6 +9,7 @@ const {
   leadActivitiesRepository,
   leadNotesRepository,
   leadTasksRepository,
+  appointmentRepository,
 } = require('../../../db/repositories');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
@@ -276,6 +277,22 @@ router.get('/:id', async (req, res) => {
       units: c.units ?? null,
       ...(c.links && { links: c.links }),
     }));
+
+    let appointments = [];
+    try {
+      const apptResult = await appointmentRepository.list(req.tenantId, { lead_id: req.params.id, limit: 20 });
+      appointments = (apptResult?.items || []).map((a) => ({
+        id: a.id,
+        appointmentType: a.appointmentType ?? a.appointment_type ?? 'call',
+        status: a.status ?? 'scheduled',
+        startAt: a.startAt ?? a.start_at ?? null,
+        endAt: a.endAt ?? a.end_at ?? null,
+        timezone: a.timezone ?? 'Europe/Zagreb',
+        source: a.source ?? 'manual',
+        title: a.title ?? null,
+      }));
+    } catch { /* appointments not critical for lead detail */ }
+
     res.json({
       id: lead.id,
       channel: lead.channel,
@@ -286,6 +303,7 @@ router.get('/:id', async (req, res) => {
       updated_at: lead.updated_at,
       source: lead.source ?? 'inbox',
       collected_infos: collectedInfos,
+      appointments,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Internal server error' });

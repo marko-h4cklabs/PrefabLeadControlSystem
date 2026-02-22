@@ -9,6 +9,7 @@ const { logLeadActivity } = require('../../../services/activityLogger');
 const { sendAppointmentConfirmationEmail } = require('../../../services/appointmentEmailService');
 const { chatbotIntakeSchema } = require('../validators/schedulingRequestSchemas');
 const { isSlotAvailable } = require('../../../services/availabilityService');
+const { normalizeSchedulingSettings } = require('../../../services/schedulingNormalizer');
 const { BOOKING_STATES, buildBookingPayload } = require('../../chat/bookingOfferHelper');
 const { errorJson } = require('../middleware/errors');
 
@@ -28,26 +29,24 @@ function validationError(res, parsed, debugCtx) {
 router.get('/config', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const settings = await schedulingSettingsRepository.get(companyId);
-
-    const offerBooking = settings.chatbotOfferBooking ?? false;
-    const bookingMode = settings.chatbotBookingMode ?? 'manual_request';
-    const effectivelyEnabled = offerBooking && bookingMode !== 'off';
+    const raw = await schedulingSettingsRepository.get(companyId);
+    const cfg = normalizeSchedulingSettings(raw);
+    const effectivelyEnabled = cfg.chatbotOfferBooking && cfg.chatbotBookingMode !== 'off';
 
     res.json({
-      enabled: settings.enabled ?? false,
-      chatbotOfferBooking: offerBooking,
-      chatbotBookingMode: bookingMode,
-      chatbotBookingPromptStyle: settings.chatbotBookingPromptStyle ?? 'neutral',
-      chatbotCollectBookingAfterQuote: settings.chatbotCollectBookingAfterQuote ?? true,
-      chatbotBookingRequiresName: settings.chatbotBookingRequiresName ?? false,
-      chatbotBookingRequiresPhone: settings.chatbotBookingRequiresPhone ?? false,
-      chatbotBookingDefaultType: settings.chatbotBookingDefaultType ?? 'call',
-      chatbotAllowUserProposedTime: settings.chatbotAllowUserProposedTime ?? true,
-      chatbotShowSlotsWhenAvailable: settings.chatbotShowSlotsWhenAvailable ?? true,
-      allowedAppointmentTypes: settings.allowedAppointmentTypes ?? ['call'],
-      timezone: settings.timezone ?? 'Europe/Zagreb',
-      slotDurationMinutes: settings.slotDurationMinutes ?? 30,
+      enabled: cfg.enabled,
+      chatbotOfferBooking: cfg.chatbotOfferBooking,
+      chatbotBookingMode: cfg.chatbotBookingMode,
+      chatbotBookingPromptStyle: cfg.chatbotBookingPromptStyle,
+      chatbotCollectBookingAfterQuote: cfg.chatbotCollectBookingAfterQuote,
+      chatbotBookingRequiresName: cfg.chatbotBookingRequiresName,
+      chatbotBookingRequiresPhone: cfg.chatbotBookingRequiresPhone,
+      chatbotBookingDefaultType: cfg.chatbotBookingDefaultType,
+      chatbotAllowUserProposedTime: cfg.chatbotAllowUserProposedTime,
+      chatbotShowSlotsWhenAvailable: cfg.chatbotShowSlotsWhenAvailable,
+      allowedAppointmentTypes: cfg.allowedAppointmentTypes,
+      timezone: cfg.timezone,
+      slotDurationMinutes: cfg.slotDurationMinutes,
       _debug: {
         bookingOffersEnabled: effectivelyEnabled,
         source: 'scheduling_settings',
@@ -176,9 +175,9 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or does not belong to your company');
     }
 
-    const settings = await schedulingSettingsRepository.get(companyId);
-    const slotDuration = settings.slotDurationMinutes || settings.slot_duration_minutes || 30;
-    const endDate = new Date(startDate.getTime() + slotDuration * 60000);
+    const rawSettings = await schedulingSettingsRepository.get(companyId);
+    const cfg = normalizeSchedulingSettings(rawSettings);
+    const endDate = new Date(startDate.getTime() + cfg.slotDurationMinutes * 60000);
 
     const available = await isSlotAvailable(companyId, slotStartAt, endDate.toISOString());
     if (!available) {
@@ -197,7 +196,7 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       status: 'scheduled',
       startAt: startDate.toISOString(),
       endAt: endDate.toISOString(),
-      timezone: settings.timezone || 'Europe/Zagreb',
+      timezone: cfg.timezone,
       notes: body.notes || null,
       source: 'chatbot',
       reminderMinutesBefore: 60,
@@ -241,7 +240,7 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       to: null, leadName, appointmentTitle: title,
       appointmentType: resolvedType,
       startAt: startDate.toISOString(),
-      timezone: settings.timezone || 'Europe/Zagreb',
+      timezone: cfg.timezone,
     }).catch(() => {});
 
     console.info('[chatbot/book-slot] CONFIRMED', { conversationId, appointmentId: appointment.id, leadId: resolvedLeadId });

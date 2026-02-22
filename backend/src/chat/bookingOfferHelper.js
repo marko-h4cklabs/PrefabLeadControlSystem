@@ -1,8 +1,10 @@
 /**
  * Booking-offer flow helpers for the chatbot.
- * Centralizes config normalization, state tracking, and intent detection
+ * Centralizes state tracking and intent detection
  * so both simulation and real chat share the same logic.
  */
+
+const { normalizeSchedulingSettings } = require('../../services/schedulingNormalizer');
 
 const BOOKING_STATES = {
   PREREQ_NAME: '__booking_prereq_name',
@@ -19,42 +21,27 @@ const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|alright|please|absolutely|defin
 const NO_RE = /\b(no|nah|nope|not now|not really|later|skip|maybe later|ne|nema|ne treba|ne sada|možda kasnije|preskoci|ne hvala)\b/i;
 
 /**
- * Normalize scheduling config from any alias combination into a flat object.
+ * Normalize scheduling config into a chatbot-friendly flat object.
+ * Delegates to the shared normalizer for alias resolution, then maps
+ * to the short property names used by the booking flow.
  */
 function normalizeConfig(cfg) {
   if (!cfg) return null;
-  const cb = (typeof cfg.chatbot_booking === 'object' && cfg.chatbot_booking) || {};
-  const bookingEnabled = !!(
-    cfg.chatbotOfferBooking ?? cfg.chatbot_offer_booking
-    ?? cfg.chatbot_booking_enabled ?? cfg.chatbot_offers_booking
-    ?? cfg.enable_chatbot_booking_offers
-    ?? cb.enabled ?? cb.chatbot_booking_enabled
-  );
+  const n = normalizeSchedulingSettings(cfg);
   return {
-    schedulingEnabled: !!(cfg.enabled ?? cfg.scheduling_enabled ?? cfg.schedulingEnabled),
-    bookingOffersEnabled: bookingEnabled,
-    chatbotBookingEnabled: bookingEnabled,
-    bookingMode: cfg.chatbotBookingMode ?? cfg.chatbot_booking_mode ?? cb.mode ?? 'manual_request',
-    askAfterQuote: (
-      cfg.chatbotCollectBookingAfterQuote ?? cfg.chatbot_collect_booking_after_quote
-      ?? cfg.ask_after_quote ?? cb.ask_after_quote ?? cb.collectAfterQuote
-    ) !== false,
-    requireName: !!(
-      cfg.chatbotBookingRequiresName ?? cfg.chatbot_booking_requires_name
-      ?? cfg.require_name ?? cb.require_name ?? cb.requiresName
-      ?? cb.chatbot_booking_requires_name
-    ),
-    requirePhone: !!(
-      cfg.chatbotBookingRequiresPhone ?? cfg.chatbot_booking_requires_phone
-      ?? cfg.require_phone ?? cb.require_phone ?? cb.requiresPhone
-      ?? cb.chatbot_booking_requires_phone
-    ),
-    defaultType: cfg.chatbotBookingDefaultType ?? cfg.chatbot_booking_default_type ?? cb.defaultType ?? 'call',
-    promptStyle: cfg.chatbotBookingPromptStyle ?? cfg.chatbot_booking_prompt_style ?? cb.promptStyle ?? 'neutral',
-    showSlots: !!(cfg.chatbotShowSlotsWhenAvailable ?? cfg.chatbot_show_slots_when_available ?? cb.showSlotsWhenAvailable),
-    allowCustomTime: (cfg.chatbotAllowUserProposedTime ?? cfg.chatbot_allow_user_proposed_time ?? cb.allowUserProposedTime) !== false,
-    slotDurationMinutes: cfg.slotDurationMinutes ?? cfg.slot_duration_minutes ?? 30,
-    timezone: cfg.timezone ?? 'Europe/Zagreb',
+    schedulingEnabled: n.enabled,
+    bookingOffersEnabled: n.chatbotOfferBooking,
+    chatbotBookingEnabled: n.chatbotOfferBooking,
+    bookingMode: n.chatbotBookingMode,
+    askAfterQuote: n.chatbotCollectBookingAfterQuote,
+    requireName: n.chatbotBookingRequiresName,
+    requirePhone: n.chatbotBookingRequiresPhone,
+    defaultType: n.chatbotBookingDefaultType,
+    promptStyle: n.chatbotBookingPromptStyle,
+    showSlots: n.chatbotShowSlotsWhenAvailable,
+    allowCustomTime: n.chatbotAllowUserProposedTime,
+    slotDurationMinutes: n.slotDurationMinutes,
+    timezone: n.timezone,
   };
 }
 

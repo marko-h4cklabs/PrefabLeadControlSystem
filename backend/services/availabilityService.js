@@ -1,14 +1,8 @@
 const { pool } = require('../db/index');
 const { schedulingSettingsRepository } = require('../db/repositories');
+const { normalizeSchedulingSettings, workingHoursToDayMap } = require('./schedulingNormalizer');
 
 const DAYS_ORDER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-const SHORT_TO_FULL = { mon: 'monday', tue: 'tuesday', wed: 'wednesday', thu: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday' };
-
-function fullDayName(d) {
-  if (!d) return '';
-  const lower = d.toLowerCase().trim();
-  return SHORT_TO_FULL[lower] || lower;
-}
 
 function parseHHMM(str) {
   const [h, m] = (str || '0:0').split(':').map(Number);
@@ -63,42 +57,32 @@ function dayOfWeek(dateStr) {
   return DAYS_ORDER[new Date(y, m - 1, d).getDay()];
 }
 
-function arrayToDayMap(arr) {
-  const map = {};
-  for (const entry of (arr || [])) {
-    const day = fullDayName(entry.day);
-    if (!day) continue;
-    if (!map[day]) map[day] = [];
-    if (entry.start && entry.end) {
-      map[day].push({ start: entry.start, end: entry.end });
-    } else if (Array.isArray(entry.ranges)) {
-      for (const r of entry.ranges) {
-        if (r.start && r.end) map[day].push({ start: r.start, end: r.end });
-      }
-    }
-  }
-  return map;
-}
-
 function formatSlotLabel(dateStr, startTime, endTime, tz) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
   const dayName = dt.toLocaleDateString('en-US', { weekday: 'short' });
-  const monthName = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  return `${dayName} ${monthName}, ${startTime}–${endTime} (${tz})`;
+  const monthDay = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${dayName}, ${monthDay} • ${startTime}–${endTime}`;
 }
 
-async function getScheduledAppointments(companyId, fromUTC, toUTC) {
+/**
+ * Fetch scheduled appointments in a window, supporting legacy scheduled_time fallback.
+ */
+async function getScheduledAppointments(companyId, fromUTC, toUTC, slotDurationMs) {
   const result = await pool.query(
-    `SELECT start_at, end_at FROM appointments
+    `SELECT
+       COALESCE(start_at, scheduled_time) AS eff_start,
+       COALESCE(end_at, scheduled_time + make_interval(mins := $4)) AS eff_end
+     FROM appointments
      WHERE company_id = $1 AND status = 'scheduled'
-       AND start_at < $3 AND end_at > $2
-     ORDER BY start_at`,
-    [companyId, fromUTC.toISOString(), toUTC.toISOString()]
+       AND COALESCE(start_at, scheduled_time) < $3
+       AND COALESCE(end_at, scheduled_time + make_interval(mins := $4)) > $2
+     ORDER BY eff_start`,
+    [companyId, fromUTC.toISOString(), toUTC.toISOString(), Math.round(slotDurationMs / 60000)]
   );
   return result.rows.map(r => ({
-    start: new Date(r.start_at).getTime(),
-    end: new Date(r.end_at).getTime(),
+    start: new Date(r.eff_start).getTime(),
+    end: new Date(r.eff_end).getTime(),
   }));
 }
 
@@ -113,40 +97,47 @@ function slotsOverlap(slotStartMs, slotEndMs, appointments, bufferBeforeMs, buff
 
 /**
  * Core availability engine. Returns available slots for a company.
- * @param {string} companyId
- * @param {Object} opts - { startDate?, endDate?, appointmentType?, limit? }
- * @returns {{ slots, timezone, slotDurationMinutes, debug }}
  */
 async function getAvailability(companyId, opts = {}) {
-  const settings = await schedulingSettingsRepository.get(companyId);
-  const tz = settings.timezone || settings.tz || 'Europe/Zagreb';
-  const slotDuration = settings.slotDurationMinutes || settings.slot_duration_minutes || 30;
-  const bufferBefore = (settings.bufferBeforeMinutes || settings.buffer_before_minutes || 0) * 60000;
-  const bufferAfter = (settings.bufferAfterMinutes || settings.buffer_after_minutes || 0) * 60000;
-  const minNotice = (settings.minNoticeHours || settings.min_notice_hours || 2) * 3600000;
-  const maxDays = settings.maxDaysAhead || settings.max_days_ahead || 30;
-  const wh = settings.workingHours || settings.working_hours || [];
-  const dayMap = arrayToDayMap(wh);
-  const limit = Math.min(opts.limit || 10, 50);
+  const raw = await schedulingSettingsRepository.get(companyId);
+  const cfg = normalizeSchedulingSettings(raw);
 
-  const today = todayInTZ(tz);
-  const startDate = opts.startDate || today;
-  const endDate = opts.endDate || addDays(today, maxDays);
-
-  const enabledDays = Object.keys(dayMap).filter(d => dayMap[d].length > 0);
-  if (enabledDays.length === 0) {
+  if (!cfg.enabled && !cfg.chatbotOfferBooking) {
     return {
-      slots: [], timezone: tz, slotDurationMinutes: slotDuration,
-      debug: { reason: 'no_enabled_days', enabledDays: [], scannedFrom: startDate, scannedTo: endDate },
+      slots: [], timezone: cfg.timezone, slotDurationMinutes: cfg.slotDurationMinutes,
+      settingsSummary: { enabled: cfg.enabled, timezone: cfg.timezone, slotDurationMinutes: cfg.slotDurationMinutes },
+      debug: { hasWorkingHours: false, reason: 'scheduling_disabled' },
     };
   }
 
-  const windowStart = localToUTC(startDate, '00:00', tz);
-  const windowEnd = localToUTC(addDays(endDate, 1), '00:00', tz);
-  const appointments = await getScheduledAppointments(companyId, windowStart, windowEnd);
+  const dayMap = workingHoursToDayMap(cfg.workingHours);
+  const limit = Math.min(opts.limit || 10, 50);
+  const today = todayInTZ(cfg.timezone);
+  const startDate = opts.startDate || today;
+  const endDate = opts.endDate || addDays(today, cfg.maxDaysAhead);
+  const enabledDays = Object.keys(dayMap).filter(d => dayMap[d].length > 0);
+
+  const summary = { enabled: cfg.enabled, timezone: cfg.timezone, slotDurationMinutes: cfg.slotDurationMinutes };
+
+  if (enabledDays.length === 0) {
+    return {
+      slots: [], timezone: cfg.timezone, slotDurationMinutes: cfg.slotDurationMinutes,
+      settingsSummary: summary,
+      debug: { hasWorkingHours: false, reason: 'no_enabled_days' },
+    };
+  }
+
+  const bufferBeforeMs = cfg.bufferBeforeMinutes * 60000;
+  const bufferAfterMs = cfg.bufferAfterMinutes * 60000;
+  const minNoticeMs = cfg.minNoticeHours * 3600000;
+  const slotDurationMs = cfg.slotDurationMinutes * 60000;
+
+  const windowStart = localToUTC(startDate, '00:00', cfg.timezone);
+  const windowEnd = localToUTC(addDays(endDate, 1), '00:00', cfg.timezone);
+  const appointments = await getScheduledAppointments(companyId, windowStart, windowEnd, slotDurationMs);
 
   const nowMs = Date.now();
-  const earliestMs = nowMs + minNotice;
+  const earliestMs = nowMs + minNoticeMs;
   const slots = [];
   let daysScanned = 0;
   let slotsGenerated = 0;
@@ -164,29 +155,32 @@ async function getAvailability(companyId, opts = {}) {
       const rangeEndMin = parseHHMM(range.end);
       let t = rangeStartMin;
 
-      while (t + slotDuration <= rangeEndMin && slots.length < limit) {
+      while (t + cfg.slotDurationMinutes <= rangeEndMin && slots.length < limit) {
         const startTime = minutesToHHMM(t);
-        const endTime = minutesToHHMM(t + slotDuration);
-        const slotStartUTC = localToUTC(cursor, startTime, tz);
-        const slotEndUTC = localToUTC(cursor, endTime, tz);
+        const endTime = minutesToHHMM(t + cfg.slotDurationMinutes);
+        const slotStartUTC = localToUTC(cursor, startTime, cfg.timezone);
+        const slotEndUTC = localToUTC(cursor, endTime, cfg.timezone);
         const slotStartMs = slotStartUTC.getTime();
         const slotEndMs = slotEndUTC.getTime();
         slotsGenerated++;
 
-        if (slotStartMs < earliestMs) { pastSkipped++; t += slotDuration; continue; }
-        if (slotsOverlap(slotStartMs, slotEndMs, appointments, bufferBefore, bufferAfter)) { conflictsSkipped++; t += slotDuration; continue; }
+        if (slotStartMs < earliestMs) { pastSkipped++; t += cfg.slotDurationMinutes; continue; }
+        if (slotsOverlap(slotStartMs, slotEndMs, appointments, bufferBeforeMs, bufferAfterMs)) {
+          conflictsSkipped++; t += cfg.slotDurationMinutes; continue;
+        }
 
+        const isoStart = slotStartUTC.toISOString();
         slots.push({
-          id: `slot-${slots.length}`,
-          label: formatSlotLabel(cursor, startTime, endTime, tz),
-          startAt: slotStartUTC.toISOString(),
+          id: `${cursor}_${startTime}`.replace(/:/g, ''),
+          label: formatSlotLabel(cursor, startTime, endTime, cfg.timezone),
+          startAt: isoStart,
           endAt: slotEndUTC.toISOString(),
           date: cursor,
           startTime,
           endTime,
-          timezone: tz,
+          timezone: cfg.timezone,
         });
-        t += slotDuration;
+        t += cfg.slotDurationMinutes;
       }
     }
     cursor = addDays(cursor, 1);
@@ -194,16 +188,24 @@ async function getAvailability(companyId, opts = {}) {
 
   let reason = null;
   if (slots.length === 0) {
-    if (pastSkipped > 0 && conflictsSkipped === 0) reason = 'all_past_or_too_soon';
+    if (slotsGenerated === 0) reason = 'no_slots_in_range';
+    else if (pastSkipped > 0 && conflictsSkipped === 0) reason = 'all_past_or_too_soon';
     else if (conflictsSkipped > 0) reason = 'all_conflicted';
-    else reason = 'outside_working_hours';
+    else reason = 'no_slots_in_range';
   }
+
+  console.info('[availability]', {
+    companyId, enabledDays, daysScanned, slotsGenerated,
+    conflictsSkipped, pastSkipped, returned: slots.length, reason,
+  });
 
   return {
     slots,
-    timezone: tz,
-    slotDurationMinutes: slotDuration,
+    timezone: cfg.timezone,
+    slotDurationMinutes: cfg.slotDurationMinutes,
+    settingsSummary: summary,
     debug: {
+      hasWorkingHours: enabledDays.length > 0,
       reason,
       enabledDays,
       daysScanned,
@@ -220,20 +222,23 @@ async function getAvailability(companyId, opts = {}) {
  * Check if a specific slot is still available (for double-booking prevention).
  */
 async function isSlotAvailable(companyId, startAtISO, endAtISO) {
-  const settings = await schedulingSettingsRepository.get(companyId);
-  const bufferBefore = (settings.bufferBeforeMinutes || settings.buffer_before_minutes || 0) * 60000;
-  const bufferAfter = (settings.bufferAfterMinutes || settings.buffer_after_minutes || 0) * 60000;
+  const raw = await schedulingSettingsRepository.get(companyId);
+  const cfg = normalizeSchedulingSettings(raw);
+  const bufferBeforeMs = cfg.bufferBeforeMinutes * 60000;
+  const bufferAfterMs = cfg.bufferAfterMinutes * 60000;
+  const slotDurationMs = cfg.slotDurationMinutes * 60000;
 
   const startMs = new Date(startAtISO).getTime();
-  const endMs = endAtISO ? new Date(endAtISO).getTime() : startMs + (settings.slotDurationMinutes || 30) * 60000;
+  const endMs = endAtISO ? new Date(endAtISO).getTime() : startMs + slotDurationMs;
 
   const appointments = await getScheduledAppointments(
     companyId,
-    new Date(startMs - bufferBefore - 86400000),
-    new Date(endMs + bufferAfter + 86400000)
+    new Date(startMs - bufferBeforeMs - 86400000),
+    new Date(endMs + bufferAfterMs + 86400000),
+    slotDurationMs
   );
 
-  return !slotsOverlap(startMs, endMs, appointments, bufferBefore, bufferAfter);
+  return !slotsOverlap(startMs, endMs, appointments, bufferBeforeMs, bufferAfterMs);
 }
 
 module.exports = { getAvailability, isSlotAvailable };

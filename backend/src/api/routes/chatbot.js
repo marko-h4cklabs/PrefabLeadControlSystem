@@ -364,12 +364,21 @@ router.post('/chat', async (req, res) => {
 
     console.info('[booking-offer] decision:', bookingDebug.eligible ? 'OFFER' : `SKIP reason=${bookingSkipReason}`);
 
-    // Helper to build the base response with consistent shape
+    const collectedInfosForResponse = collectedInfos.map((c) => ({
+      name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null,
+      ...(c.links && { links: c.links }),
+    }));
+    const requiredInfosForResponse = requiredInfos.map((r) => ({
+      name: r.name, type: r.type ?? 'text', units: r.units ?? null, priority: r.priority ?? 100,
+    }));
+
     function respond(assistantMessage, extra = {}) {
       return res.json({
         assistant_message: assistantMessage,
         conversation_id: conversationId,
         highlights,
+        required_infos: requiredInfosForResponse,
+        collected_infos: collectedInfosForResponse,
         booking_debug: bookingDebug,
         ...extra,
       });

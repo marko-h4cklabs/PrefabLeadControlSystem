@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getAvailability, isSlotAvailable } = require('../../../services/availabilityService');
+const { normalizeSchedulingSettings } = require('../../../services/schedulingNormalizer');
 const { appointmentRepository, leadRepository, notificationRepository, schedulingSettingsRepository } = require('../../../db/repositories');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { sendAppointmentConfirmationEmail } = require('../../../services/appointmentEmailService');
@@ -25,7 +26,8 @@ router.get('/availability', async (req, res) => {
 
     res.json({
       slots: result.slots,
-      settingsSummary: {
+      settingsSummary: result.settingsSummary || {
+        enabled: true,
         timezone: result.timezone,
         slotDurationMinutes: result.slotDurationMinutes,
       },
@@ -69,9 +71,9 @@ router.post('/book', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or does not belong to your company');
     }
 
-    const settings = await schedulingSettingsRepository.get(companyId);
-    const slotDuration = settings.slotDurationMinutes || settings.slot_duration_minutes || 30;
-    const endDate = new Date(startDate.getTime() + slotDuration * 60000);
+    const rawSettings = await schedulingSettingsRepository.get(companyId);
+    const cfg = normalizeSchedulingSettings(rawSettings);
+    const endDate = new Date(startDate.getTime() + cfg.slotDurationMinutes * 60000);
 
     const available = await isSlotAvailable(companyId, resolvedStartAt, endDate.toISOString());
     if (!available) {
@@ -90,7 +92,7 @@ router.post('/book', async (req, res) => {
       status: 'scheduled',
       startAt: startDate.toISOString(),
       endAt: endDate.toISOString(),
-      timezone: settings.timezone || 'Europe/Zagreb',
+      timezone: cfg.timezone,
       notes: notes || null,
       source: resolvedSource,
       reminderMinutesBefore: 60,
@@ -123,7 +125,7 @@ router.post('/book', async (req, res) => {
       appointmentTitle: derivedTitle,
       appointmentType: resolvedType,
       startAt: startDate.toISOString(),
-      timezone: settings.timezone || 'Europe/Zagreb',
+      timezone: cfg.timezone,
     }).catch(() => {});
 
     res.status(201).json({ appointment });
