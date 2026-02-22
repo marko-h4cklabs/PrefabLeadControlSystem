@@ -139,10 +139,12 @@ async function getAvailability(companyId, opts = {}) {
   const nowMs = Date.now();
   const earliestMs = nowMs + minNoticeMs;
   const slots = [];
+  const seenKeys = new Set();
   let daysScanned = 0;
   let slotsGenerated = 0;
   let conflictsSkipped = 0;
   let pastSkipped = 0;
+  let dupesSkipped = 0;
 
   let cursor = startDate;
   while (cursor <= endDate && slots.length < limit) {
@@ -170,21 +172,35 @@ async function getAvailability(companyId, opts = {}) {
         }
 
         const isoStart = slotStartUTC.toISOString();
-        slots.push({
-          id: `${cursor}_${startTime}`.replace(/:/g, ''),
-          label: formatSlotLabel(cursor, startTime, endTime, cfg.timezone),
-          startAt: isoStart,
-          endAt: slotEndUTC.toISOString(),
-          date: cursor,
-          startTime,
-          endTime,
-          timezone: cfg.timezone,
-        });
+        const isoEnd = slotEndUTC.toISOString();
+        const dedupeKey = `${isoStart}|${isoEnd}`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          slots.push({
+            id: `${cursor}_${startTime}`.replace(/:/g, ''),
+            label: formatSlotLabel(cursor, startTime, endTime, cfg.timezone),
+            startAt: isoStart,
+            start_at: isoStart,
+            endAt: isoEnd,
+            end_at: isoEnd,
+            date: cursor,
+            startTime,
+            endTime,
+            timezone: cfg.timezone,
+            appointmentType: opts.appointmentType || 'call',
+            appointment_type: opts.appointmentType || 'call',
+          });
+        } else {
+          dupesSkipped++;
+        }
         t += cfg.slotDurationMinutes;
       }
     }
     cursor = addDays(cursor, 1);
   }
+
+  // Sort ascending by startAt (should already be, but guarantee it)
+  slots.sort((a, b) => a.startAt.localeCompare(b.startAt));
 
   let reason = null;
   if (slots.length === 0) {
@@ -196,7 +212,7 @@ async function getAvailability(companyId, opts = {}) {
 
   console.info('[availability]', {
     companyId, enabledDays, daysScanned, slotsGenerated,
-    conflictsSkipped, pastSkipped, returned: slots.length, reason,
+    conflictsSkipped, pastSkipped, dupesSkipped, returned: slots.length, reason,
   });
 
   return {
@@ -212,6 +228,7 @@ async function getAvailability(companyId, opts = {}) {
       slotsGenerated,
       conflictsSkipped,
       pastSkipped,
+      dupesSkipped,
       scannedFrom: startDate,
       scannedTo: endDate,
     },
