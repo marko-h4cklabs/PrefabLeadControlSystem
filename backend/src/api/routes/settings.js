@@ -126,24 +126,23 @@ router.get('/scheduling', async (req, res) => {
 router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const companyId = req.tenantId;
+    const body = req.body || {};
     if (process.env.NODE_ENV !== 'production') {
-      console.debug('[settings/scheduling] PUT body keys:', Object.keys(req.body || {}));
+      console.debug('[settings/scheduling] PUT raw body keys:', Object.keys(body));
     }
 
-    const parsed = schedulingSettingsSchema.safeParse(req.body ?? {});
+    const parsed = schedulingSettingsSchema.safeParse(body);
     if (!parsed.success) {
       const flat = parsed.error.flatten();
       const fieldMsgs = Object.entries(flat.fieldErrors ?? {})
         .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
         .filter(Boolean);
       const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
-      const body = req.body || {};
       const wh = body.working_hours ?? body.workingHours;
       console.error('[settings/scheduling] PUT validation failed:', {
         bodyKeys: Object.keys(body),
         workingHoursType: wh == null ? 'null' : Array.isArray(wh) ? 'array' : typeof wh,
         workingHoursFirstItem: Array.isArray(wh) ? JSON.stringify(wh[0]) : undefined,
-        workingHoursObjKeys: wh && !Array.isArray(wh) && typeof wh === 'object' ? Object.keys(wh) : undefined,
         errors: fieldMsgs,
       });
       return res.status(400).json({
@@ -160,7 +159,8 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
     }
 
     if (process.env.NODE_ENV !== 'production') {
-      console.debug('[settings/scheduling] PUT merge:', {
+      console.debug('[settings/scheduling] PUT resolved:', {
+        enabled: merged.enabled,
         chatbot_offer_booking: merged.chatbot_offer_booking,
         chatbot_booking_mode: merged.chatbot_booking_mode,
       });
