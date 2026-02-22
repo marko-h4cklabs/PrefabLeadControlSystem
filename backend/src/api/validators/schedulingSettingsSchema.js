@@ -130,6 +130,7 @@ const CONSUMED_ALIASES = new Set([
   'chatbotCollectBookingAfterQuote', 'chatbotBookingRequiresName',
   'chatbotBookingRequiresPhone', 'chatbotBookingDefaultType',
   'chatbotAllowUserProposedTime', 'chatbotShowSlotsWhenAvailable',
+  'require_name', 'require_phone',
   'slotDurationMinutes', 'bufferBeforeMinutes', 'bufferAfterMinutes',
   'minNoticeHours', 'maxDaysAhead', 'allowedAppointmentTypes',
   'allowManualBookingFromLead', 'reminderDefaults', 'workingHours',
@@ -197,19 +198,23 @@ function camelOrSnake(obj) {
 
   // --- chatbot_booking_requires_name ---
   const reqNameSrc = [
+    ['chatbot_booking.require_name', n.require_name],
     ['chatbot_booking.requiresName', n.requiresName],
     ['chatbot_booking.chatbot_booking_requires_name', n.chatbot_booking_requires_name],
     ['chatbot_booking_requires_name', obj.chatbot_booking_requires_name],
     ['chatbotBookingRequiresName', obj.chatbotBookingRequiresName],
+    ['require_name', obj.require_name],
   ];
   const reqNameVal = firstBool(reqNameSrc);
 
   // --- chatbot_booking_requires_phone ---
   const reqPhoneSrc = [
+    ['chatbot_booking.require_phone', n.require_phone],
     ['chatbot_booking.requiresPhone', n.requiresPhone],
     ['chatbot_booking.chatbot_booking_requires_phone', n.chatbot_booking_requires_phone],
     ['chatbot_booking_requires_phone', obj.chatbot_booking_requires_phone],
     ['chatbotBookingRequiresPhone', obj.chatbotBookingRequiresPhone],
+    ['require_phone', obj.require_phone],
   ];
   const reqPhoneVal = firstBool(reqPhoneSrc);
 

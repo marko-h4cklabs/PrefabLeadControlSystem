@@ -75,21 +75,27 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
     parts.push(`- Forbidden topics (refuse briefly, redirect): ${beh.forbidden_topics.join(', ')}`);
   }
 
+  const bookingEnabled = schedulingConfig
+    && schedulingConfig.chatbotOfferBooking
+    && schedulingConfig.chatbotBookingMode !== 'off';
+
   parts.push('');
   parts.push('- If required_infos is not empty, the assistant MUST ask for the highest priority missing field.');
   parts.push('- If the user asks about something outside configured fields (e.g. doors, windows), answer in 1 line max then ask for the next missing required field.');
-  parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then a closing line. Do not ask new questions.');
 
-  if (schedulingConfig && schedulingConfig.chatbotOfferBooking && schedulingConfig.chatbotBookingMode !== 'off') {
+  if (bookingEnabled && schedulingConfig.chatbotCollectBookingAfterQuote !== false) {
+    parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then offer to schedule a call (see Scheduling section below). Do NOT end the conversation without offering booking.');
+  } else {
+    parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then a closing line. Do not ask new questions.');
+  }
+
+  if (bookingEnabled) {
     parts.push('');
-    parts.push('## Scheduling / Booking');
+    parts.push('## Scheduling / Booking (MUST follow when all quote fields are collected)');
     const typeLabel = (schedulingConfig.chatbotBookingDefaultType || 'call').replace(/_/g, ' ');
 
-    if (schedulingConfig.chatbotCollectBookingAfterQuote !== false) {
-      parts.push(`- After ALL required quote fields are collected, offer to schedule a ${typeLabel} with the company.`);
-      parts.push('- Use a brief, natural question like "Would you like to schedule a call to discuss your project further?"');
-    }
-
+    parts.push(`- IMMEDIATELY after the quote summary, ask: "Would you like to schedule a ${typeLabel} to discuss your project further?"`);
+    parts.push('- This booking question is MANDATORY after the summary. Do not skip it.');
     parts.push('- If the user expresses interest in scheduling/meeting/calling at any point, acknowledge it positively.');
 
     if (schedulingConfig.chatbotAllowUserProposedTime !== false) {

@@ -319,6 +319,38 @@ router.post('/chat', async (req, res) => {
 
     const highlights = buildHighlights(orderedQuoteFieldsForChat, collectedInfos, requiredInfos, behavior);
 
+    const quoteComplete = missingFields.length === 0;
+    const bookingEnabled = schedulingConfig
+      && schedulingConfig.chatbotOfferBooking
+      && schedulingConfig.chatbotBookingMode !== 'off';
+    const askAfterQuote = schedulingConfig?.chatbotCollectBookingAfterQuote !== false;
+    const requireName = schedulingConfig?.chatbotBookingRequiresName ?? false;
+    const requirePhone = schedulingConfig?.chatbotBookingRequiresPhone ?? false;
+    const hasName = !!(collectedMap.full_name || collectedMap.name || collectedMap.fullName);
+    const hasPhone = !!(collectedMap.phone || collectedMap.phone_number || collectedMap.phoneNumber);
+
+    let bookingOfferInserted = false;
+    let bookingSkipReason = null;
+    if (!bookingEnabled) bookingSkipReason = 'disabled';
+    else if (!quoteComplete) bookingSkipReason = 'not_quote_complete';
+    else if (!askAfterQuote) bookingSkipReason = 'ask_after_quote_off';
+    else if (requireName && !hasName) bookingSkipReason = 'missing_name';
+    else if (requirePhone && !hasPhone) bookingSkipReason = 'missing_phone';
+    else bookingOfferInserted = true;
+
+    console.info('[chat/booking-decision]', {
+      companyId, conversationId,
+      scheduling_enabled: schedulingConfig?.enabled ?? false,
+      chatbot_offer_booking: schedulingConfig?.chatbotOfferBooking ?? false,
+      booking_mode: schedulingConfig?.chatbotBookingMode ?? 'n/a',
+      ask_after_quote: askAfterQuote,
+      require_name: requireName, require_phone: requirePhone,
+      has_name: hasName, has_phone: hasPhone,
+      quote_complete: quoteComplete,
+      booking_offer_inserted: bookingOfferInserted,
+      skip_reason: bookingSkipReason,
+    });
+
     if (missingFields.length > 0) {
       const nextField = missingFields[0];
       let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);

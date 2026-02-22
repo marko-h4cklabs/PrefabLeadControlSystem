@@ -142,6 +142,8 @@ function withAliases(dto) {
   const booking = dto.chatbotOfferBooking ?? false;
   const mode = dto.chatbotBookingMode ?? 'manual_request';
   const enabled = dto.enabled ?? false;
+  const reqName = dto.chatbotBookingRequiresName ?? false;
+  const reqPhone = dto.chatbotBookingRequiresPhone ?? false;
 
   dto.scheduling_enabled = enabled;
   dto.schedulingEnabled = enabled;
@@ -151,10 +153,21 @@ function withAliases(dto) {
   dto.chatbot_offers_booking = booking;
   dto.enable_chatbot_booking_offers = booking;
 
+  dto.chatbot_booking_requires_name = reqName;
+  dto.require_name = reqName;
+  dto.chatbot_booking_requires_phone = reqPhone;
+  dto.require_phone = reqPhone;
+
   dto.chatbot_booking = {
     chatbot_booking_enabled: booking,
     enabled: booking,
     mode: mode,
+    require_name: reqName,
+    requiresName: reqName,
+    chatbot_booking_requires_name: reqName,
+    require_phone: reqPhone,
+    requiresPhone: reqPhone,
+    chatbot_booking_requires_phone: reqPhone,
   };
 
   return dto;
