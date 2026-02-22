@@ -99,11 +99,16 @@ function ensureWorkingHoursArray(wh) {
 }
 
 function toDto(row) {
-  if (!row) return { ...DEFAULTS, workingHours: DEFAULT_WORKING_HOURS };
-  return {
+  if (!row) return withAliases({ ...DEFAULTS, workingHours: DEFAULT_WORKING_HOURS });
+
+  const bookingEnabled = row.chatbot_offer_booking ?? DEFAULTS.chatbot_offer_booking;
+  const bookingMode = row.chatbot_booking_mode ?? DEFAULTS.chatbot_booking_mode;
+  const enabled = row.enabled ?? DEFAULTS.enabled;
+
+  return withAliases({
     id: row.id,
     companyId: row.company_id,
-    enabled: row.enabled ?? DEFAULTS.enabled,
+    enabled,
     timezone: row.timezone ?? DEFAULTS.timezone,
     workingHours: ensureWorkingHoursArray(row.working_hours ?? DEFAULTS.working_hours),
     slotDurationMinutes: row.slot_duration_minutes ?? DEFAULTS.slot_duration_minutes,
@@ -113,9 +118,9 @@ function toDto(row) {
     maxDaysAhead: row.max_days_ahead ?? DEFAULTS.max_days_ahead,
     allowedAppointmentTypes: row.allowed_appointment_types ?? DEFAULTS.allowed_appointment_types,
     allowManualBookingFromLead: row.allow_manual_booking_from_lead ?? DEFAULTS.allow_manual_booking_from_lead,
-    chatbotOfferBooking: row.chatbot_offer_booking ?? DEFAULTS.chatbot_offer_booking,
+    chatbotOfferBooking: bookingEnabled,
     reminderDefaults: row.reminder_defaults ?? DEFAULTS.reminder_defaults,
-    chatbotBookingMode: row.chatbot_booking_mode ?? DEFAULTS.chatbot_booking_mode,
+    chatbotBookingMode: bookingMode,
     chatbotBookingPromptStyle: row.chatbot_booking_prompt_style ?? DEFAULTS.chatbot_booking_prompt_style,
     chatbotCollectBookingAfterQuote: row.chatbot_collect_booking_after_quote ?? DEFAULTS.chatbot_collect_booking_after_quote,
     chatbotBookingRequiresName: row.chatbot_booking_requires_name ?? DEFAULTS.chatbot_booking_requires_name,
@@ -125,7 +130,34 @@ function toDto(row) {
     chatbotShowSlotsWhenAvailable: row.chatbot_show_slots_when_available ?? DEFAULTS.chatbot_show_slots_when_available,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  });
+}
+
+/**
+ * Add backward-compat alias keys to the response so the frontend always finds
+ * the correct value regardless of which key name it reads.
+ * All aliases are derived from the single canonical value — never conflicting.
+ */
+function withAliases(dto) {
+  const booking = dto.chatbotOfferBooking ?? false;
+  const mode = dto.chatbotBookingMode ?? 'manual_request';
+  const enabled = dto.enabled ?? false;
+
+  dto.scheduling_enabled = enabled;
+  dto.schedulingEnabled = enabled;
+
+  dto.chatbot_offer_booking = booking;
+  dto.chatbot_booking_enabled = booking;
+  dto.chatbot_offers_booking = booking;
+  dto.enable_chatbot_booking_offers = booking;
+
+  dto.chatbot_booking = {
+    chatbot_booking_enabled: booking,
+    enabled: booking,
+    mode: mode,
   };
+
+  return dto;
 }
 
 async function get(companyId) {

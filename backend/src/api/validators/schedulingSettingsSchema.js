@@ -22,21 +22,6 @@ const dayHoursEntrySchema = z.object({
   end: z.string().regex(TIME_RE, 'must be HH:MM format'),
 }).refine((r) => r.start < r.end, { message: 'start must be before end' });
 
-/**
- * Normalize working_hours from any supported shape to canonical flat array.
- *
- * Accepted inputs:
- *   1) Array of { day, start, end }  (canonical)
- *   2) Array of { day, enabled?, ranges: [{ start, end }] }  (Lovable UI shape)
- *   3) Object keyed by weekday with array of { start, end } per day
- *   4) Object keyed by weekday with single { start, end } per day
- *   5) null / undefined / empty → []
- *
- * Day names accept both full ("monday") and abbreviated ("mon").
- * Disabled days (enabled===false or empty ranges) produce zero entries.
- *
- * Output: Array of { day, start, end } (canonical flat)
- */
 function normalizeWorkingHours(wh) {
   if (wh == null) return [];
 
@@ -99,179 +84,172 @@ const reminderDefaultsSchema = z.object({
 /* ------------------------------------------------------------------ */
 /*  Priority-based alias resolution                                    */
 /*                                                                     */
-/*  For each canonical field, pick the FIRST boolean/value found       */
-/*  walking down the priority list. This makes the outcome             */
-/*  deterministic regardless of JSON key order.                        */
+/*  For each canonical field the FIRST defined value in the priority   */
+/*  list wins. Nested chatbot_booking.* beats top-level keys.         */
+/*  All alias keys are consumed — only canonical keys reach Zod.      */
 /* ------------------------------------------------------------------ */
 
-function pickBool(obj, nested, keys) {
-  if (nested && typeof nested === 'object') {
-    for (const k of keys.filter((k) => k.startsWith('_nested.'))) {
-      const nk = k.slice(8);
-      if (typeof nested[nk] === 'boolean') return nested[nk];
-    }
-  }
-  for (const k of keys) {
-    if (k.startsWith('_nested.')) continue;
-    if (typeof obj[k] === 'boolean') return obj[k];
+function firstBool(sources) {
+  for (const [, v] of sources) {
+    if (typeof v === 'boolean') return v;
   }
   return undefined;
 }
 
-function pickStr(obj, nested, keys) {
-  if (nested && typeof nested === 'object') {
-    for (const k of keys.filter((k) => k.startsWith('_nested.'))) {
-      const nk = k.slice(8);
-      if (typeof nested[nk] === 'string' && nested[nk].trim()) return nested[nk].trim();
-    }
-  }
-  for (const k of keys) {
-    if (k.startsWith('_nested.')) continue;
-    if (typeof obj[k] === 'string' && obj[k].trim()) return obj[k].trim();
+function firstStr(sources) {
+  for (const [, v] of sources) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return undefined;
 }
 
-function pickAny(obj, keys) {
-  for (const k of keys) {
-    if (obj[k] !== undefined) return obj[k];
+function logConflicts(canonical, resolved, sources) {
+  const defined = sources.filter(([, v]) => v !== undefined);
+  if (defined.length > 1) {
+    const conflicting = defined.some(([, v]) => v !== resolved);
+    if (conflicting) {
+      console.warn(
+        `[scheduling-settings] CONFLICT on "${canonical}": winner=${JSON.stringify(resolved)} from:`,
+        defined.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
+      );
+    }
   }
-  return undefined;
 }
+
+/**
+ * All known alias keys that map to canonical scheduling settings fields.
+ * These are stripped from the output so only canonical keys survive.
+ */
+const CONSUMED_ALIASES = new Set([
+  'chatbot_booking',
+  'scheduling_enabled', 'schedulingEnabled',
+  'chatbotOfferBooking', 'chatbot_booking_enabled', 'chatbot_offers_booking',
+  'enableChatbotBookingOffers', 'enable_chatbot_booking_offers',
+  'askForBookingAfterQuote', 'ask_for_booking_after_quote',
+  'chatbotBookingMode', 'chatbotBookingPromptStyle',
+  'chatbotCollectBookingAfterQuote', 'chatbotBookingRequiresName',
+  'chatbotBookingRequiresPhone', 'chatbotBookingDefaultType',
+  'chatbotAllowUserProposedTime', 'chatbotShowSlotsWhenAvailable',
+  'slotDurationMinutes', 'bufferBeforeMinutes', 'bufferAfterMinutes',
+  'minNoticeHours', 'maxDaysAhead', 'allowedAppointmentTypes',
+  'allowManualBookingFromLead', 'reminderDefaults', 'workingHours',
+]);
 
 /**
  * Normalize frontend payload to canonical snake_case, resolving conflicts.
  *
- * PRECEDENCE (highest → lowest per canonical field):
- *   1. Nested chatbot_booking.{key} (most specific)
+ * PRECEDENCE per field (highest → lowest):
+ *   1. Nested chatbot_booking.{key}
  *   2. Canonical snake_case key
  *   3. camelCase alias
  *   4. Lovable / legacy aliases
- *
- * Only canonical keys survive in the output — all aliases are consumed.
  */
 function camelOrSnake(obj) {
   if (!obj || typeof obj !== 'object') return obj ?? {};
 
   const nested = (obj.chatbot_booking && typeof obj.chatbot_booking === 'object')
     ? obj.chatbot_booking : null;
-  const conflicts = [];
+  const n = nested || {};
 
-  function trackConflict(canonical, resolved, sources) {
-    const found = sources.filter(([, v]) => v !== undefined);
-    if (found.length > 1) {
-      conflicts.push({ field: canonical, resolved, sources: found.map(([k, v]) => `${k}=${v}`) });
-    }
-  }
+  // --- enabled ---
+  // scheduling_enabled is more specific than generic enabled
+  const enabledSrc = [
+    ['scheduling_enabled', obj.scheduling_enabled],
+    ['schedulingEnabled', obj.schedulingEnabled],
+    ['enabled', obj.enabled],
+  ];
+  const enabledVal = firstBool(enabledSrc);
+  logConflicts('enabled', enabledVal, enabledSrc);
 
-  // --- enabled (scheduling toggle) ---
-  const enabledVal = pickBool(obj, null, [
-    'enabled',
-    'scheduling_enabled',
-    'schedulingEnabled',
-  ]);
-  trackConflict('enabled', enabledVal, [
-    ['enabled', typeof obj.enabled === 'boolean' ? obj.enabled : undefined],
-    ['scheduling_enabled', typeof obj.scheduling_enabled === 'boolean' ? obj.scheduling_enabled : undefined],
-    ['schedulingEnabled', typeof obj.schedulingEnabled === 'boolean' ? obj.schedulingEnabled : undefined],
-  ]);
-
-  // --- chatbot_offer_booking (booking toggle) ---
-  const bookingVal = pickBool(obj, nested, [
-    '_nested.chatbot_booking_enabled',
-    '_nested.enabled',
-    'chatbot_offer_booking',
-    'chatbotOfferBooking',
-    'chatbot_booking_enabled',
-    'chatbot_offers_booking',
-    'enableChatbotBookingOffers',
-    'enable_chatbot_booking_offers',
-    'askForBookingAfterQuote',
-    'ask_for_booking_after_quote',
-  ]);
-  {
-    const sources = [
-      ['chatbot_booking.chatbot_booking_enabled', nested ? (typeof nested.chatbot_booking_enabled === 'boolean' ? nested.chatbot_booking_enabled : undefined) : undefined],
-      ['chatbot_booking.enabled', nested ? (typeof nested.enabled === 'boolean' ? nested.enabled : undefined) : undefined],
-      ['chatbot_offer_booking', typeof obj.chatbot_offer_booking === 'boolean' ? obj.chatbot_offer_booking : undefined],
-      ['chatbotOfferBooking', typeof obj.chatbotOfferBooking === 'boolean' ? obj.chatbotOfferBooking : undefined],
-      ['chatbot_booking_enabled', typeof obj.chatbot_booking_enabled === 'boolean' ? obj.chatbot_booking_enabled : undefined],
-      ['chatbot_offers_booking', typeof obj.chatbot_offers_booking === 'boolean' ? obj.chatbot_offers_booking : undefined],
-      ['enableChatbotBookingOffers', typeof obj.enableChatbotBookingOffers === 'boolean' ? obj.enableChatbotBookingOffers : undefined],
-      ['enable_chatbot_booking_offers', typeof obj.enable_chatbot_booking_offers === 'boolean' ? obj.enable_chatbot_booking_offers : undefined],
-    ];
-    trackConflict('chatbot_offer_booking', bookingVal, sources);
-  }
+  // --- chatbot_offer_booking ---
+  const bookingSrc = [
+    ['chatbot_booking.chatbot_booking_enabled', n.chatbot_booking_enabled],
+    ['chatbot_booking.enabled', n.enabled],
+    ['chatbot_offer_booking', obj.chatbot_offer_booking],
+    ['chatbotOfferBooking', obj.chatbotOfferBooking],
+    ['chatbot_booking_enabled', obj.chatbot_booking_enabled],
+    ['chatbot_offers_booking', obj.chatbot_offers_booking],
+    ['enableChatbotBookingOffers', obj.enableChatbotBookingOffers],
+    ['enable_chatbot_booking_offers', obj.enable_chatbot_booking_offers],
+    ['askForBookingAfterQuote', obj.askForBookingAfterQuote],
+    ['ask_for_booking_after_quote', obj.ask_for_booking_after_quote],
+  ];
+  const bookingVal = firstBool(bookingSrc);
+  logConflicts('chatbot_offer_booking', bookingVal, bookingSrc);
 
   // --- chatbot_booking_mode ---
-  const modeVal = pickStr(obj, nested, [
-    '_nested.mode',
-    '_nested.chatbot_booking_mode',
-    'chatbot_booking_mode',
-    'chatbotBookingMode',
-  ]);
+  const modeSrc = [
+    ['chatbot_booking.mode', n.mode],
+    ['chatbot_booking.chatbot_booking_mode', n.chatbot_booking_mode],
+    ['chatbot_booking_mode', obj.chatbot_booking_mode],
+    ['chatbotBookingMode', obj.chatbotBookingMode],
+  ];
+  const modeVal = firstStr(modeSrc);
 
   // --- chatbot_collect_booking_after_quote ---
-  const collectVal = pickBool(obj, nested, [
-    '_nested.collectAfterQuote',
-    '_nested.chatbot_collect_booking_after_quote',
-    'chatbot_collect_booking_after_quote',
-    'chatbotCollectBookingAfterQuote',
-  ]);
+  const collectSrc = [
+    ['chatbot_booking.collectAfterQuote', n.collectAfterQuote],
+    ['chatbot_booking.chatbot_collect_booking_after_quote', n.chatbot_collect_booking_after_quote],
+    ['chatbot_collect_booking_after_quote', obj.chatbot_collect_booking_after_quote],
+    ['chatbotCollectBookingAfterQuote', obj.chatbotCollectBookingAfterQuote],
+  ];
+  const collectVal = firstBool(collectSrc);
 
   // --- chatbot_booking_requires_name ---
-  const reqNameVal = pickBool(obj, nested, [
-    '_nested.requiresName',
-    '_nested.chatbot_booking_requires_name',
-    'chatbot_booking_requires_name',
-    'chatbotBookingRequiresName',
-  ]);
+  const reqNameSrc = [
+    ['chatbot_booking.requiresName', n.requiresName],
+    ['chatbot_booking.chatbot_booking_requires_name', n.chatbot_booking_requires_name],
+    ['chatbot_booking_requires_name', obj.chatbot_booking_requires_name],
+    ['chatbotBookingRequiresName', obj.chatbotBookingRequiresName],
+  ];
+  const reqNameVal = firstBool(reqNameSrc);
 
   // --- chatbot_booking_requires_phone ---
-  const reqPhoneVal = pickBool(obj, nested, [
-    '_nested.requiresPhone',
-    '_nested.chatbot_booking_requires_phone',
-    'chatbot_booking_requires_phone',
-    'chatbotBookingRequiresPhone',
-  ]);
+  const reqPhoneSrc = [
+    ['chatbot_booking.requiresPhone', n.requiresPhone],
+    ['chatbot_booking.chatbot_booking_requires_phone', n.chatbot_booking_requires_phone],
+    ['chatbot_booking_requires_phone', obj.chatbot_booking_requires_phone],
+    ['chatbotBookingRequiresPhone', obj.chatbotBookingRequiresPhone],
+  ];
+  const reqPhoneVal = firstBool(reqPhoneSrc);
 
   // --- chatbot_booking_prompt_style ---
-  const promptStyleVal = pickStr(obj, nested, [
-    '_nested.promptStyle',
-    '_nested.chatbot_booking_prompt_style',
-    'chatbot_booking_prompt_style',
-    'chatbotBookingPromptStyle',
-  ]);
+  const promptSrc = [
+    ['chatbot_booking.promptStyle', n.promptStyle],
+    ['chatbot_booking.chatbot_booking_prompt_style', n.chatbot_booking_prompt_style],
+    ['chatbot_booking_prompt_style', obj.chatbot_booking_prompt_style],
+    ['chatbotBookingPromptStyle', obj.chatbotBookingPromptStyle],
+  ];
+  const promptStyleVal = firstStr(promptSrc);
 
   // --- chatbot_booking_default_type ---
-  const defaultTypeVal = pickStr(obj, nested, [
-    '_nested.defaultType',
-    '_nested.chatbot_booking_default_type',
-    'chatbot_booking_default_type',
-    'chatbotBookingDefaultType',
-  ]);
+  const typeSrc = [
+    ['chatbot_booking.defaultType', n.defaultType],
+    ['chatbot_booking.chatbot_booking_default_type', n.chatbot_booking_default_type],
+    ['chatbot_booking_default_type', obj.chatbot_booking_default_type],
+    ['chatbotBookingDefaultType', obj.chatbotBookingDefaultType],
+  ];
+  const defaultTypeVal = firstStr(typeSrc);
 
   // --- chatbot_allow_user_proposed_time ---
-  const allowTimeVal = pickBool(obj, nested, [
-    '_nested.allowUserProposedTime',
-    '_nested.chatbot_allow_user_proposed_time',
-    'chatbot_allow_user_proposed_time',
-    'chatbotAllowUserProposedTime',
-  ]);
+  const allowTimeSrc = [
+    ['chatbot_booking.allowUserProposedTime', n.allowUserProposedTime],
+    ['chatbot_booking.chatbot_allow_user_proposed_time', n.chatbot_allow_user_proposed_time],
+    ['chatbot_allow_user_proposed_time', obj.chatbot_allow_user_proposed_time],
+    ['chatbotAllowUserProposedTime', obj.chatbotAllowUserProposedTime],
+  ];
+  const allowTimeVal = firstBool(allowTimeSrc);
 
   // --- chatbot_show_slots_when_available ---
-  const showSlotsVal = pickBool(obj, nested, [
-    '_nested.showSlotsWhenAvailable',
-    '_nested.chatbot_show_slots_when_available',
-    'chatbot_show_slots_when_available',
-    'chatbotShowSlotsWhenAvailable',
-  ]);
+  const showSlotsSrc = [
+    ['chatbot_booking.showSlotsWhenAvailable', n.showSlotsWhenAvailable],
+    ['chatbot_booking.chatbot_show_slots_when_available', n.chatbot_show_slots_when_available],
+    ['chatbot_show_slots_when_available', obj.chatbot_show_slots_when_available],
+    ['chatbotShowSlotsWhenAvailable', obj.chatbotShowSlotsWhenAvailable],
+  ];
+  const showSlotsVal = firstBool(showSlotsSrc);
 
-  if (conflicts.length > 0) {
-    console.warn('[scheduling-settings] alias conflicts resolved:', JSON.stringify(conflicts));
-  }
-
-  // --- Simple aliases (no conflicts expected) ---
+  // Build output with ONLY canonical keys
   const out = {};
   if (enabledVal !== undefined) out.enabled = enabledVal;
   if (bookingVal !== undefined) out.chatbot_offer_booking = bookingVal;
@@ -284,6 +262,7 @@ function camelOrSnake(obj) {
   if (allowTimeVal !== undefined) out.chatbot_allow_user_proposed_time = allowTimeVal;
   if (showSlotsVal !== undefined) out.chatbot_show_slots_when_available = showSlotsVal;
 
+  // Simple camelCase→snake_case for non-contentious fields
   const simpleMap = {
     slotDurationMinutes: 'slot_duration_minutes',
     bufferBeforeMinutes: 'buffer_before_minutes',
@@ -297,7 +276,7 @@ function camelOrSnake(obj) {
   };
 
   for (const [k, v] of Object.entries(obj)) {
-    if (k === 'chatbot_booking') continue;
+    if (CONSUMED_ALIASES.has(k)) continue;
     const mapped = simpleMap[k] || k;
     if (out[mapped] === undefined) out[mapped] = v;
   }

@@ -127,9 +127,7 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const companyId = req.tenantId;
     const body = req.body || {};
-    if (process.env.NODE_ENV !== 'production') {
-      console.debug('[settings/scheduling] PUT raw body keys:', Object.keys(body));
-    }
+    console.debug('[settings/scheduling] PUT raw body keys:', Object.keys(body));
 
     const parsed = schedulingSettingsSchema.safeParse(body);
     if (!parsed.success) {
@@ -150,6 +148,12 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
       });
     }
 
+    console.debug('[settings/scheduling] PUT after normalization:', {
+      enabled: parsed.data.enabled,
+      chatbot_offer_booking: parsed.data.chatbot_offer_booking,
+      chatbot_booking_mode: parsed.data.chatbot_booking_mode,
+    });
+
     const currentDto = await schedulingSettingsRepository.get(companyId);
     const current = dtoToSnake(currentDto);
 
@@ -158,15 +162,12 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
       if (val !== undefined) merged[key] = val;
     }
 
-    if (process.env.NODE_ENV !== 'production') {
-      console.debug('[settings/scheduling] PUT resolved:', {
-        enabled: merged.enabled,
-        chatbot_offer_booking: merged.chatbot_offer_booking,
-        chatbot_booking_mode: merged.chatbot_booking_mode,
-      });
-    }
-
     const saved = await schedulingSettingsRepository.upsert(companyId, merged);
+    console.debug('[settings/scheduling] PUT saved:', {
+      enabled: saved.enabled,
+      chatbotOfferBooking: saved.chatbotOfferBooking,
+      chatbot_booking_enabled: saved.chatbot_booking_enabled,
+    });
     res.json(saved);
   } catch (err) {
     console.error('[settings/scheduling] PUT error:', err.message);
