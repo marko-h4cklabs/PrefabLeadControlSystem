@@ -137,6 +137,15 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
         .map(([f, msgs]) => `${f}: ${(msgs || []).join(', ')}`)
         .filter(Boolean);
       const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
+      const body = req.body || {};
+      const wh = body.working_hours ?? body.workingHours;
+      console.error('[settings/scheduling] PUT validation failed:', {
+        bodyKeys: Object.keys(body),
+        workingHoursType: wh == null ? 'null' : Array.isArray(wh) ? 'array' : typeof wh,
+        workingHoursFirstItem: Array.isArray(wh) ? JSON.stringify(wh[0]) : undefined,
+        workingHoursObjKeys: wh && !Array.isArray(wh) && typeof wh === 'object' ? Object.keys(wh) : undefined,
+        errors: fieldMsgs,
+      });
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: msg, fields: flat.fieldErrors },
       });

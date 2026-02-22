@@ -2,6 +2,11 @@ const { pool } = require('../index');
 
 const DAYS_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
+const SHORT_TO_FULL = {
+  mon: 'monday', tue: 'tuesday', wed: 'wednesday', thu: 'thursday',
+  fri: 'friday', sat: 'saturday', sun: 'sunday',
+};
+
 const DEFAULT_WORKING_HOURS = [
   { day: 'monday', start: '09:00', end: '17:00' },
   { day: 'tuesday', start: '09:00', end: '17:00' },
@@ -33,17 +38,50 @@ const DEFAULTS = {
   chatbot_show_slots_when_available: true,
 };
 
+function fullDayName(d) {
+  if (!d || typeof d !== 'string') return null;
+  const low = d.trim().toLowerCase();
+  return SHORT_TO_FULL[low] || (DAYS_ORDER.includes(low) ? low : null);
+}
+
 /**
- * Ensure working_hours is always the canonical array shape,
- * regardless of what's stored in DB (legacy object or new array).
+ * Normalize working_hours to canonical flat array [{ day, start, end }].
+ *
+ * Handles:
+ *   - Canonical array: [{ day, start, end }]
+ *   - Lovable UI array: [{ day, enabled, ranges: [{ start, end }] }]
+ *   - Legacy object: { monday: [{ start, end }] } or { monday: { start, end } }
+ *   - Short day names: "mon" → "monday"
  */
 function ensureWorkingHoursArray(wh) {
   if (wh == null) return [];
-  if (Array.isArray(wh)) return wh;
+  if (Array.isArray(wh)) {
+    const result = [];
+    for (const item of wh) {
+      if (!item || typeof item !== 'object') continue;
+      const dayName = fullDayName(item.day);
+      if (!dayName) continue;
+
+      if (Array.isArray(item.ranges)) {
+        if (item.enabled === false) continue;
+        for (const range of item.ranges) {
+          if (range && typeof range === 'object' && range.start && range.end) {
+            result.push({ day: dayName, start: range.start, end: range.end });
+          }
+        }
+        continue;
+      }
+
+      if (item.start && item.end) {
+        result.push({ day: dayName, start: item.start, end: item.end });
+      }
+    }
+    return result;
+  }
   if (typeof wh === 'object') {
     const result = [];
     for (const day of DAYS_ORDER) {
-      const val = wh[day];
+      const val = wh[day] || wh[day.slice(0, 3)];
       if (!val) continue;
       if (Array.isArray(val)) {
         for (const range of val) {
