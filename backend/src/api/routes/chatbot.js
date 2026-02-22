@@ -37,6 +37,7 @@ const {
   buildBookingPayload,
 } = require('../../chat/bookingOfferHelper');
 const { getAvailability } = require('../../../services/availabilityService');
+const { evaluateBookingTrigger } = require('../../../services/bookingTriggerService');
 const {
   companyInfoBodySchema,
   behaviorBodySchema,
@@ -339,32 +340,55 @@ router.post('/chat', async (req, res) => {
     const hasName = !!(collectedMap.full_name || collectedMap.name || collectedMap.fullName);
     const hasPhone = !!(collectedMap.phone || collectedMap.phone_number || collectedMap.phoneNumber);
 
-    const convState = await chatConversationRepository.getOrCreateState(conversationId, companyId);
-    let bookingPhase = convState.last_asked_field || null;
+    let bookingPhase = null;
+    let bookingState = null;
+    let stateLoadFailed = false;
+    try {
+      const convState = await chatConversationRepository.getOrCreateState(conversationId, companyId);
+      bookingPhase = convState.last_asked_field || null;
+      const fields = convState.collected_fields || {};
+      bookingState = fields.__booking || null;
+    } catch (stateErr) {
+      stateLoadFailed = true;
+      console.error('[chat-booking] STATE LOAD FAILED:', stateErr.message, { companyId, conversationId, code: stateErr.code });
+    }
 
-    // Reset terminal booking states so conversations aren't permanently blocked
-    if (isTerminalBookingState(bookingPhase)) {
+    // Reset terminal states for new explicit booking intent
+    if (!stateLoadFailed && isTerminalBookingState(bookingPhase)) {
       if (looksLikeBookingIntent(message)) {
         console.info('[chat-booking] resetting terminal state for new intent', { conversationId, was: bookingPhase });
-        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: null });
+        try { await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: null }); } catch (_) {}
         bookingPhase = null;
       }
     }
 
     const userWantsBooking = looksLikeBookingIntent(message);
 
-    let bookingSkipReason = null;
-    if (!bkgConfig) bookingSkipReason = 'config_null';
-    else if (!bkgConfig.bookingOffersEnabled) bookingSkipReason = 'booking_offers_disabled';
-    else if (bkgConfig.bookingMode === 'off') bookingSkipReason = 'mode_off';
-    else if (!bkgConfig.askAfterQuote && !userWantsBooking) bookingSkipReason = 'ask_after_quote_off';
-    else if (!quoteComplete && !userWantsBooking) bookingSkipReason = 'quote_not_complete';
-    else if (isInBookingFlow(bookingPhase)) bookingSkipReason = 'already_in_booking_flow';
+    // Count assistant messages since last booking offer for cooldown
+    let assistantCountSinceOffer = 0;
+    if (bookingState?.offeredAt) {
+      try {
+        assistantCountSinceOffer = await chatMessagesRepository.countAssistantSince(conversationId, bookingState.offeredAt);
+      } catch (_) { assistantCountSinceOffer = 999; }
+    }
+
+    // Centralized booking trigger evaluation
+    const trigger = evaluateBookingTrigger({
+      quoteComplete,
+      bookingPhase,
+      bookingState,
+      bkgConfig,
+      bookingActive,
+      stateLoadFailed,
+      userMessage: message,
+      assistantCountSinceOffer,
+    });
 
     const bookingDebug = {
-      eligible: bookingActive && (quoteComplete || userWantsBooking) && !isInBookingFlow(bookingPhase),
+      _v: '2026-02-22-v5',
+      eligible: trigger.shouldOfferBooking,
       offered: false,
-      reason: bookingSkipReason || 'eligible',
+      reason: trigger.reason,
       missing_required: missingFields.map((f) => f.name),
       booking_offers_enabled: bkgConfig?.bookingOffersEnabled ?? false,
       scheduling_enabled: bkgConfig?.schedulingEnabled ?? false,
@@ -375,13 +399,25 @@ router.post('/chat', async (req, res) => {
       has_name: hasName, has_phone: hasPhone,
       booking_phase: bookingPhase,
       config_loaded: schedulingConfig != null,
+      state_load_failed: stateLoadFailed,
       user_wants_booking: userWantsBooking,
       quote_complete: quoteComplete,
+      trigger_result: trigger,
+      assistant_msgs_since_offer: assistantCountSinceOffer,
     };
+
+    // Apply dismiss patch if evaluateBookingTrigger flagged it
+    if (trigger.bookingStatePatch && trigger.reason === 'user_dismissing') {
+      try {
+        await chatConversationRepository.updateBookingState(conversationId, companyId, trigger.bookingStatePatch);
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.DECLINED });
+        bookingPhase = BOOKING_STATES.DECLINED;
+      } catch (_) {}
+    }
 
     let selectedReplyPath = 'generic_ai';
 
-    console.info(`[chat-booking] conv=${conversationId} quoteComplete=${quoteComplete} scheduling=${bkgConfig?.schedulingEnabled} offer=${bkgConfig?.bookingOffersEnabled} askAfterQuote=${bkgConfig?.askAfterQuote} missing=[${missingFields.map(f=>f.name)}] alreadyOffered=${isInBookingFlow(bookingPhase)} userIntent=${userWantsBooking} => ${bookingDebug.eligible ? 'ELIGIBLE' : `SKIP(${bookingSkipReason})`}`);
+    console.info(`[chat-booking] conv=${conversationId} trigger=${trigger.reason} shouldOffer=${trigger.shouldOfferBooking} phase=${bookingPhase} quoteComplete=${quoteComplete} msgsSinceOffer=${assistantCountSinceOffer}`);
 
     const collectedInfosForResponse = collectedInfos.map((c) => ({
       name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null,
@@ -395,6 +431,39 @@ router.post('/chat', async (req, res) => {
       bookingDebug.selectedReplyPath = selectedReplyPath;
       const { ui_action, booking, ...rest } = extra;
       console.info(`[chat-booking] REPLY path=${selectedReplyPath} conv=${conversationId} phase=${bookingPhase}`);
+
+      const bookingMeta = booking || (bookingActive ? {
+        enabled: true,
+        flowStatus: bookingPhase || 'none',
+        bookingMode: bkgConfig?.bookingMode ?? 'manual_request',
+        requiresName: bkgConfig?.requireName ?? false,
+        requiresPhone: bkgConfig?.requirePhone ?? false,
+        source: 'chatbot',
+      } : null);
+
+      const meta = {};
+      if (bookingMeta) {
+        meta.booking = {
+          offered: bookingDebug.offered,
+          stage: bookingPhase || 'idle',
+          canShowSlots: bkgConfig?.showSlots ?? false,
+          slots: bookingMeta.slots || bookingMeta.availableSlots || [],
+          actions: buildBookingActions(bookingPhase, bkgConfig),
+          ...bookingMeta,
+        };
+      }
+
+      const bookingFlow = {
+        offered: !!(bookingState?.offeredAt) || bookingDebug.offered,
+        offered_at: bookingState?.offeredAt || null,
+        offer_reason: bookingState?.offerSource || (bookingDebug.offered ? trigger.reason : null),
+        awaiting_slot_selection: bookingPhase === BOOKING_STATES.SLOTS_SHOWN,
+        slots_last_shown_at: bookingState?.offeredAt || null,
+        dismissed: !!(bookingState?.dismissed),
+        dismissed_at: bookingState?.dismissedAt || null,
+        booked_appointment_id: bookingState?.completedAppointmentId || null,
+      };
+
       return res.json({
         assistant_message: assistantMessage,
         conversation_id: conversationId,
@@ -402,17 +471,29 @@ router.post('/chat', async (req, res) => {
         required_infos: requiredInfosForResponse,
         collected_infos: collectedInfosForResponse,
         booking_debug: bookingDebug,
+        booking_flow: bookingFlow,
         ui_action: ui_action || null,
-        booking: booking || (bookingActive ? {
-          enabled: true,
-          flowStatus: bookingPhase || 'none',
-          bookingMode: bkgConfig?.bookingMode ?? 'manual_request',
-          requiresName: bkgConfig?.requireName ?? false,
-          requiresPhone: bkgConfig?.requirePhone ?? false,
-          source: 'chatbot',
-        } : null),
+        booking: bookingMeta,
+        meta,
         ...rest,
       });
+    }
+
+    function buildBookingActions(phase, cfg) {
+      if (!cfg) return [];
+      const actions = [];
+      if (phase === BOOKING_STATES.OFFERED) {
+        actions.push({ type: 'booking_accept', label: 'Yes, book a call' });
+        actions.push({ type: 'booking_decline', label: 'Later' });
+        if (cfg.allowCustomTime) {
+          actions.push({ type: 'booking_custom_time', label: 'Propose another time' });
+        }
+      } else if (phase === BOOKING_STATES.SLOTS_SHOWN) {
+        actions.push({ type: 'booking_custom_time', label: 'Propose another time' });
+      } else if (phase === BOOKING_STATES.CONFIRMED || phase === BOOKING_STATES.ACCEPTED) {
+        actions.push({ type: 'booking_done', label: 'Done' });
+      }
+      return actions;
     }
 
     // ====== BOOKING ORCHESTRATION (all booking state handlers) ======
@@ -617,10 +698,12 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    // ========= EXPLICIT BOOKING INTENT: user asks to schedule unprompted =========
-    if (userWantsBooking && bookingActive && !isInBookingFlow(bookingPhase)) {
-      selectedReplyPath = 'booking_intent_entry';
-      console.info('[chat-booking] explicit intent detected', { conversationId, quoteComplete, hasName, hasPhone });
+    // ========= UNIFIED BOOKING OFFER: triggered by evaluateBookingTrigger =========
+    // Only fires when trigger.shouldOfferBooking is true (explicit intent OR auto-after-quote)
+    // This single block replaces both the "explicit intent" and "auto-after-quote" paths.
+    if (trigger.shouldOfferBooking) {
+      selectedReplyPath = trigger.reason === 'user_intent' ? 'booking_intent_entry' : 'booking_offer';
+      console.info('[chat-booking] OFFERING booking', { conversationId, reason: trigger.reason, quoteComplete });
 
       const missing = [];
       if (bkgConfig.requireName && !hasName) missing.push('full_name');
@@ -630,26 +713,95 @@ router.post('/chat', async (req, res) => {
         selectedReplyPath = 'booking_collect_prereq';
         const first = missing[0];
         const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
-        const prereqMsg = `Sure! To schedule that, could you share ${askLabel}?`;
+        const prereqMsg = trigger.reason === 'user_intent'
+          ? `Sure! To schedule that, could you share ${askLabel}?`
+          : `To proceed with scheduling, could you share ${askLabel}?`;
         const phase = first === 'full_name' ? BOOKING_STATES.PREREQ_NAME : BOOKING_STATES.PREREQ_PHONE;
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
+        if (trigger.bookingStatePatch) {
+          await chatConversationRepository.updateBookingState(conversationId, companyId, trigger.bookingStatePatch);
+        }
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', prereqMsg);
-        bookingDebug.reason = `intent_prereq_${first}_needed`;
-        return respond(prereqMsg, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing }) });
+        bookingDebug.reason = `prereq_${first}_needed`;
+        return respond(prereqMsg, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing, source: trigger.reason }) });
       }
 
-      const question = buildBookingQuestion(bkgConfig);
-      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
-      await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString(), offerSource: 'explicit_user_intent' });
-      await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
-      bookingDebug.offered = true; bookingDebug.reason = 'offered_on_user_intent';
-      console.info('[chat-booking] OFFERED on explicit intent', { conversationId });
-      return respond(question, {
-        ui_action: 'booking_offer',
-        booking: buildBookingPayload('offer', { source: 'explicit_user_intent' }),
-        booking_offer: true,
-        quick_replies: ['Yes', 'Not now'],
+      // Fetch slots if requested
+      let offerSlots = [];
+      if (trigger.shouldFetchSlots) {
+        try {
+          const avail = await getAvailability(companyId, { limit: 5 });
+          offerSlots = avail.slots || [];
+        } catch (slErr) {
+          console.warn('[chat-booking] slot fetch failed (non-blocking):', slErr.message);
+        }
+      }
+
+      // Build the offer message
+      let offerMsg = '';
+      if (trigger.reason === 'auto_after_quote' && quoteComplete) {
+        try {
+          const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
+          offerMsg = await callLLM(systemPrompt, message, behavior);
+          offerMsg = enforceStyle(offerMsg, behavior, { allowedFieldNames });
+          if (shouldGreet(assistantCountBefore)) {
+            const greetingWords = await generateGreeting(message, behavior);
+            offerMsg = prependGreeting(offerMsg, greetingWords);
+          }
+        } catch (llmErr) {
+          console.warn('[chat-booking] LLM summary failed, using simple offer:', llmErr.message);
+        }
+      }
+
+      if (offerSlots.length > 0) {
+        const slotsText = formatSlotsMessage(offerSlots, 5);
+        offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + slotsText + '\n\nPick a time, or suggest your own!';
+      } else if (!offerMsg || !looksLikeBookingOffer(offerMsg)) {
+        offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + buildBookingQuestion(bkgConfig);
+      }
+
+      const offerPhase = offerSlots.length > 0 ? BOOKING_STATES.SLOTS_SHOWN : BOOKING_STATES.OFFERED;
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: offerPhase });
+      await chatConversationRepository.updateBookingState(conversationId, companyId, {
+        ...(trigger.bookingStatePatch || {}),
+        offeredAt: new Date().toISOString(),
+        offerSource: trigger.reason,
+        dismissed: false,
+        ...(offerSlots.length > 0 ? { offeredSlots: offerSlots } : {}),
       });
+      bookingPhase = offerPhase;
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', offerMsg);
+      bookingDebug.offered = true;
+      bookingDebug.reason = trigger.reason;
+      console.info('[chat-booking] OFFERED', { conversationId, reason: trigger.reason, slotsCount: offerSlots.length });
+      return respond(offerMsg, {
+        ui_action: offerSlots.length > 0 ? 'booking_slots' : 'booking_offer',
+        booking: buildBookingPayload(offerSlots.length > 0 ? 'slots' : 'offer', {
+          source: trigger.reason,
+          defaultAppointmentType: bkgConfig.defaultType,
+          slots: offerSlots,
+          availableSlots: offerSlots,
+        }),
+        booking_offer: true,
+        quick_replies: offerSlots.length > 0 ? [] : ['Yes', 'Not now'],
+      });
+    }
+
+    // ========= SLOT REFRESH: user asked "another time", "more slots" etc. =========
+    if (trigger.isSlotRefresh && bookingPhase === BOOKING_STATES.SLOTS_SHOWN) {
+      try {
+        const avail = await getAvailability(companyId, { limit: 5 });
+        const refreshSlots = avail.slots || [];
+        if (refreshSlots.length > 0) {
+          const slotsText = formatSlotsMessage(refreshSlots, 5);
+          const refreshMsg = slotsText + '\n\nPick a time, or suggest your own!';
+          await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredSlots: refreshSlots });
+          await chatMessagesRepository.appendMessage(conversationId, 'assistant', refreshMsg);
+          return respond(refreshMsg, { ui_action: 'booking_slots', booking: buildBookingPayload('slots', { slots: refreshSlots, availableSlots: refreshSlots }) });
+        }
+      } catch (slErr) {
+        console.warn('[chat-booking] slot refresh failed:', slErr.message);
+      }
     }
 
     } catch (bookingOrchErr) {
@@ -677,59 +829,11 @@ router.post('/chat', async (req, res) => {
       return respond(assistantMessage);
     }
 
-    // ========= Quote complete: first-time booking offer =========
-    if (quoteComplete && bookingActive && bkgConfig.askAfterQuote && !isInBookingFlow(bookingPhase)) {
-      try {
-        selectedReplyPath = 'booking_offer';
-        const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
-        let assistantMessage = await callLLM(systemPrompt, message, behavior);
-        assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
-        if (shouldGreet(assistantCountBefore)) {
-          const greetingWords = await generateGreeting(message, behavior);
-          assistantMessage = prependGreeting(assistantMessage, greetingWords);
-        }
-
-        const missing = [];
-        if (bkgConfig.requireName && !hasName) missing.push('full_name');
-        if (bkgConfig.requirePhone && !hasPhone) missing.push('phone_number');
-
-        if (missing.length > 0) {
-          selectedReplyPath = 'booking_collect_prereq';
-          const first = missing[0];
-          const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
-          assistantMessage += `\n\nTo proceed with scheduling, could you share ${askLabel}?`;
-          const phase = first === 'full_name' ? BOOKING_STATES.PREREQ_NAME : BOOKING_STATES.PREREQ_PHONE;
-          await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
-          await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-          bookingDebug.reason = `prereq_${first}_needed`;
-          console.info('[chat-booking] summary + prereq', { conversationId, missing });
-          return respond(assistantMessage, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing, source: 'auto_after_quote' }) });
-        }
-
-        if (!looksLikeBookingOffer(assistantMessage)) {
-          assistantMessage += '\n\n' + buildBookingQuestion(bkgConfig);
-        }
-        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
-        await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString(), offerSource: 'auto_after_quote' });
-        await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-        bookingDebug.offered = true; bookingDebug.reason = 'offered_with_summary';
-        console.info('[chat-booking] OFFERED with summary', { conversationId });
-        return respond(assistantMessage, {
-          ui_action: 'booking_offer',
-          booking: buildBookingPayload('offer', { source: 'auto_after_quote', defaultAppointmentType: bkgConfig.defaultType }),
-          booking_offer: true,
-          quick_replies: ['Yes', 'Not now'],
-        });
-      } catch (offerErr) {
-        console.error('[chat-booking] quote-complete offer error, falling back:', offerErr.message);
-        selectedReplyPath = 'generic_ai_fallback';
-      }
-    }
-
     // ========= Default: LLM response (post-booking or booking disabled) =========
-    if (selectedReplyPath === 'generic_ai' || selectedReplyPath === 'generic_ai_fallback') {
-      selectedReplyPath = selectedReplyPath === 'generic_ai_fallback' ? 'generic_ai_fallback' : 'generic_ai';
+    if (selectedReplyPath !== 'generic_ai' && selectedReplyPath !== 'generic_ai_fallback') {
+      console.warn('[chat] unexpected fallthrough: selectedReplyPath=%s, returning generic AI anyway', selectedReplyPath);
     }
+    selectedReplyPath = selectedReplyPath === 'generic_ai_fallback' ? 'generic_ai_fallback' : 'generic_ai';
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
@@ -737,6 +841,16 @@ router.post('/chat', async (req, res) => {
       const greetingWords = await generateGreeting(message, behavior);
       assistantMessage = prependGreeting(assistantMessage, greetingWords);
     }
+
+    // If booking SHOULD have been offered but fell back due to error, append booking question
+    if (bookingActive && quoteComplete && !stateLoadFailed && bkgConfig.askAfterQuote
+        && !isInBookingFlow(bookingPhase) && selectedReplyPath === 'generic_ai_fallback') {
+      console.warn('[chat-booking] injecting booking CTA into fallback response');
+      assistantMessage += '\n\n' + buildBookingQuestion(bkgConfig);
+      bookingDebug.reason = 'fallback_with_booking_cta';
+      try { await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED }); } catch (_) {}
+    }
+
     const shouldAddClosing = !bookingActive || isTerminalBookingState(bookingPhase);
     if (shouldAddClosing && shouldClose(message, [])) {
       const closingWords = await generateClosing(message, collectedMap, behavior);
@@ -808,6 +922,112 @@ router.get('/system-context', async (req, res) => {
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
+});
+
+/**
+ * Diagnostic endpoint — verifies the entire booking pipeline works
+ * for the authenticated company. Returns DB state, table existence,
+ * normalized config, and sample availability.
+ */
+router.get('/booking-diagnostic', async (req, res) => {
+  const companyId = req.tenantId;
+  const diag = { _v: '2026-02-22-v4', companyId, checks: {} };
+
+  // 1. Scheduling settings from DB
+  try {
+    const raw = await schedulingSettingsRepository.get(companyId);
+    const norm = normalizeConfig(raw);
+    diag.checks.schedulingSettings = {
+      ok: true,
+      raw_keys: Object.keys(raw || {}),
+      chatbotOfferBooking: raw?.chatbotOfferBooking,
+      chatbot_offer_booking: raw?.chatbot_offer_booking,
+      enabled: raw?.enabled,
+      scheduling_enabled: raw?.scheduling_enabled,
+    };
+    diag.checks.normalizedConfig = {
+      ok: !!norm,
+      bookingOffersEnabled: norm?.bookingOffersEnabled,
+      schedulingEnabled: norm?.schedulingEnabled,
+      bookingMode: norm?.bookingMode,
+      askAfterQuote: norm?.askAfterQuote,
+      requireName: norm?.requireName,
+      requirePhone: norm?.requirePhone,
+      showSlots: norm?.showSlots,
+      allowCustomTime: norm?.allowCustomTime,
+    };
+    diag.checks.bookingActive = !!(norm && norm.bookingOffersEnabled && norm.bookingMode !== 'off');
+  } catch (err) {
+    diag.checks.schedulingSettings = { ok: false, error: err.message, code: err.code };
+    diag.checks.normalizedConfig = { ok: false, error: 'depends on settings' };
+  }
+
+  // 2. chat_conversation_state table exists
+  try {
+    const { pool } = require('../../../db/index');
+    await pool.query('SELECT 1 FROM chat_conversation_state LIMIT 0');
+    diag.checks.stateTable = { ok: true, table: 'chat_conversation_state' };
+  } catch (err) {
+    diag.checks.stateTable = { ok: false, error: err.message, code: err.code, hint: 'Run migration 010_chat_conversation_state.sql' };
+  }
+
+  // 3. company_scheduling_settings table + chatbot columns exist
+  try {
+    const { pool } = require('../../../db/index');
+    const colCheck = await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'company_scheduling_settings' AND column_name LIKE 'chatbot_%' ORDER BY ordinal_position`
+    );
+    diag.checks.schedulingTable = {
+      ok: colCheck.rows.length > 0,
+      chatbot_columns: colCheck.rows.map(r => r.column_name),
+      hint: colCheck.rows.length === 0 ? 'Run migration 030' : null,
+    };
+  } catch (err) {
+    diag.checks.schedulingTable = { ok: false, error: err.message };
+  }
+
+  // 4. Availability engine
+  try {
+    const avail = await getAvailability(companyId, { limit: 3 });
+    diag.checks.availability = {
+      ok: true,
+      slotCount: avail.slots.length,
+      slots: avail.slots.slice(0, 3),
+      debug: avail.debug,
+    };
+  } catch (err) {
+    diag.checks.availability = { ok: false, error: err.message };
+  }
+
+  // 5. Active conversations with booking state
+  try {
+    const { pool } = require('../../../db/index');
+    const convs = await pool.query(
+      `SELECT cs.conversation_id, cs.last_asked_field, cs.collected_fields->>'__booking' as booking_state, cs.updated_at
+       FROM chat_conversation_state cs
+       WHERE cs.company_id = $1
+       ORDER BY cs.updated_at DESC LIMIT 5`,
+      [companyId]
+    );
+    diag.checks.recentConversationStates = {
+      ok: true,
+      count: convs.rows.length,
+      conversations: convs.rows.map(r => ({
+        id: r.conversation_id,
+        bookingPhase: r.last_asked_field,
+        bookingState: r.booking_state ? JSON.parse(r.booking_state) : null,
+        updatedAt: r.updated_at,
+      })),
+    };
+  } catch (err) {
+    diag.checks.recentConversationStates = { ok: false, error: err.message };
+  }
+
+  const allOk = Object.values(diag.checks).every(c => c.ok);
+  diag.overall = allOk ? 'ALL_CHECKS_PASSED' : 'SOME_CHECKS_FAILED';
+  diag.failedChecks = Object.entries(diag.checks).filter(([, v]) => !v.ok).map(([k]) => k);
+
+  return res.json(diag);
 });
 
 module.exports = router;

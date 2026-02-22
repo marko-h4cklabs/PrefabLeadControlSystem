@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getAvailability, isSlotAvailable } = require('../../../services/availabilityService');
 const { normalizeSchedulingSettings } = require('../../../services/schedulingNormalizer');
-const { appointmentRepository, leadRepository, notificationRepository, schedulingSettingsRepository } = require('../../../db/repositories');
+const { appointmentRepository, leadRepository, notificationRepository, schedulingSettingsRepository, chatConversationRepository, chatMessagesRepository } = require('../../../db/repositories');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { sendAppointmentConfirmationEmail } = require('../../../services/appointmentEmailService');
 const { errorJson } = require('../middleware/errors');
@@ -39,50 +39,69 @@ router.get('/availability', async (req, res) => {
   }
 });
 
+const VALID_APPOINTMENT_TYPES = new Set(['call', 'site_visit', 'meeting', 'follow_up', 'consultation', 'video_call']);
+
 /**
- * POST /api/scheduling/book
- * Book an appointment slot. Validates availability before creating.
+ * Shared handler for all book-slot routes.
+ * Accepts both snake_case and camelCase body fields.
  */
-router.post('/book', async (req, res) => {
+async function handleBookSlot(req, res) {
   try {
-    const companyId = req.tenantId;
+    const companyId = req.tenantId || req.params.companyId;
+    if (!companyId) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'company_id could not be resolved');
+    }
     const body = req.body || {};
-    const { leadId, lead_id, startAt, start_at, appointmentType, appointment_type, title, notes, source } = body;
 
-    const resolvedLeadId = leadId || lead_id;
-    const resolvedStartAt = startAt || start_at;
-    const resolvedType = appointmentType || appointment_type || 'call';
-    const resolvedSource = source || 'manual';
+    const resolvedLeadId = body.leadId || body.lead_id;
+    const resolvedStartAt = body.startAt || body.start_at;
+    const resolvedEndAt = body.endAt || body.end_at;
+    let resolvedType = body.appointmentType || body.appointment_type || 'call';
+    const resolvedSource = body.source || 'chatbot';
+    const resolvedTimezone = body.timezone || null;
+    const resolvedTitle = body.title || null;
+    const resolvedNotes = body.notes || null;
+    const resolvedReminder = body.reminder_minutes_before ?? body.reminderMinutesBefore ?? 60;
+    const conversationId = body.conversationId || body.conversation_id || null;
 
-    if (!resolvedLeadId) {
-      return errorJson(res, 400, 'VALIDATION_ERROR', 'leadId is required');
+    console.info('[scheduling/book-slot] hit', { companyId, leadId: resolvedLeadId, startAt: resolvedStartAt, type: resolvedType, source: resolvedSource });
+
+    let typeWarning = null;
+    if (resolvedType && !VALID_APPOINTMENT_TYPES.has(resolvedType)) {
+      typeWarning = `Unknown appointment_type "${resolvedType}", defaulting to "call"`;
+      resolvedType = 'call';
     }
-    if (!resolvedStartAt) {
-      return errorJson(res, 400, 'VALIDATION_ERROR', 'startAt is required (ISO datetime)');
-    }
+
+    if (!resolvedLeadId) return errorJson(res, 400, 'VALIDATION_ERROR', 'leadId is required');
+    if (!resolvedStartAt) return errorJson(res, 400, 'VALIDATION_ERROR', 'startAt is required (ISO datetime)');
 
     const startDate = new Date(resolvedStartAt);
-    if (isNaN(startDate.getTime())) {
-      return errorJson(res, 400, 'VALIDATION_ERROR', 'startAt must be a valid ISO datetime');
-    }
+    if (isNaN(startDate.getTime())) return errorJson(res, 400, 'VALIDATION_ERROR', 'startAt must be a valid ISO datetime');
 
     const lead = await leadRepository.findById(companyId, resolvedLeadId);
-    if (!lead) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or does not belong to your company');
-    }
+    if (!lead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found or does not belong to your company');
 
     const rawSettings = await schedulingSettingsRepository.get(companyId);
     const cfg = normalizeSchedulingSettings(rawSettings);
-    const endDate = new Date(startDate.getTime() + cfg.slotDurationMinutes * 60000);
+    const tz = resolvedTimezone || cfg.timezone || 'Europe/Zagreb';
 
-    const available = await isSlotAvailable(companyId, resolvedStartAt, endDate.toISOString());
+    let endDate;
+    if (resolvedEndAt) {
+      endDate = new Date(resolvedEndAt);
+      if (isNaN(endDate.getTime())) return errorJson(res, 400, 'VALIDATION_ERROR', 'endAt must be a valid ISO datetime');
+    } else {
+      endDate = new Date(startDate.getTime() + cfg.slotDurationMinutes * 60000);
+    }
+
+    const available = await isSlotAvailable(companyId, startDate.toISOString(), endDate.toISOString());
     if (!available) {
+      console.info('[scheduling/book-slot] CONFLICT', { companyId, leadId: resolvedLeadId, startAt: resolvedStartAt });
       return errorJson(res, 409, 'CONFLICT', 'This time slot is no longer available. Please choose another.');
     }
 
     const leadName = lead.name || lead.channel || 'Lead';
     const typeLabel = resolvedType.replace(/_/g, ' ');
-    const derivedTitle = title || `${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} - ${leadName}`;
+    const derivedTitle = resolvedTitle || `${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)} - ${leadName}`;
 
     const appointment = await appointmentRepository.create({
       companyId,
@@ -92,10 +111,10 @@ router.post('/book', async (req, res) => {
       status: 'scheduled',
       startAt: startDate.toISOString(),
       endAt: endDate.toISOString(),
-      timezone: cfg.timezone,
-      notes: notes || null,
+      timezone: tz,
+      notes: resolvedNotes,
       source: resolvedSource,
-      reminderMinutesBefore: 60,
+      reminderMinutesBefore: resolvedReminder,
       createdByUserId: req.user?.id || null,
     });
 
@@ -107,6 +126,7 @@ router.post('/book', async (req, res) => {
         appointmentId: appointment.id,
         appointmentType: resolvedType,
         source: resolvedSource,
+        conversationId,
         message: `Appointment scheduled: ${typeLabel} on ${startDate.toISOString().slice(0, 16).replace('T', ' ')}`,
       },
     }).catch(() => {});
@@ -120,19 +140,53 @@ router.post('/book', async (req, res) => {
     }).catch(() => {});
 
     sendAppointmentConfirmationEmail({
-      to: null,
-      leadName,
-      appointmentTitle: derivedTitle,
-      appointmentType: resolvedType,
-      startAt: startDate.toISOString(),
-      timezone: cfg.timezone,
+      to: null, leadName, appointmentTitle: derivedTitle,
+      appointmentType: resolvedType, startAt: startDate.toISOString(), timezone: tz,
     }).catch(() => {});
 
-    res.status(201).json({ appointment });
+    const slotLabel = startDate.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' })
+      + ' at ' + startDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const confirmationText = `Great — your ${typeLabel} is scheduled for ${slotLabel} (${tz}). We'll reach out then.`;
+
+    // Update conversation booking state if conversationId provided
+    if (conversationId) {
+      try {
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: '__booking_confirmed' });
+        await chatConversationRepository.updateBookingState(conversationId, companyId, {
+          completedAppointmentId: appointment.id,
+          confirmedAt: new Date().toISOString(),
+          dismissed: false,
+        });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirmationText);
+      } catch (convErr) {
+        console.warn('[scheduling/book-slot] conversation state update failed (non-blocking):', convErr.message);
+      }
+    }
+
+    console.info('[scheduling/book-slot] CREATED', { companyId, appointmentId: appointment.id, leadId: resolvedLeadId, conversationId });
+
+    const response = {
+      success: true,
+      appointment,
+      booking: {
+        confirmed: true,
+        startAt: startDate.toISOString(),
+        endAt: endDate.toISOString(),
+        timezone: tz,
+        appointmentId: appointment.id,
+        confirmationText,
+      },
+    };
+    if (typeWarning) response.warning = typeWarning;
+    res.status(201).json(response);
   } catch (err) {
-    console.error('[scheduling/book] error:', err.message, err.code, err.detail);
+    console.error('[scheduling/book-slot] error:', err.message, err.code, err.detail);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to book appointment');
   }
-});
+}
+
+router.post('/book', handleBookSlot);
+router.post('/book-slot', handleBookSlot);
 
 module.exports = router;
+module.exports.handleBookSlot = handleBookSlot;

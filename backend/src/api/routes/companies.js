@@ -36,4 +36,11 @@ router.patch('/:id', requireCompanyMatch, requireRole('owner', 'admin'), async (
 router.use('/:id/fields', requireCompanyMatch, requireRole('owner', 'admin'), fieldsRouter);
 router.use('/:id/leads', requireCompanyMatch, requireRole('owner', 'admin', 'member'), leadsRouter);
 
+// Compat alias: POST /api/companies/:companyId/book-slot -> shared book-slot handler
+router.post('/:id/book-slot', requireCompanyMatch, async (req, res) => {
+  const { handleBookSlot } = require('./scheduling');
+  req.tenantId = req.tenantId || req.params.id;
+  return handleBookSlot(req, res);
+});
+
 module.exports = router;

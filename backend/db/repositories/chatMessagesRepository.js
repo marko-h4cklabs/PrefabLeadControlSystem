@@ -30,4 +30,13 @@ async function countByRole(conversationId, role) {
   return result.rows[0]?.n ?? 0;
 }
 
-module.exports = { appendMessage, getRecentMessages, countByRole };
+async function countAssistantSince(conversationId, sinceISO) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM chat_messages
+     WHERE conversation_id = $1 AND role = 'assistant' AND created_at > $2::timestamptz`,
+    [conversationId, sinceISO]
+  );
+  return result.rows[0]?.n ?? 0;
+}
+
+module.exports = { appendMessage, getRecentMessages, countByRole, countAssistantSince };
