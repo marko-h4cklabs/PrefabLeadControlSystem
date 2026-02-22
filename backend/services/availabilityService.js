@@ -1,119 +1,239 @@
-const { pool } = require('../db');
+const { pool } = require('../db/index');
 const { schedulingSettingsRepository } = require('../db/repositories');
 
-const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const DAYS_ORDER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const SHORT_TO_FULL = { mon: 'monday', tue: 'tuesday', wed: 'wednesday', thu: 'thursday', fri: 'friday', sat: 'saturday', sun: 'sunday' };
 
-function parseHHMM(hhmm) {
-  const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
+function fullDayName(d) {
+  if (!d) return '';
+  const lower = d.toLowerCase().trim();
+  return SHORT_TO_FULL[lower] || lower;
 }
 
-function addDays(date, n) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + n);
-  return d;
+function parseHHMM(str) {
+  const [h, m] = (str || '0:0').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
 }
 
-function dateToStr(d) {
-  return d.toISOString().slice(0, 10);
+function padTwo(n) { return String(n).padStart(2, '0'); }
+function minutesToHHMM(m) { return `${padTwo(Math.floor(m / 60))}:${padTwo(m % 60)}`; }
+
+function getTZOffset(tz, date) {
+  try {
+    const dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const p = Object.fromEntries(dtf.formatToParts(date).map(x => [x.type, x.value]));
+    const localMs = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour === 24 ? 0 : +p.hour, +p.minute, +p.second);
+    return localMs - date.getTime();
+  } catch {
+    return 60 * 60 * 1000;
+  }
 }
 
-/**
- * Convert canonical workingHours array to per-day lookup:
- *   [{ day:"monday", start:"09:00", end:"17:00" }]
- *   → { monday: [{ start:"09:00", end:"17:00" }] }
- */
-function arrayToDayMap(whArray) {
+function localToUTC(dateStr, timeStr, tz) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const [h, min] = timeStr.split(':').map(Number);
+  const ref = new Date(Date.UTC(y, m - 1, d, 12, 0));
+  const offset = getTZOffset(tz, ref);
+  const targetAsUTC = Date.UTC(y, m - 1, d, h, min);
+  return new Date(targetAsUTC - offset);
+}
+
+function todayInTZ(tz) {
+  const now = new Date();
+  try {
+    const dtf = new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+    return dtf.format(now);
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}
+
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}-${padTwo(dt.getMonth() + 1)}-${padTwo(dt.getDate())}`;
+}
+
+function dayOfWeek(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return DAYS_ORDER[new Date(y, m - 1, d).getDay()];
+}
+
+function arrayToDayMap(arr) {
   const map = {};
-  if (!Array.isArray(whArray)) return map;
-  for (const entry of whArray) {
-    if (!entry || !entry.day || !entry.start || !entry.end) continue;
-    if (!map[entry.day]) map[entry.day] = [];
-    map[entry.day].push({ start: entry.start, end: entry.end });
+  for (const entry of (arr || [])) {
+    const day = fullDayName(entry.day);
+    if (!day) continue;
+    if (!map[day]) map[day] = [];
+    if (entry.start && entry.end) {
+      map[day].push({ start: entry.start, end: entry.end });
+    } else if (Array.isArray(entry.ranges)) {
+      for (const r of entry.ranges) {
+        if (r.start && r.end) map[day].push({ start: r.start, end: r.end });
+      }
+    }
   }
   return map;
 }
 
-function buildSlotsForDay(dateStr, ranges, slotMins, tzOffset) {
-  const slots = [];
-  for (const range of ranges) {
-    const startMin = parseHHMM(range.start);
-    const endMin = parseHHMM(range.end);
-    for (let t = startMin; t + slotMins <= endMin; t += slotMins) {
-      const sh = String(Math.floor(t / 60)).padStart(2, '0');
-      const sm = String(t % 60).padStart(2, '0');
-      const eh = String(Math.floor((t + slotMins) / 60)).padStart(2, '0');
-      const em = String((t + slotMins) % 60).padStart(2, '0');
-      slots.push({
-        startAt: `${dateStr}T${sh}:${sm}:00${tzOffset}`,
-        endAt: `${dateStr}T${eh}:${em}:00${tzOffset}`,
-      });
-    }
-  }
-  return slots;
+function formatSlotLabel(dateStr, startTime, endTime, tz) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const dayName = dt.toLocaleDateString('en-US', { weekday: 'short' });
+  const monthName = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return `${dayName} ${monthName}, ${startTime}–${endTime} (${tz})`;
 }
 
-async function getAvailability(companyId, { from, to, appointmentType }) {
-  const settings = await schedulingSettingsRepository.get(companyId);
-  const tz = settings.timezone || 'Europe/Zagreb';
-  const slotMins = settings.slotDurationMinutes || 30;
-  const bufferBefore = settings.bufferBeforeMinutes || 0;
-  const bufferAfter = settings.bufferAfterMinutes || 0;
-  const minNoticeHours = settings.minNoticeHours || 2;
-  const maxDaysAhead = settings.maxDaysAhead || 30;
-  const workingHoursByDay = arrayToDayMap(settings.workingHours || []);
-
-  const now = new Date();
-  const minNoticeMs = minNoticeHours * 3600_000;
-
-  const fromDate = from ? new Date(from) : new Date(dateToStr(now));
-  const maxDate = addDays(now, maxDaysAhead);
-  let toDate = to ? new Date(to) : addDays(fromDate, 7);
-  if (toDate > maxDate) toDate = maxDate;
-  const maxRange = addDays(fromDate, 31);
-  if (toDate > maxRange) toDate = maxRange;
-
-  const tzOffset = '+01:00';
-
-  const existingRes = await pool.query(
+async function getScheduledAppointments(companyId, fromUTC, toUTC) {
+  const result = await pool.query(
     `SELECT start_at, end_at FROM appointments
      WHERE company_id = $1 AND status = 'scheduled'
-       AND start_at >= $2::date AND start_at < ($3::date + interval '1 day')
+       AND start_at < $3 AND end_at > $2
      ORDER BY start_at`,
-    [companyId, dateToStr(fromDate), dateToStr(toDate)]
+    [companyId, fromUTC.toISOString(), toUTC.toISOString()]
   );
-  const booked = existingRes.rows.map((r) => ({
-    start: new Date(r.start_at).getTime() - bufferBefore * 60000,
-    end: new Date(r.end_at).getTime() + bufferAfter * 60000,
+  return result.rows.map(r => ({
+    start: new Date(r.start_at).getTime(),
+    end: new Date(r.end_at).getTime(),
   }));
+}
 
-  const days = [];
-  let cursor = new Date(fromDate);
-  while (cursor <= toDate) {
-    const dayName = DAY_NAMES[cursor.getDay()];
-    const dateStr = dateToStr(cursor);
-    const ranges = workingHoursByDay[dayName];
+function slotsOverlap(slotStartMs, slotEndMs, appointments, bufferBeforeMs, bufferAfterMs) {
+  for (const appt of appointments) {
+    const blockStart = appt.start - bufferBeforeMs;
+    const blockEnd = appt.end + bufferAfterMs;
+    if (slotStartMs < blockEnd && slotEndMs > blockStart) return true;
+  }
+  return false;
+}
 
-    if (ranges && ranges.length > 0) {
-      const allSlots = buildSlotsForDay(dateStr, ranges, slotMins, tzOffset);
-      const available = allSlots.filter((slot) => {
-        const sTime = new Date(slot.startAt).getTime();
-        const eTime = new Date(slot.endAt).getTime();
-        if (sTime < now.getTime() + minNoticeMs) return false;
-        return !booked.some((b) => sTime < b.end && eTime > b.start);
-      });
-      days.push({ date: dateStr, slots: available });
-    } else {
-      days.push({ date: dateStr, slots: [] });
+/**
+ * Core availability engine. Returns available slots for a company.
+ * @param {string} companyId
+ * @param {Object} opts - { startDate?, endDate?, appointmentType?, limit? }
+ * @returns {{ slots, timezone, slotDurationMinutes, debug }}
+ */
+async function getAvailability(companyId, opts = {}) {
+  const settings = await schedulingSettingsRepository.get(companyId);
+  const tz = settings.timezone || settings.tz || 'Europe/Zagreb';
+  const slotDuration = settings.slotDurationMinutes || settings.slot_duration_minutes || 30;
+  const bufferBefore = (settings.bufferBeforeMinutes || settings.buffer_before_minutes || 0) * 60000;
+  const bufferAfter = (settings.bufferAfterMinutes || settings.buffer_after_minutes || 0) * 60000;
+  const minNotice = (settings.minNoticeHours || settings.min_notice_hours || 2) * 3600000;
+  const maxDays = settings.maxDaysAhead || settings.max_days_ahead || 30;
+  const wh = settings.workingHours || settings.working_hours || [];
+  const dayMap = arrayToDayMap(wh);
+  const limit = Math.min(opts.limit || 10, 50);
+
+  const today = todayInTZ(tz);
+  const startDate = opts.startDate || today;
+  const endDate = opts.endDate || addDays(today, maxDays);
+
+  const enabledDays = Object.keys(dayMap).filter(d => dayMap[d].length > 0);
+  if (enabledDays.length === 0) {
+    return {
+      slots: [], timezone: tz, slotDurationMinutes: slotDuration,
+      debug: { reason: 'no_enabled_days', enabledDays: [], scannedFrom: startDate, scannedTo: endDate },
+    };
+  }
+
+  const windowStart = localToUTC(startDate, '00:00', tz);
+  const windowEnd = localToUTC(addDays(endDate, 1), '00:00', tz);
+  const appointments = await getScheduledAppointments(companyId, windowStart, windowEnd);
+
+  const nowMs = Date.now();
+  const earliestMs = nowMs + minNotice;
+  const slots = [];
+  let daysScanned = 0;
+  let slotsGenerated = 0;
+  let conflictsSkipped = 0;
+  let pastSkipped = 0;
+
+  let cursor = startDate;
+  while (cursor <= endDate && slots.length < limit) {
+    const weekday = dayOfWeek(cursor);
+    const ranges = dayMap[weekday] || [];
+    daysScanned++;
+
+    for (const range of ranges) {
+      const rangeStartMin = parseHHMM(range.start);
+      const rangeEndMin = parseHHMM(range.end);
+      let t = rangeStartMin;
+
+      while (t + slotDuration <= rangeEndMin && slots.length < limit) {
+        const startTime = minutesToHHMM(t);
+        const endTime = minutesToHHMM(t + slotDuration);
+        const slotStartUTC = localToUTC(cursor, startTime, tz);
+        const slotEndUTC = localToUTC(cursor, endTime, tz);
+        const slotStartMs = slotStartUTC.getTime();
+        const slotEndMs = slotEndUTC.getTime();
+        slotsGenerated++;
+
+        if (slotStartMs < earliestMs) { pastSkipped++; t += slotDuration; continue; }
+        if (slotsOverlap(slotStartMs, slotEndMs, appointments, bufferBefore, bufferAfter)) { conflictsSkipped++; t += slotDuration; continue; }
+
+        slots.push({
+          id: `slot-${slots.length}`,
+          label: formatSlotLabel(cursor, startTime, endTime, tz),
+          startAt: slotStartUTC.toISOString(),
+          endAt: slotEndUTC.toISOString(),
+          date: cursor,
+          startTime,
+          endTime,
+          timezone: tz,
+        });
+        t += slotDuration;
+      }
     }
     cursor = addDays(cursor, 1);
   }
 
+  let reason = null;
+  if (slots.length === 0) {
+    if (pastSkipped > 0 && conflictsSkipped === 0) reason = 'all_past_or_too_soon';
+    else if (conflictsSkipped > 0) reason = 'all_conflicted';
+    else reason = 'outside_working_hours';
+  }
+
   return {
+    slots,
     timezone: tz,
-    slotDurationMinutes: slotMins,
-    days,
+    slotDurationMinutes: slotDuration,
+    debug: {
+      reason,
+      enabledDays,
+      daysScanned,
+      slotsGenerated,
+      conflictsSkipped,
+      pastSkipped,
+      scannedFrom: startDate,
+      scannedTo: endDate,
+    },
   };
 }
 
-module.exports = { getAvailability };
+/**
+ * Check if a specific slot is still available (for double-booking prevention).
+ */
+async function isSlotAvailable(companyId, startAtISO, endAtISO) {
+  const settings = await schedulingSettingsRepository.get(companyId);
+  const bufferBefore = (settings.bufferBeforeMinutes || settings.buffer_before_minutes || 0) * 60000;
+  const bufferAfter = (settings.bufferAfterMinutes || settings.buffer_after_minutes || 0) * 60000;
+
+  const startMs = new Date(startAtISO).getTime();
+  const endMs = endAtISO ? new Date(endAtISO).getTime() : startMs + (settings.slotDurationMinutes || 30) * 60000;
+
+  const appointments = await getScheduledAppointments(
+    companyId,
+    new Date(startMs - bufferBefore - 86400000),
+    new Date(endMs + bufferAfter + 86400000)
+  );
+
+  return !slotsOverlap(startMs, endMs, appointments, bufferBefore, bufferAfter);
+}
+
+module.exports = { getAvailability, isSlotAvailable };

@@ -87,4 +87,28 @@ async function updateState(conversationId, companyId, patch) {
   return res.rows[0];
 }
 
-module.exports = { createConversation, getConversation, getOrCreateActiveConversation, getOrCreateState, updateState, updateQuoteSnapshot };
+async function getBookingState(conversationId, companyId) {
+  const state = await getOrCreateState(conversationId, companyId);
+  const fields = state.collected_fields || {};
+  return fields.__booking || null;
+}
+
+async function updateBookingState(conversationId, companyId, bookingPatch) {
+  const state = await getOrCreateState(conversationId, companyId);
+  const fields = state.collected_fields || {};
+  const current = fields.__booking || {};
+  fields.__booking = { ...current, ...bookingPatch, updatedAt: new Date().toISOString() };
+  await updateState(conversationId, companyId, { collected_fields: fields });
+  return fields.__booking;
+}
+
+module.exports = {
+  createConversation,
+  getConversation,
+  getOrCreateActiveConversation,
+  getOrCreateState,
+  updateState,
+  updateQuoteSnapshot,
+  getBookingState,
+  updateBookingState,
+};

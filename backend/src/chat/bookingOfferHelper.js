@@ -8,16 +8,18 @@ const BOOKING_STATES = {
   PREREQ_NAME: '__booking_prereq_name',
   PREREQ_PHONE: '__booking_prereq_phone',
   OFFERED: '__booking_offered',
+  SLOTS_SHOWN: '__booking_slots_shown',
+  CUSTOM_TIME: '__booking_custom_time',
   ACCEPTED: '__booking_accepted',
+  CONFIRMED: '__booking_confirmed',
   DECLINED: '__booking_declined',
 };
 
-const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|alright|please|absolutely|definitely|of course|da|naravno|svakako|rado|moze|mozemo|hajde|dobro|u redu|može)\b/i;
+const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|alright|please|absolutely|definitely|of course|da|naravno|svakako|rado|moze|mozemo|hajde|dobro|u redu|može|book|schedule|call me)\b/i;
 const NO_RE = /\b(no|nah|nope|not now|not really|later|skip|maybe later|ne|nema|ne treba|ne sada|možda kasnije|preskoci|ne hvala)\b/i;
 
 /**
  * Normalize scheduling config from any alias combination into a flat object.
- * Resolves camelCase, snake_case, nested chatbot_booking.*, and legacy keys.
  */
 function normalizeConfig(cfg) {
   if (!cfg) return null;
@@ -51,6 +53,8 @@ function normalizeConfig(cfg) {
     promptStyle: cfg.chatbotBookingPromptStyle ?? cfg.chatbot_booking_prompt_style ?? cb.promptStyle ?? 'neutral',
     showSlots: !!(cfg.chatbotShowSlotsWhenAvailable ?? cfg.chatbot_show_slots_when_available ?? cb.showSlotsWhenAvailable),
     allowCustomTime: (cfg.chatbotAllowUserProposedTime ?? cfg.chatbot_allow_user_proposed_time ?? cb.allowUserProposedTime) !== false,
+    slotDurationMinutes: cfg.slotDurationMinutes ?? cfg.slot_duration_minutes ?? 30,
+    timezone: cfg.timezone ?? 'Europe/Zagreb',
   };
 }
 
@@ -79,6 +83,23 @@ function looksLikeBookingOffer(text) {
   return (lower.includes('schedule') || lower.includes('book')) && lower.includes('?');
 }
 
+function formatSlotsMessage(slots, maxShow = 5) {
+  if (!slots || slots.length === 0) return null;
+  const shown = slots.slice(0, maxShow);
+  const lines = shown.map((s, i) => `${i + 1}. ${s.label}`);
+  return 'Here are some available times:\n' + lines.join('\n');
+}
+
+function buildBookingPayload(mode, extra = {}) {
+  return {
+    mode,
+    slots: extra.slots || [],
+    appointment: extra.appointment || null,
+    requiredBeforeBooking: extra.requiredBeforeBooking || null,
+    ...extra,
+  };
+}
+
 module.exports = {
   BOOKING_STATES,
   normalizeConfig,
@@ -87,4 +108,6 @@ module.exports = {
   isBookingDecline,
   buildBookingQuestion,
   looksLikeBookingOffer,
+  formatSlotsMessage,
+  buildBookingPayload,
 };
