@@ -8,6 +8,7 @@ const {
   chatConversationFieldsRepository,
   chatMessagesRepository,
   schedulingSettingsRepository,
+  schedulingRequestRepository,
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
@@ -378,6 +379,8 @@ router.post('/chat', async (req, res) => {
       quote_complete: quoteComplete,
     };
 
+    let selectedReplyPath = 'generic_ai';
+
     console.info(`[chat-booking] conv=${conversationId} quoteComplete=${quoteComplete} scheduling=${bkgConfig?.schedulingEnabled} offer=${bkgConfig?.bookingOffersEnabled} askAfterQuote=${bkgConfig?.askAfterQuote} missing=[${missingFields.map(f=>f.name)}] alreadyOffered=${isInBookingFlow(bookingPhase)} userIntent=${userWantsBooking} => ${bookingDebug.eligible ? 'ELIGIBLE' : `SKIP(${bookingSkipReason})`}`);
 
     const collectedInfosForResponse = collectedInfos.map((c) => ({
@@ -389,6 +392,9 @@ router.post('/chat', async (req, res) => {
     }));
 
     function respond(assistantMessage, extra = {}) {
+      bookingDebug.selectedReplyPath = selectedReplyPath;
+      const { ui_action, booking, ...rest } = extra;
+      console.info(`[chat-booking] REPLY path=${selectedReplyPath} conv=${conversationId} phase=${bookingPhase}`);
       return res.json({
         assistant_message: assistantMessage,
         conversation_id: conversationId,
@@ -396,41 +402,56 @@ router.post('/chat', async (req, res) => {
         required_infos: requiredInfosForResponse,
         collected_infos: collectedInfosForResponse,
         booking_debug: bookingDebug,
-        ...extra,
+        ui_action: ui_action || null,
+        booking: booking || (bookingActive ? {
+          enabled: true,
+          flowStatus: bookingPhase || 'none',
+          bookingMode: bkgConfig?.bookingMode ?? 'manual_request',
+          requiresName: bkgConfig?.requireName ?? false,
+          requiresPhone: bkgConfig?.requirePhone ?? false,
+          source: 'chatbot',
+        } : null),
+        ...rest,
       });
     }
 
+    // ====== BOOKING ORCHESTRATION (all booking state handlers) ======
+    // Wrapped in try/catch: if any booking operation fails, fall back to generic AI
+    try {
+
     // ========= BOOKING PREREQ: name =========
     if (bookingPhase === BOOKING_STATES.PREREQ_NAME && bookingActive) {
+      selectedReplyPath = 'booking_collect_prereq';
       await chatConversationFieldsRepository.upsertField(conversationId, 'full_name', 'text', message.trim());
       if (bkgConfig.requirePhone && !hasPhone) {
         const ask = 'Could you also share your phone number?';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_PHONE });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', ask);
         bookingDebug.reason = 'prereq_phone_needed';
-        return respond(ask, { booking: buildBookingPayload('offer', { requiredBeforeBooking: ['phone_number'] }) });
+        return respond(ask, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: ['phone_number'], missingPrereqs: ['phone_number'] }) });
       }
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
       bookingDebug.offered = true; bookingDebug.reason = 'offered_after_name_prereq';
-      return respond(question, { booking: buildBookingPayload('offer'), booking_offer: true, quick_replies: ['Yes', 'Not now'] });
+      return respond(question, { ui_action: 'booking_offer', booking: buildBookingPayload('offer'), booking_offer: true, quick_replies: ['Yes', 'Not now'] });
     }
 
     // ========= BOOKING PREREQ: phone =========
     if (bookingPhase === BOOKING_STATES.PREREQ_PHONE && bookingActive) {
+      selectedReplyPath = 'booking_collect_prereq';
       await chatConversationFieldsRepository.upsertField(conversationId, 'phone_number', 'text', message.trim());
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
       bookingDebug.offered = true; bookingDebug.reason = 'offered_after_phone_prereq';
-      return respond(question, { booking: buildBookingPayload('offer'), booking_offer: true, quick_replies: ['Yes', 'Not now'] });
+      return respond(question, { ui_action: 'booking_offer', booking: buildBookingPayload('offer'), booking_offer: true, quick_replies: ['Yes', 'Not now'] });
     }
 
     // ========= BOOKING RESPONSE: user replied to offer =========
     if (bookingPhase === BOOKING_STATES.OFFERED) {
       if (isBookingAcceptance(message)) {
-        // User said YES — fetch slots and show them
+        selectedReplyPath = 'booking_slots';
         try {
           const availability = await getAvailability(companyId, { limit: 5 });
           const slots = availability.slots || [];
@@ -443,48 +464,58 @@ router.post('/chat', async (req, res) => {
             });
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', ask);
             bookingDebug.offered = true; bookingDebug.reason = 'slots_shown';
-            console.info('[booking-offer] SLOTS_SHOWN', { conversationId, slotCount: slots.length });
-            return respond(ask, { booking: buildBookingPayload('slots', { slots }) });
+            console.info('[chat-booking] SLOTS_SHOWN', { conversationId, slotCount: slots.length });
+            return respond(ask, { ui_action: 'booking_slots', booking: buildBookingPayload('slots', { slots, availableSlots: slots }) });
           }
 
-          // No slots available
+          // No slots — transition to manual request flow
+          selectedReplyPath = 'booking_manual_request';
           if (bkgConfig.allowCustomTime) {
-            const noSlots = 'No available slots right now. When would work best for you? Share your preferred date and time.';
+            const noSlots = "I couldn't find available slots in that range. I can still take your preferred day/time and submit a booking request. When would work best for you?";
             await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.CUSTOM_TIME });
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', noSlots);
             bookingDebug.reason = 'no_slots_custom_time';
-            console.info('[booking-offer] no slots, asking custom time', { conversationId, debug: availability.debug });
-            return respond(noSlots, { booking: buildBookingPayload('awaiting_custom_time', { debug: availability.debug }) });
+            console.info('[chat-booking] no slots, asking custom time', { conversationId, debug: availability.debug });
+            return respond(noSlots, { ui_action: 'booking_collect_time', booking: buildBookingPayload('awaiting_custom_time', { debug: availability.debug }) });
           }
 
           const noSlotsFallback = 'Our team will reach out shortly to find a time that works. Thank you!';
           await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
           await chatMessagesRepository.appendMessage(conversationId, 'assistant', noSlotsFallback);
           bookingDebug.reason = 'no_slots_team_followup';
-          return respond(noSlotsFallback, { booking: buildBookingPayload('not_available', { debug: availability.debug }) });
+          return respond(noSlotsFallback, { ui_action: 'booking_manual_request', booking: buildBookingPayload('not_available', { debug: availability.debug }) });
         } catch (availErr) {
-          console.error('[booking-offer] availability fetch failed:', availErr.message);
+          console.error('[chat-booking] availability fetch failed, using manual fallback:', availErr.message);
+          selectedReplyPath = 'booking_manual_request';
+          if (bkgConfig.allowCustomTime) {
+            const fallback = 'When would work best for you? Share your preferred date and time, and our team will arrange it.';
+            await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.CUSTOM_TIME });
+            await chatMessagesRepository.appendMessage(conversationId, 'assistant', fallback);
+            bookingDebug.reason = 'availability_error_manual_fallback';
+            return respond(fallback, { ui_action: 'booking_collect_time', booking: buildBookingPayload('awaiting_custom_time') });
+          }
           const fallback = 'Our team will contact you to schedule a convenient time. Thank you!';
           await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
           await chatMessagesRepository.appendMessage(conversationId, 'assistant', fallback);
           bookingDebug.reason = 'availability_error';
-          return respond(fallback, { booking: buildBookingPayload('not_available') });
+          return respond(fallback, { ui_action: 'booking_manual_request', booking: buildBookingPayload('not_available') });
         }
       }
       if (isBookingDecline(message)) {
+        selectedReplyPath = 'booking_declined';
         const decline = 'No problem! Our team has your information and will follow up if needed. Thank you!';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.DECLINED });
         await chatConversationRepository.updateBookingState(conversationId, companyId, { declined: true, declinedAt: new Date().toISOString() });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', decline);
         bookingDebug.reason = 'booking_declined';
-        console.info('[booking-offer] DECLINED', { conversationId });
-        return respond(decline, { booking: buildBookingPayload('declined'), booking_declined: true });
+        console.info('[chat-booking] DECLINED', { conversationId });
+        return respond(decline, { ui_action: 'booking_declined', booking: buildBookingPayload('declined'), booking_declined: true });
       }
     }
 
     // ========= SLOTS_SHOWN: user replied after seeing slots =========
     if (bookingPhase === BOOKING_STATES.SLOTS_SHOWN) {
-      // Try to match slot selection (number like "1", "2", "the first one", etc.)
+      selectedReplyPath = 'booking_slot_selection';
       const numMatch = message.trim().match(/^(\d)$/);
       if (numMatch) {
         const idx = parseInt(numMatch[1], 10) - 1;
@@ -492,30 +523,23 @@ router.post('/chat', async (req, res) => {
         const offeredSlots = bkState?.offeredSlots || [];
         if (idx >= 0 && idx < offeredSlots.length) {
           const slot = offeredSlots[idx];
-          await chatConversationRepository.updateBookingState(conversationId, companyId, {
-            selectedSlot: slot,
-          });
-          const confirm = `You selected: ${slot.label}. To confirm this booking, use the button below or say "confirm".`;
+          await chatConversationRepository.updateBookingState(conversationId, companyId, { selectedSlot: slot });
+          const confirm = `You selected: ${slot.label}. To confirm this booking, say "confirm".`;
           await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirm);
           return respond(confirm, {
-            booking: buildBookingPayload('slots', {
-              slots: offeredSlots,
-              selectedSlot: slot,
-              conversationId,
-              leadId: reqLeadId || null,
-            }),
+            ui_action: 'booking_confirm',
+            booking: buildBookingPayload('slots', { slots: offeredSlots, selectedSlot: slot, conversationId, leadId: reqLeadId || null }),
           });
         }
       }
-      // If user says "confirm" and a slot is already selected, try to book
       if (/\b(confirm|book it|yes|da)\b/i.test(message)) {
         const bkState = await chatConversationRepository.getBookingState(conversationId, companyId);
-        if (bkState?.selectedSlot && reqLeadId) {
+        if (bkState?.selectedSlot) {
           const { isSlotAvailable } = require('../../../services/availabilityService');
           const slot = bkState.selectedSlot;
           const available = await isSlotAvailable(companyId, slot.startAt, slot.endAt);
-          if (available) {
-            const { appointmentRepository, leadRepository, notificationRepository } = require('../../../db/repositories');
+          if (available && reqLeadId) {
+            const { appointmentRepository, leadRepository } = require('../../../db/repositories');
             const lead = await leadRepository.findById(companyId, reqLeadId);
             const leadName = lead?.name || 'Lead';
             const typeLabel = (bkgConfig.defaultType || 'call').replace(/_/g, ' ');
@@ -526,49 +550,84 @@ router.post('/chat', async (req, res) => {
               status: 'scheduled',
               startAt: slot.startAt, endAt: slot.endAt,
               timezone: bkgConfig.timezone || 'Europe/Zagreb',
-              source: 'chatbot',
-              reminderMinutesBefore: 60,
+              source: 'chatbot', reminderMinutesBefore: 60,
             });
             await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.CONFIRMED });
             await chatConversationRepository.updateBookingState(conversationId, companyId, {
-              completedAppointmentId: appointment.id,
-              confirmedAt: new Date().toISOString(),
+              completedAppointmentId: appointment.id, confirmedAt: new Date().toISOString(),
             });
+            selectedReplyPath = 'booking_confirmed';
             const confirmMsg = `Your ${typeLabel} has been confirmed for ${slot.label}. We look forward to speaking with you!`;
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirmMsg);
-            console.info('[booking-offer] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
-            return respond(confirmMsg, { booking: buildBookingPayload('confirmed', { appointment }) });
+            console.info('[chat-booking] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
+            return respond(confirmMsg, { ui_action: 'booking_success', booking: buildBookingPayload('confirmed', { appointment, appointmentId: appointment.id }) });
+          }
+          // No leadId or slot taken — create scheduling request instead
+          if (available && !reqLeadId) {
+            selectedReplyPath = 'booking_manual_request';
+            await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
+            await chatConversationRepository.updateBookingState(conversationId, companyId, { requestedSlot: slot, requestedAt: new Date().toISOString() });
+            const ack = `Your request for ${slot.label} has been noted. Our team will confirm shortly.`;
+            await chatMessagesRepository.appendMessage(conversationId, 'assistant', ack);
+            return respond(ack, { ui_action: 'booking_manual_request', booking: buildBookingPayload('requested', { requestedSlot: slot }) });
           }
           const retry = 'That slot is no longer available. Please pick another time.';
           await chatMessagesRepository.appendMessage(conversationId, 'assistant', retry);
-          return respond(retry, { booking: buildBookingPayload('slots', { slots: bkState.offeredSlots || [] }) });
+          return respond(retry, { ui_action: 'booking_slots', booking: buildBookingPayload('slots', { slots: bkState.offeredSlots || [] }) });
         }
       }
       // Fall through to LLM for anything else while in slots state
     }
 
-    // ========= CUSTOM_TIME: user proposed a time =========
+    // ========= CUSTOM_TIME: user proposed a time — create booking request =========
     if (bookingPhase === BOOKING_STATES.CUSTOM_TIME) {
-      const ack = 'Thank you! Our team will review your preferred time and get back to you to confirm.';
+      selectedReplyPath = 'booking_manual_request';
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
       await chatConversationRepository.updateBookingState(conversationId, companyId, {
         customTimeRequest: message.trim(), requestedAt: new Date().toISOString(),
       });
+
+      let createdRequest = null;
+      if (reqLeadId) {
+        try {
+          createdRequest = await schedulingRequestRepository.create({
+            companyId,
+            leadId: reqLeadId,
+            conversationId,
+            source: 'chatbot',
+            status: 'open',
+            requestType: bkgConfig.defaultType || 'call',
+            preferredTimezone: bkgConfig.timezone || 'Europe/Zagreb',
+            notes: `Preferred time: ${message.trim()}`,
+            availabilityMode: 'manual',
+            metadata: { conversationId, customTimeText: message.trim() },
+          });
+          console.info('[chat-booking] scheduling request created', { conversationId, requestId: createdRequest?.id });
+        } catch (srErr) {
+          console.warn('[chat-booking] scheduling request create failed (non-blocking):', srErr.message);
+        }
+      }
+
+      const ack = 'Thank you! Your preferred time has been submitted. Our team will review and confirm shortly.';
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', ack);
       bookingDebug.reason = 'custom_time_received';
-      return respond(ack, { booking: buildBookingPayload('awaiting_custom_time') });
+      return respond(ack, {
+        ui_action: 'booking_manual_request',
+        booking: buildBookingPayload('requested', { schedulingRequestId: createdRequest?.id ?? null }),
+      });
     }
 
     // ========= EXPLICIT BOOKING INTENT: user asks to schedule unprompted =========
     if (userWantsBooking && bookingActive && !isInBookingFlow(bookingPhase)) {
+      selectedReplyPath = 'booking_intent_entry';
       console.info('[chat-booking] explicit intent detected', { conversationId, quoteComplete, hasName, hasPhone });
 
-      // Check prerequisites first
       const missing = [];
       if (bkgConfig.requireName && !hasName) missing.push('full_name');
       if (bkgConfig.requirePhone && !hasPhone) missing.push('phone_number');
 
       if (missing.length > 0) {
+        selectedReplyPath = 'booking_collect_prereq';
         const first = missing[0];
         const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
         const prereqMsg = `Sure! To schedule that, could you share ${askLabel}?`;
@@ -576,26 +635,33 @@ router.post('/chat', async (req, res) => {
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', prereqMsg);
         bookingDebug.reason = `intent_prereq_${first}_needed`;
-        return respond(prereqMsg, { booking: buildBookingPayload('offer', { requiredBeforeBooking: missing }), booking_debug: bookingDebug });
+        return respond(prereqMsg, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing }) });
       }
 
-      // No prereqs needed — offer booking directly
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
-      await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString() });
+      await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString(), offerSource: 'explicit_user_intent' });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
       bookingDebug.offered = true; bookingDebug.reason = 'offered_on_user_intent';
       console.info('[chat-booking] OFFERED on explicit intent', { conversationId });
       return respond(question, {
-        booking: buildBookingPayload('offer'),
+        ui_action: 'booking_offer',
+        booking: buildBookingPayload('offer', { source: 'explicit_user_intent' }),
         booking_offer: true,
         quick_replies: ['Yes', 'Not now'],
-        booking_debug: bookingDebug,
       });
+    }
+
+    } catch (bookingOrchErr) {
+      console.error('[chat-booking] orchestration error, falling back to generic AI:', bookingOrchErr.message, bookingOrchErr.stack?.split('\n')[1]);
+      selectedReplyPath = 'generic_ai_fallback';
+      bookingDebug.reason = 'orchestration_error';
+      bookingDebug.error = bookingOrchErr.message;
     }
 
     // ========= Standard quote collection =========
     if (missingFields.length > 0) {
+      selectedReplyPath = 'quote_question';
       const nextField = missingFields[0];
       let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);
       assistantMessage = enforceStyle(assistantMessage, behavior, {
@@ -613,48 +679,57 @@ router.post('/chat', async (req, res) => {
 
     // ========= Quote complete: first-time booking offer =========
     if (quoteComplete && bookingActive && bkgConfig.askAfterQuote && !isInBookingFlow(bookingPhase)) {
-      const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
-      let assistantMessage = await callLLM(systemPrompt, message, behavior);
-      assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
-      if (shouldGreet(assistantCountBefore)) {
-        const greetingWords = await generateGreeting(message, behavior);
-        assistantMessage = prependGreeting(assistantMessage, greetingWords);
-      }
+      try {
+        selectedReplyPath = 'booking_offer';
+        const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
+        let assistantMessage = await callLLM(systemPrompt, message, behavior);
+        assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
+        if (shouldGreet(assistantCountBefore)) {
+          const greetingWords = await generateGreeting(message, behavior);
+          assistantMessage = prependGreeting(assistantMessage, greetingWords);
+        }
 
-      // Check prerequisites
-      const missing = [];
-      if (bkgConfig.requireName && !hasName) missing.push('full_name');
-      if (bkgConfig.requirePhone && !hasPhone) missing.push('phone_number');
+        const missing = [];
+        if (bkgConfig.requireName && !hasName) missing.push('full_name');
+        if (bkgConfig.requirePhone && !hasPhone) missing.push('phone_number');
 
-      if (missing.length > 0) {
-        const first = missing[0];
-        const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
-        assistantMessage += `\n\nTo proceed with scheduling, could you share ${askLabel}?`;
-        const phase = first === 'full_name' ? BOOKING_STATES.PREREQ_NAME : BOOKING_STATES.PREREQ_PHONE;
-        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
+        if (missing.length > 0) {
+          selectedReplyPath = 'booking_collect_prereq';
+          const first = missing[0];
+          const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
+          assistantMessage += `\n\nTo proceed with scheduling, could you share ${askLabel}?`;
+          const phase = first === 'full_name' ? BOOKING_STATES.PREREQ_NAME : BOOKING_STATES.PREREQ_PHONE;
+          await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
+          await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
+          bookingDebug.reason = `prereq_${first}_needed`;
+          console.info('[chat-booking] summary + prereq', { conversationId, missing });
+          return respond(assistantMessage, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing, source: 'auto_after_quote' }) });
+        }
+
+        if (!looksLikeBookingOffer(assistantMessage)) {
+          assistantMessage += '\n\n' + buildBookingQuestion(bkgConfig);
+        }
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
+        await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString(), offerSource: 'auto_after_quote' });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-        bookingDebug.reason = `prereq_${first}_needed`;
-        console.info('[booking-offer] summary + prereq', { conversationId, missing });
-        return respond(assistantMessage, { booking: buildBookingPayload('offer', { requiredBeforeBooking: missing }) });
+        bookingDebug.offered = true; bookingDebug.reason = 'offered_with_summary';
+        console.info('[chat-booking] OFFERED with summary', { conversationId });
+        return respond(assistantMessage, {
+          ui_action: 'booking_offer',
+          booking: buildBookingPayload('offer', { source: 'auto_after_quote', defaultAppointmentType: bkgConfig.defaultType }),
+          booking_offer: true,
+          quick_replies: ['Yes', 'Not now'],
+        });
+      } catch (offerErr) {
+        console.error('[chat-booking] quote-complete offer error, falling back:', offerErr.message);
+        selectedReplyPath = 'generic_ai_fallback';
       }
-
-      // No prereqs — append booking question
-      if (!looksLikeBookingOffer(assistantMessage)) {
-        assistantMessage += '\n\n' + buildBookingQuestion(bkgConfig);
-      }
-      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
-      await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString() });
-      await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-      bookingDebug.offered = true; bookingDebug.reason = 'offered_with_summary';
-      console.info('[booking-offer] OFFERED with summary', { conversationId });
-      return respond(assistantMessage, {
-        booking: buildBookingPayload('offer'),
-        booking_offer: true,
-        quick_replies: ['Yes', 'Not now'],
-      });
     }
 
     // ========= Default: LLM response (post-booking or booking disabled) =========
+    if (selectedReplyPath === 'generic_ai' || selectedReplyPath === 'generic_ai_fallback') {
+      selectedReplyPath = selectedReplyPath === 'generic_ai_fallback' ? 'generic_ai_fallback' : 'generic_ai';
+    }
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
@@ -662,14 +737,13 @@ router.post('/chat', async (req, res) => {
       const greetingWords = await generateGreeting(message, behavior);
       assistantMessage = prependGreeting(assistantMessage, greetingWords);
     }
-    // Only close conversation if booking is NOT active (prevents premature ending before booking offer)
     const shouldAddClosing = !bookingActive || isTerminalBookingState(bookingPhase);
     if (shouldAddClosing && shouldClose(message, [])) {
       const closingWords = await generateClosing(message, collectedMap, behavior);
       assistantMessage = appendClosing(assistantMessage, closingWords);
     }
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-    return respond(assistantMessage, { booking_debug: bookingDebug });
+    return respond(assistantMessage);
   } catch (err) {
     console.error('[chat] error:', err.message, err.stack?.split('\n')[1]);
     return res.status(500).json({
