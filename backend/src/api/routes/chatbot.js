@@ -261,8 +261,14 @@ router.post('/chat', async (req, res) => {
       chatbotBehaviorRepository.get(companyId),
       chatbotCompanyInfoRepository.get(companyId),
       chatbotQuoteFieldsRepository.list(companyId),
-      schedulingSettingsRepository.get(companyId).catch(() => null),
+      schedulingSettingsRepository.get(companyId).catch((err) => {
+        console.error('[chat] SCHEDULING CONFIG LOAD FAILED:', err.message, { companyId, code: err.code, detail: err.detail });
+        return null;
+      }),
     ]);
+    if (!schedulingConfig) {
+      console.warn('[chat] schedulingConfig is NULL — booking offers will not trigger', { companyId });
+    }
 
     const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
     const orderedQuoteFields = enabledFields.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
@@ -331,7 +337,6 @@ router.post('/chat', async (req, res) => {
     const quoteComplete = missingFields.length === 0;
     const bkgConfig = normalizeConfig(schedulingConfig);
     const bookingActive = bkgConfig
-      && bkgConfig.schedulingEnabled
       && bkgConfig.bookingOffersEnabled
       && bkgConfig.bookingMode !== 'off';
     const hasName = !!(collectedMap.full_name || collectedMap.name || collectedMap.fullName);
@@ -340,18 +345,35 @@ router.post('/chat', async (req, res) => {
     const convState = await chatConversationRepository.getOrCreateState(conversationId, companyId);
     const bookingPhase = convState.last_asked_field || null;
 
-    console.info('[chat/booking-decision]', {
-      companyId, conversationId,
+    let bookingSkipReason = null;
+    if (!bkgConfig) bookingSkipReason = 'config_null';
+    else if (!bkgConfig.bookingOffersEnabled) bookingSkipReason = 'booking_offers_disabled';
+    else if (bkgConfig.bookingMode === 'off') bookingSkipReason = 'mode_off';
+    else if (!bkgConfig.askAfterQuote) bookingSkipReason = 'ask_after_quote_off';
+    else if (!quoteComplete) bookingSkipReason = 'quote_not_complete';
+    else if (isInBookingFlow(bookingPhase)) bookingSkipReason = 'already_in_booking_flow';
+
+    const bookingDebug = {
+      eligible: bookingActive && quoteComplete && (bkgConfig?.askAfterQuote ?? false) && !isInBookingFlow(bookingPhase),
+      offered: false,
+      reason: bookingSkipReason || 'eligible',
+      missing_required: missingFields.map((f) => f.name),
       scheduling_enabled: bkgConfig?.schedulingEnabled ?? false,
       booking_offers_enabled: bkgConfig?.bookingOffersEnabled ?? false,
       booking_mode: bkgConfig?.bookingMode ?? 'n/a',
       ask_after_quote: bkgConfig?.askAfterQuote ?? false,
       require_name: bkgConfig?.requireName ?? false,
       require_phone: bkgConfig?.requirePhone ?? false,
-      has_name: hasName, has_phone: hasPhone,
-      quote_complete: quoteComplete,
+      has_name: hasName,
+      has_phone: hasPhone,
       booking_phase: bookingPhase,
-    });
+      config_loaded: schedulingConfig != null,
+    };
+
+    console.info('[booking-offer] settings normalized:', JSON.stringify(bkgConfig));
+    console.info('[booking-offer] missingRequired:', missingFields.map((f) => f.name));
+    console.info('[booking-offer] bookingOfferSent:', isInBookingFlow(bookingPhase));
+    console.info('[booking-offer] decision:', bookingDebug.eligible ? 'OFFER' : `SKIP reason=${bookingSkipReason}`);
 
     // ---- Booking prerequisite follow-ups ----
     if (bookingPhase === BOOKING_STATES.PREREQ_NAME && quoteComplete && bookingActive) {
@@ -360,16 +382,18 @@ router.post('/chat', async (req, res) => {
         const ask = 'Could you also share your phone number?';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_PHONE });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', ask);
-        console.info('[chat/booking] name stored, asking phone', { conversationId });
-        return res.json({ assistant_message: ask, conversation_id: conversationId, highlights });
+        bookingDebug.offered = false; bookingDebug.reason = 'prereq_phone_needed';
+        console.info('[booking-offer] name stored, asking phone', { conversationId });
+        return res.json({ assistant_message: ask, conversation_id: conversationId, highlights, booking_debug: bookingDebug });
       }
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
-      console.info('[chat/booking] OFFERED after name prereq', { conversationId });
+      bookingDebug.offered = true; bookingDebug.reason = 'offered_after_name_prereq';
+      console.info('[booking-offer] OFFERED after name prereq', { conversationId });
       return res.json({
         assistant_message: question, conversation_id: conversationId, highlights,
-        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+        booking_offer: true, quick_replies: ['Yes', 'Not now'], booking_debug: bookingDebug,
       });
     }
 
@@ -378,10 +402,11 @@ router.post('/chat', async (req, res) => {
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
-      console.info('[chat/booking] OFFERED after phone prereq', { conversationId });
+      bookingDebug.offered = true; bookingDebug.reason = 'offered_after_phone_prereq';
+      console.info('[booking-offer] OFFERED after phone prereq', { conversationId });
       return res.json({
         assistant_message: question, conversation_id: conversationId, highlights,
-        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+        booking_offer: true, quick_replies: ['Yes', 'Not now'], booking_debug: bookingDebug,
       });
     }
 
@@ -393,15 +418,17 @@ router.post('/chat', async (req, res) => {
           : 'Our team will reach out shortly to schedule a convenient time. Thank you!';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', ack);
-        console.info('[chat/booking] ACCEPTED', { conversationId });
-        return res.json({ assistant_message: ack, conversation_id: conversationId, highlights, booking_accepted: true });
+        bookingDebug.offered = true; bookingDebug.reason = 'booking_accepted';
+        console.info('[booking-offer] ACCEPTED', { conversationId });
+        return res.json({ assistant_message: ack, conversation_id: conversationId, highlights, booking_accepted: true, booking_debug: bookingDebug });
       }
       if (isBookingDecline(message)) {
         const decline = 'No problem! Our team has your information and will follow up if needed. Thank you!';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.DECLINED });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', decline);
-        console.info('[chat/booking] DECLINED', { conversationId });
-        return res.json({ assistant_message: decline, conversation_id: conversationId, highlights, booking_declined: true });
+        bookingDebug.offered = false; bookingDebug.reason = 'booking_declined';
+        console.info('[booking-offer] DECLINED', { conversationId });
+        return res.json({ assistant_message: decline, conversation_id: conversationId, highlights, booking_declined: true, booking_debug: bookingDebug });
       }
     }
 
@@ -423,6 +450,7 @@ router.post('/chat', async (req, res) => {
         assistant_message: assistantMessage,
         conversation_id: conversationId,
         highlights,
+        booking_debug: bookingDebug,
       });
     }
 
@@ -440,16 +468,18 @@ router.post('/chat', async (req, res) => {
         assistantMessage += '\n\nTo proceed with scheduling, could you share your full name?';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_NAME });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-        console.info('[chat/booking] summary + asking name prereq', { conversationId });
-        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights });
+        bookingDebug.offered = false; bookingDebug.reason = 'prereq_name_needed';
+        console.info('[booking-offer] summary + asking name prereq', { conversationId });
+        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights, booking_debug: bookingDebug });
       }
 
       if (bkgConfig.requirePhone && !hasPhone) {
         assistantMessage += '\n\nTo proceed with scheduling, could you share your phone number?';
         await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_PHONE });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-        console.info('[chat/booking] summary + asking phone prereq', { conversationId });
-        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights });
+        bookingDebug.offered = false; bookingDebug.reason = 'prereq_phone_needed';
+        console.info('[booking-offer] summary + asking phone prereq', { conversationId });
+        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights, booking_debug: bookingDebug });
       }
 
       if (!looksLikeBookingOffer(assistantMessage)) {
@@ -459,10 +489,11 @@ router.post('/chat', async (req, res) => {
 
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-      console.info('[chat/booking] OFFERED with summary', { conversationId });
+      bookingDebug.offered = true; bookingDebug.reason = 'offered_with_summary';
+      console.info('[booking-offer] OFFERED with summary', { conversationId });
       return res.json({
         assistant_message: assistantMessage, conversation_id: conversationId, highlights,
-        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+        booking_offer: true, quick_replies: ['Yes', 'Not now'], booking_debug: bookingDebug,
       });
     }
 
@@ -484,6 +515,7 @@ router.post('/chat', async (req, res) => {
       assistant_message: assistantMessage,
       conversation_id: conversationId,
       highlights,
+      booking_debug: bookingDebug,
     });
   } catch (err) {
     console.error('[chat] error:', err.message);
