@@ -615,7 +615,6 @@ router.delete('/:leadId/tasks/:taskId', ensureLeadForCrm, async (req, res) => {
 
 // ---- Lead Appointments ----
 const { createAppointmentHandler } = require('./appointments');
-const { appointmentRepository } = require('../../../db/repositories');
 const { listAppointmentsSchema } = require('../validators/appointmentSchemas');
 
 router.get('/:leadId/appointments', ensureLeadForCrm, async (req, res) => {
