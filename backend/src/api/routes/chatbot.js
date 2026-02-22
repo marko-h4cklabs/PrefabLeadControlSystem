@@ -23,6 +23,15 @@ const {
 } = require('../../chat/conversationHelpers');
 const { generateGreeting, generateClosing } = require('../../chat/greetingClosingService');
 const {
+  BOOKING_STATES,
+  normalizeConfig,
+  isInBookingFlow,
+  isBookingAcceptance,
+  isBookingDecline,
+  buildBookingQuestion,
+  looksLikeBookingOffer,
+} = require('../../chat/bookingOfferHelper');
+const {
   companyInfoBodySchema,
   behaviorBodySchema,
   quotePresetsBodySchema,
@@ -320,37 +329,83 @@ router.post('/chat', async (req, res) => {
     const highlights = buildHighlights(orderedQuoteFieldsForChat, collectedInfos, requiredInfos, behavior);
 
     const quoteComplete = missingFields.length === 0;
-    const bookingEnabled = schedulingConfig
-      && schedulingConfig.chatbotOfferBooking
-      && schedulingConfig.chatbotBookingMode !== 'off';
-    const askAfterQuote = schedulingConfig?.chatbotCollectBookingAfterQuote !== false;
-    const requireName = schedulingConfig?.chatbotBookingRequiresName ?? false;
-    const requirePhone = schedulingConfig?.chatbotBookingRequiresPhone ?? false;
+    const bkgConfig = normalizeConfig(schedulingConfig);
+    const bookingActive = bkgConfig
+      && bkgConfig.schedulingEnabled
+      && bkgConfig.bookingOffersEnabled
+      && bkgConfig.bookingMode !== 'off';
     const hasName = !!(collectedMap.full_name || collectedMap.name || collectedMap.fullName);
     const hasPhone = !!(collectedMap.phone || collectedMap.phone_number || collectedMap.phoneNumber);
 
-    let bookingOfferInserted = false;
-    let bookingSkipReason = null;
-    if (!bookingEnabled) bookingSkipReason = 'disabled';
-    else if (!quoteComplete) bookingSkipReason = 'not_quote_complete';
-    else if (!askAfterQuote) bookingSkipReason = 'ask_after_quote_off';
-    else if (requireName && !hasName) bookingSkipReason = 'missing_name';
-    else if (requirePhone && !hasPhone) bookingSkipReason = 'missing_phone';
-    else bookingOfferInserted = true;
+    const convState = await chatConversationRepository.getOrCreateState(conversationId, companyId);
+    const bookingPhase = convState.last_asked_field || null;
 
     console.info('[chat/booking-decision]', {
       companyId, conversationId,
-      scheduling_enabled: schedulingConfig?.enabled ?? false,
-      chatbot_offer_booking: schedulingConfig?.chatbotOfferBooking ?? false,
-      booking_mode: schedulingConfig?.chatbotBookingMode ?? 'n/a',
-      ask_after_quote: askAfterQuote,
-      require_name: requireName, require_phone: requirePhone,
+      scheduling_enabled: bkgConfig?.schedulingEnabled ?? false,
+      booking_offers_enabled: bkgConfig?.bookingOffersEnabled ?? false,
+      booking_mode: bkgConfig?.bookingMode ?? 'n/a',
+      ask_after_quote: bkgConfig?.askAfterQuote ?? false,
+      require_name: bkgConfig?.requireName ?? false,
+      require_phone: bkgConfig?.requirePhone ?? false,
       has_name: hasName, has_phone: hasPhone,
       quote_complete: quoteComplete,
-      booking_offer_inserted: bookingOfferInserted,
-      skip_reason: bookingSkipReason,
+      booking_phase: bookingPhase,
     });
 
+    // ---- Booking prerequisite follow-ups ----
+    if (bookingPhase === BOOKING_STATES.PREREQ_NAME && quoteComplete && bookingActive) {
+      await chatConversationFieldsRepository.upsertField(conversationId, 'full_name', 'text', message.trim());
+      if (bkgConfig.requirePhone && !hasPhone) {
+        const ask = 'Could you also share your phone number?';
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_PHONE });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', ask);
+        console.info('[chat/booking] name stored, asking phone', { conversationId });
+        return res.json({ assistant_message: ask, conversation_id: conversationId, highlights });
+      }
+      const question = buildBookingQuestion(bkgConfig);
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
+      console.info('[chat/booking] OFFERED after name prereq', { conversationId });
+      return res.json({
+        assistant_message: question, conversation_id: conversationId, highlights,
+        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+      });
+    }
+
+    if (bookingPhase === BOOKING_STATES.PREREQ_PHONE && quoteComplete && bookingActive) {
+      await chatConversationFieldsRepository.upsertField(conversationId, 'phone_number', 'text', message.trim());
+      const question = buildBookingQuestion(bkgConfig);
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
+      console.info('[chat/booking] OFFERED after phone prereq', { conversationId });
+      return res.json({
+        assistant_message: question, conversation_id: conversationId, highlights,
+        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+      });
+    }
+
+    // ---- Booking offer response handling (user replied to "would you like to schedule?") ----
+    if (bookingPhase === BOOKING_STATES.OFFERED && quoteComplete) {
+      if (isBookingAcceptance(message)) {
+        const ack = bkgConfig?.allowCustomTime
+          ? 'When works best for you? Please share your preferred date and time, and our team will confirm.'
+          : 'Our team will reach out shortly to schedule a convenient time. Thank you!';
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', ack);
+        console.info('[chat/booking] ACCEPTED', { conversationId });
+        return res.json({ assistant_message: ack, conversation_id: conversationId, highlights, booking_accepted: true });
+      }
+      if (isBookingDecline(message)) {
+        const decline = 'No problem! Our team has your information and will follow up if needed. Thank you!';
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.DECLINED });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', decline);
+        console.info('[chat/booking] DECLINED', { conversationId });
+        return res.json({ assistant_message: decline, conversation_id: conversationId, highlights, booking_declined: true });
+      }
+    }
+
+    // ---- Standard quote collection branch ----
     if (missingFields.length > 0) {
       const nextField = missingFields[0];
       let assistantMessage = buildFieldQuestion(nextField.name, behavior, nextField.units);
@@ -371,6 +426,47 @@ router.post('/chat', async (req, res) => {
       });
     }
 
+    // ---- Quote complete: first-time booking offer ----
+    if (quoteComplete && bookingActive && bkgConfig.askAfterQuote && !isInBookingFlow(bookingPhase)) {
+      const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
+      let assistantMessage = await callLLM(systemPrompt, message, behavior);
+      assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
+      if (shouldGreet(assistantCountBefore)) {
+        const greetingWords = await generateGreeting(message, behavior);
+        assistantMessage = prependGreeting(assistantMessage, greetingWords);
+      }
+
+      if (bkgConfig.requireName && !hasName) {
+        assistantMessage += '\n\nTo proceed with scheduling, could you share your full name?';
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_NAME });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
+        console.info('[chat/booking] summary + asking name prereq', { conversationId });
+        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights });
+      }
+
+      if (bkgConfig.requirePhone && !hasPhone) {
+        assistantMessage += '\n\nTo proceed with scheduling, could you share your phone number?';
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.PREREQ_PHONE });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
+        console.info('[chat/booking] summary + asking phone prereq', { conversationId });
+        return res.json({ assistant_message: assistantMessage, conversation_id: conversationId, highlights });
+      }
+
+      if (!looksLikeBookingOffer(assistantMessage)) {
+        const bookingQ = buildBookingQuestion(bkgConfig);
+        assistantMessage += '\n\n' + bookingQ;
+      }
+
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
+      console.info('[chat/booking] OFFERED with summary', { conversationId });
+      return res.json({
+        assistant_message: assistantMessage, conversation_id: conversationId, highlights,
+        booking_offer: true, quick_replies: ['Yes', 'Not now'],
+      });
+    }
+
+    // ---- Default: LLM with scheduling-aware prompt (post-booking or booking disabled) ----
     const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });

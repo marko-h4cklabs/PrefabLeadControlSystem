@@ -87,4 +87,4 @@ async function updateState(conversationId, companyId, patch) {
   return res.rows[0];
 }
 
-module.exports = { createConversation, getConversation, getOrCreateState, updateState, updateQuoteSnapshot };
+module.exports = { createConversation, getConversation, getOrCreateActiveConversation, getOrCreateState, updateState, updateQuoteSnapshot };
