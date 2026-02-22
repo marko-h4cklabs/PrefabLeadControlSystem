@@ -11,24 +11,9 @@ const dayHoursEntrySchema = z.object({
   end: z.string().regex(TIME_RE, 'must be HH:MM format'),
 }).refine((r) => r.start < r.end, { message: 'start must be before end' });
 
-/**
- * Normalize working_hours from any supported shape to canonical array.
- *
- * Accepted inputs:
- *   1) Array of { day, start, end }  (canonical)
- *   2) Object keyed by weekday with array of { start, end } per day
- *      e.g. { monday: [{ start:"09:00", end:"17:00" }] }
- *   3) Object keyed by weekday with single { start, end } per day
- *      e.g. { monday: { start:"09:00", end:"17:00" } }
- *   4) null / undefined / empty → []
- *
- * Output: Array of { day, start, end }
- */
 function normalizeWorkingHours(wh) {
   if (wh == null) return [];
-
   if (Array.isArray(wh)) return wh;
-
   if (typeof wh === 'object') {
     const result = [];
     for (const day of DAYS) {
@@ -46,7 +31,6 @@ function normalizeWorkingHours(wh) {
     }
     return result;
   }
-
   return [];
 }
 
@@ -61,8 +45,17 @@ const reminderDefaultsSchema = z.object({
   minutesBefore: z.coerce.number().int().min(0).max(10080).optional().default(60),
 }).optional();
 
+/**
+ * Normalize frontend payload to canonical snake_case keys.
+ *
+ * Handles all known frontend aliases:
+ *   camelCase (chatbotOfferBooking)
+ *   Lovable aliases (enableChatbotBookingOffers, askForBookingAfterQuote)
+ *   Nested chatbot_booking.enabled block
+ */
 function camelOrSnake(obj) {
   if (!obj || typeof obj !== 'object') return obj ?? {};
+
   const map = {
     slotDurationMinutes: 'slot_duration_minutes',
     bufferBeforeMinutes: 'buffer_before_minutes',
@@ -71,9 +64,16 @@ function camelOrSnake(obj) {
     maxDaysAhead: 'max_days_ahead',
     allowedAppointmentTypes: 'allowed_appointment_types',
     allowManualBookingFromLead: 'allow_manual_booking_from_lead',
-    chatbotOfferBooking: 'chatbot_offer_booking',
     reminderDefaults: 'reminder_defaults',
     workingHours: 'working_hours',
+
+    // chatbot_offer_booking — all known aliases
+    chatbotOfferBooking: 'chatbot_offer_booking',
+    enableChatbotBookingOffers: 'chatbot_offer_booking',
+    enable_chatbot_booking_offers: 'chatbot_offer_booking',
+    askForBookingAfterQuote: 'chatbot_offer_booking',
+    ask_for_booking_after_quote: 'chatbot_offer_booking',
+
     chatbotBookingMode: 'chatbot_booking_mode',
     chatbotBookingPromptStyle: 'chatbot_booking_prompt_style',
     chatbotCollectBookingAfterQuote: 'chatbot_collect_booking_after_quote',
@@ -83,9 +83,23 @@ function camelOrSnake(obj) {
     chatbotAllowUserProposedTime: 'chatbot_allow_user_proposed_time',
     chatbotShowSlotsWhenAvailable: 'chatbot_show_slots_when_available',
   };
+
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
-    out[map[k] || k] = v;
+    if (k === 'chatbot_booking' && v && typeof v === 'object') {
+      if (v.enabled !== undefined) out.chatbot_offer_booking = v.enabled;
+      if (v.mode !== undefined) out.chatbot_booking_mode = v.mode;
+      if (v.promptStyle !== undefined) out.chatbot_booking_prompt_style = v.promptStyle;
+      if (v.collectAfterQuote !== undefined) out.chatbot_collect_booking_after_quote = v.collectAfterQuote;
+      if (v.requiresName !== undefined) out.chatbot_booking_requires_name = v.requiresName;
+      if (v.requiresPhone !== undefined) out.chatbot_booking_requires_phone = v.requiresPhone;
+      if (v.defaultType !== undefined) out.chatbot_booking_default_type = v.defaultType;
+      if (v.allowUserProposedTime !== undefined) out.chatbot_allow_user_proposed_time = v.allowUserProposedTime;
+      if (v.showSlotsWhenAvailable !== undefined) out.chatbot_show_slots_when_available = v.showSlotsWhenAvailable;
+      continue;
+    }
+    const mapped = map[k] || k;
+    if (out[mapped] === undefined) out[mapped] = v;
   }
   return out;
 }

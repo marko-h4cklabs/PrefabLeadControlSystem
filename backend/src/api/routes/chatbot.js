@@ -7,6 +7,7 @@ const {
   chatConversationRepository,
   chatConversationFieldsRepository,
   chatMessagesRepository,
+  schedulingSettingsRepository,
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
@@ -247,10 +248,11 @@ router.post('/chat', async (req, res) => {
     const { message, conversationId: reqConversationId } = parsed.data;
     const companyId = req.tenantId;
 
-    const [behavior, companyInfo, quoteFields] = await Promise.all([
+    const [behavior, companyInfo, quoteFields, schedulingConfig] = await Promise.all([
       chatbotBehaviorRepository.get(companyId),
       chatbotCompanyInfoRepository.get(companyId),
       chatbotQuoteFieldsRepository.list(companyId),
+      schedulingSettingsRepository.get(companyId).catch(() => null),
     ]);
 
     const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
@@ -337,7 +339,7 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, []);
+    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
     if (shouldGreet(assistantCountBefore)) {

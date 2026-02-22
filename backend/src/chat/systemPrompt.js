@@ -5,8 +5,9 @@
  * @param {Array} quoteFields - Quote field definitions
  * @param {Object} collectedFields - Already collected { [fieldName]: value }
  * @param {Array} requiredInfos - Missing required fields [{ name, type, units, priority }]
+ * @param {Object} [schedulingConfig] - Optional scheduling/booking config from company settings
  */
-function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, requiredInfos = []) {
+function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, requiredInfos = [], schedulingConfig = null) {
   const beh = behavior ?? {};
   const info = companyInfo ?? {};
   const fields = quoteFields ?? [];
@@ -78,6 +79,34 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
   parts.push('- If required_infos is not empty, the assistant MUST ask for the highest priority missing field.');
   parts.push('- If the user asks about something outside configured fields (e.g. doors, windows), answer in 1 line max then ask for the next missing required field.');
   parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then a closing line. Do not ask new questions.');
+
+  if (schedulingConfig && schedulingConfig.chatbotOfferBooking && schedulingConfig.chatbotBookingMode !== 'off') {
+    parts.push('');
+    parts.push('## Scheduling / Booking');
+    const typeLabel = (schedulingConfig.chatbotBookingDefaultType || 'call').replace(/_/g, ' ');
+
+    if (schedulingConfig.chatbotCollectBookingAfterQuote !== false) {
+      parts.push(`- After ALL required quote fields are collected, offer to schedule a ${typeLabel} with the company.`);
+      parts.push('- Use a brief, natural question like "Would you like to schedule a call to discuss your project further?"');
+    }
+
+    parts.push('- If the user expresses interest in scheduling/meeting/calling at any point, acknowledge it positively.');
+
+    if (schedulingConfig.chatbotAllowUserProposedTime !== false) {
+      parts.push('- If the user proposes a date or time, acknowledge their preference.');
+    } else {
+      parts.push('- Do NOT ask the user for a specific date/time. Just confirm interest.');
+    }
+
+    if (schedulingConfig.chatbotBookingRequiresName) {
+      parts.push('- Before confirming a booking request, ask for their full name if not already known.');
+    }
+    if (schedulingConfig.chatbotBookingRequiresPhone) {
+      parts.push('- Before confirming a booking request, ask for their phone number if not already known.');
+    }
+
+    parts.push('- Do NOT confirm an appointment is booked. Say the team will follow up to confirm the exact time.');
+  }
 
   return parts.join('\n').trim();
 }

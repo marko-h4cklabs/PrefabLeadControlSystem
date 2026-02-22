@@ -80,10 +80,42 @@ router.put('/notifications', requireRole('owner', 'admin'), async (req, res) => 
 
 // ---- Scheduling settings ----
 
+/**
+ * Convert camelCase DTO from repository to snake_case for merging with Zod output.
+ * This ensures the merge uses one naming convention so upsert picks the right values.
+ */
+function dtoToSnake(dto) {
+  return {
+    enabled: dto.enabled,
+    timezone: dto.timezone,
+    working_hours: dto.workingHours,
+    slot_duration_minutes: dto.slotDurationMinutes,
+    buffer_before_minutes: dto.bufferBeforeMinutes,
+    buffer_after_minutes: dto.bufferAfterMinutes,
+    min_notice_hours: dto.minNoticeHours,
+    max_days_ahead: dto.maxDaysAhead,
+    allowed_appointment_types: dto.allowedAppointmentTypes,
+    allow_manual_booking_from_lead: dto.allowManualBookingFromLead,
+    chatbot_offer_booking: dto.chatbotOfferBooking,
+    reminder_defaults: dto.reminderDefaults,
+    chatbot_booking_mode: dto.chatbotBookingMode,
+    chatbot_booking_prompt_style: dto.chatbotBookingPromptStyle,
+    chatbot_collect_booking_after_quote: dto.chatbotCollectBookingAfterQuote,
+    chatbot_booking_requires_name: dto.chatbotBookingRequiresName,
+    chatbot_booking_requires_phone: dto.chatbotBookingRequiresPhone,
+    chatbot_booking_default_type: dto.chatbotBookingDefaultType,
+    chatbot_allow_user_proposed_time: dto.chatbotAllowUserProposedTime,
+    chatbot_show_slots_when_available: dto.chatbotShowSlotsWhenAvailable,
+  };
+}
+
 router.get('/scheduling', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const settings = await schedulingSettingsRepository.get(companyId);
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[settings/scheduling] GET response:', { companyId, chatbotOfferBooking: settings.chatbotOfferBooking, chatbotBookingMode: settings.chatbotBookingMode });
+    }
     res.json(settings);
   } catch (err) {
     console.error('[settings/scheduling] GET error:', err.message);
@@ -94,6 +126,10 @@ router.get('/scheduling', async (req, res) => {
 router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const companyId = req.tenantId;
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[settings/scheduling] PUT body keys:', Object.keys(req.body || {}));
+    }
+
     const parsed = schedulingSettingsSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       const flat = parsed.error.flatten();
@@ -106,10 +142,19 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
       });
     }
 
-    const current = await schedulingSettingsRepository.get(companyId);
+    const currentDto = await schedulingSettingsRepository.get(companyId);
+    const current = dtoToSnake(currentDto);
+
     const merged = { ...current };
     for (const [key, val] of Object.entries(parsed.data)) {
       if (val !== undefined) merged[key] = val;
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.debug('[settings/scheduling] PUT merge:', {
+        chatbot_offer_booking: merged.chatbot_offer_booking,
+        chatbot_booking_mode: merged.chatbot_booking_mode,
+      });
     }
 
     const saved = await schedulingSettingsRepository.upsert(companyId, merged);

@@ -23,10 +23,14 @@ router.get('/config', async (req, res) => {
     const companyId = req.tenantId;
     const settings = await schedulingSettingsRepository.get(companyId);
 
+    const offerBooking = settings.chatbotOfferBooking ?? false;
+    const bookingMode = settings.chatbotBookingMode ?? 'manual_request';
+    const effectivelyEnabled = offerBooking && bookingMode !== 'off';
+
     res.json({
       enabled: settings.enabled ?? false,
-      chatbotOfferBooking: settings.chatbotOfferBooking ?? false,
-      chatbotBookingMode: settings.chatbotBookingMode ?? 'manual_request',
+      chatbotOfferBooking: offerBooking,
+      chatbotBookingMode: bookingMode,
       chatbotBookingPromptStyle: settings.chatbotBookingPromptStyle ?? 'neutral',
       chatbotCollectBookingAfterQuote: settings.chatbotCollectBookingAfterQuote ?? true,
       chatbotBookingRequiresName: settings.chatbotBookingRequiresName ?? false,
@@ -37,6 +41,10 @@ router.get('/config', async (req, res) => {
       allowedAppointmentTypes: settings.allowedAppointmentTypes ?? ['call'],
       timezone: settings.timezone ?? 'Europe/Zagreb',
       slotDurationMinutes: settings.slotDurationMinutes ?? 30,
+      _debug: {
+        bookingOffersEnabled: effectivelyEnabled,
+        source: 'scheduling_settings',
+      },
     });
   } catch (err) {
     console.error('[chatbot/scheduling] config error:', err.message);
