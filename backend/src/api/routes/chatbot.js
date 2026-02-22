@@ -26,8 +26,10 @@ const {
   BOOKING_STATES,
   normalizeConfig,
   isInBookingFlow,
+  isTerminalBookingState,
   isBookingAcceptance,
   isBookingDecline,
+  looksLikeBookingIntent,
   buildBookingQuestion,
   looksLikeBookingOffer,
   formatSlotsMessage,
@@ -337,22 +339,34 @@ router.post('/chat', async (req, res) => {
     const hasPhone = !!(collectedMap.phone || collectedMap.phone_number || collectedMap.phoneNumber);
 
     const convState = await chatConversationRepository.getOrCreateState(conversationId, companyId);
-    const bookingPhase = convState.last_asked_field || null;
+    let bookingPhase = convState.last_asked_field || null;
+
+    // Reset terminal booking states so conversations aren't permanently blocked
+    if (isTerminalBookingState(bookingPhase)) {
+      if (looksLikeBookingIntent(message)) {
+        console.info('[chat-booking] resetting terminal state for new intent', { conversationId, was: bookingPhase });
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: null });
+        bookingPhase = null;
+      }
+    }
+
+    const userWantsBooking = looksLikeBookingIntent(message);
 
     let bookingSkipReason = null;
     if (!bkgConfig) bookingSkipReason = 'config_null';
     else if (!bkgConfig.bookingOffersEnabled) bookingSkipReason = 'booking_offers_disabled';
     else if (bkgConfig.bookingMode === 'off') bookingSkipReason = 'mode_off';
-    else if (!bkgConfig.askAfterQuote) bookingSkipReason = 'ask_after_quote_off';
-    else if (!quoteComplete) bookingSkipReason = 'quote_not_complete';
+    else if (!bkgConfig.askAfterQuote && !userWantsBooking) bookingSkipReason = 'ask_after_quote_off';
+    else if (!quoteComplete && !userWantsBooking) bookingSkipReason = 'quote_not_complete';
     else if (isInBookingFlow(bookingPhase)) bookingSkipReason = 'already_in_booking_flow';
 
     const bookingDebug = {
-      eligible: bookingActive && quoteComplete && (bkgConfig?.askAfterQuote ?? false) && !isInBookingFlow(bookingPhase),
+      eligible: bookingActive && (quoteComplete || userWantsBooking) && !isInBookingFlow(bookingPhase),
       offered: false,
       reason: bookingSkipReason || 'eligible',
       missing_required: missingFields.map((f) => f.name),
       booking_offers_enabled: bkgConfig?.bookingOffersEnabled ?? false,
+      scheduling_enabled: bkgConfig?.schedulingEnabled ?? false,
       booking_mode: bkgConfig?.bookingMode ?? 'n/a',
       ask_after_quote: bkgConfig?.askAfterQuote ?? false,
       require_name: bkgConfig?.requireName ?? false,
@@ -360,9 +374,11 @@ router.post('/chat', async (req, res) => {
       has_name: hasName, has_phone: hasPhone,
       booking_phase: bookingPhase,
       config_loaded: schedulingConfig != null,
+      user_wants_booking: userWantsBooking,
+      quote_complete: quoteComplete,
     };
 
-    console.info('[booking-offer] decision:', bookingDebug.eligible ? 'OFFER' : `SKIP reason=${bookingSkipReason}`);
+    console.info(`[chat-booking] conv=${conversationId} quoteComplete=${quoteComplete} scheduling=${bkgConfig?.schedulingEnabled} offer=${bkgConfig?.bookingOffersEnabled} askAfterQuote=${bkgConfig?.askAfterQuote} missing=[${missingFields.map(f=>f.name)}] alreadyOffered=${isInBookingFlow(bookingPhase)} userIntent=${userWantsBooking} => ${bookingDebug.eligible ? 'ELIGIBLE' : `SKIP(${bookingSkipReason})`}`);
 
     const collectedInfosForResponse = collectedInfos.map((c) => ({
       name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null,
@@ -385,7 +401,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // ========= BOOKING PREREQ: name =========
-    if (bookingPhase === BOOKING_STATES.PREREQ_NAME && quoteComplete && bookingActive) {
+    if (bookingPhase === BOOKING_STATES.PREREQ_NAME && bookingActive) {
       await chatConversationFieldsRepository.upsertField(conversationId, 'full_name', 'text', message.trim());
       if (bkgConfig.requirePhone && !hasPhone) {
         const ask = 'Could you also share your phone number?';
@@ -402,7 +418,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // ========= BOOKING PREREQ: phone =========
-    if (bookingPhase === BOOKING_STATES.PREREQ_PHONE && quoteComplete && bookingActive) {
+    if (bookingPhase === BOOKING_STATES.PREREQ_PHONE && bookingActive) {
       await chatConversationFieldsRepository.upsertField(conversationId, 'phone_number', 'text', message.trim());
       const question = buildBookingQuestion(bkgConfig);
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
@@ -412,7 +428,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // ========= BOOKING RESPONSE: user replied to offer =========
-    if (bookingPhase === BOOKING_STATES.OFFERED && quoteComplete) {
+    if (bookingPhase === BOOKING_STATES.OFFERED) {
       if (isBookingAcceptance(message)) {
         // User said YES — fetch slots and show them
         try {
@@ -467,7 +483,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // ========= SLOTS_SHOWN: user replied after seeing slots =========
-    if (bookingPhase === BOOKING_STATES.SLOTS_SHOWN && quoteComplete) {
+    if (bookingPhase === BOOKING_STATES.SLOTS_SHOWN) {
       // Try to match slot selection (number like "1", "2", "the first one", etc.)
       const numMatch = message.trim().match(/^(\d)$/);
       if (numMatch) {
@@ -532,7 +548,7 @@ router.post('/chat', async (req, res) => {
     }
 
     // ========= CUSTOM_TIME: user proposed a time =========
-    if (bookingPhase === BOOKING_STATES.CUSTOM_TIME && quoteComplete) {
+    if (bookingPhase === BOOKING_STATES.CUSTOM_TIME) {
       const ack = 'Thank you! Our team will review your preferred time and get back to you to confirm.';
       await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
       await chatConversationRepository.updateBookingState(conversationId, companyId, {
@@ -541,6 +557,41 @@ router.post('/chat', async (req, res) => {
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', ack);
       bookingDebug.reason = 'custom_time_received';
       return respond(ack, { booking: buildBookingPayload('awaiting_custom_time') });
+    }
+
+    // ========= EXPLICIT BOOKING INTENT: user asks to schedule unprompted =========
+    if (userWantsBooking && bookingActive && !isInBookingFlow(bookingPhase)) {
+      console.info('[chat-booking] explicit intent detected', { conversationId, quoteComplete, hasName, hasPhone });
+
+      // Check prerequisites first
+      const missing = [];
+      if (bkgConfig.requireName && !hasName) missing.push('full_name');
+      if (bkgConfig.requirePhone && !hasPhone) missing.push('phone_number');
+
+      if (missing.length > 0) {
+        const first = missing[0];
+        const askLabel = first === 'full_name' ? 'your full name' : 'your phone number';
+        const prereqMsg = `Sure! To schedule that, could you share ${askLabel}?`;
+        const phase = first === 'full_name' ? BOOKING_STATES.PREREQ_NAME : BOOKING_STATES.PREREQ_PHONE;
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: phase });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', prereqMsg);
+        bookingDebug.reason = `intent_prereq_${first}_needed`;
+        return respond(prereqMsg, { booking: buildBookingPayload('offer', { requiredBeforeBooking: missing }), booking_debug: bookingDebug });
+      }
+
+      // No prereqs needed — offer booking directly
+      const question = buildBookingQuestion(bkgConfig);
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
+      await chatConversationRepository.updateBookingState(conversationId, companyId, { offeredAt: new Date().toISOString() });
+      await chatMessagesRepository.appendMessage(conversationId, 'assistant', question);
+      bookingDebug.offered = true; bookingDebug.reason = 'offered_on_user_intent';
+      console.info('[chat-booking] OFFERED on explicit intent', { conversationId });
+      return respond(question, {
+        booking: buildBookingPayload('offer'),
+        booking_offer: true,
+        quick_replies: ['Yes', 'Not now'],
+        booking_debug: bookingDebug,
+      });
     }
 
     // ========= Standard quote collection =========
@@ -611,12 +662,14 @@ router.post('/chat', async (req, res) => {
       const greetingWords = await generateGreeting(message, behavior);
       assistantMessage = prependGreeting(assistantMessage, greetingWords);
     }
-    if (shouldClose(message, [])) {
+    // Only close conversation if booking is NOT active (prevents premature ending before booking offer)
+    const shouldAddClosing = !bookingActive || isTerminalBookingState(bookingPhase);
+    if (shouldAddClosing && shouldClose(message, [])) {
       const closingWords = await generateClosing(message, collectedMap, behavior);
       assistantMessage = appendClosing(assistantMessage, closingWords);
     }
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
-    return respond(assistantMessage);
+    return respond(assistantMessage, { booking_debug: bookingDebug });
   } catch (err) {
     console.error('[chat] error:', err.message, err.stack?.split('\n')[1]);
     return res.status(500).json({

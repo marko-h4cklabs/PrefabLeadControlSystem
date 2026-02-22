@@ -17,8 +17,9 @@ const BOOKING_STATES = {
   DECLINED: '__booking_declined',
 };
 
-const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|alright|please|absolutely|definitely|of course|da|naravno|svakako|rado|moze|mozemo|hajde|dobro|u redu|može|book|schedule|call me)\b/i;
+const YES_RE = /\b(yes|yeah|yep|yup|sure|ok|okay|alright|please|absolutely|definitely|of course|da|naravno|svakako|rado|moze|mozemo|hajde|dobro|u redu|može)\b/i;
 const NO_RE = /\b(no|nah|nope|not now|not really|later|skip|maybe later|ne|nema|ne treba|ne sada|možda kasnije|preskoci|ne hvala)\b/i;
+const BOOKING_INTENT_RE = /\b(schedule|book|appointment|call me|when are you free|can we (talk|meet|call)|set up a (call|meeting)|arrange a (call|meeting)|zakazi|zakazati|dogovor|nazovi|pozovi|možemo li se čuti|termin)\b/i;
 
 /**
  * Normalize scheduling config into a chatbot-friendly flat object.
@@ -45,8 +46,23 @@ function normalizeConfig(cfg) {
   };
 }
 
+const TERMINAL_BOOKING_STATES = new Set([
+  BOOKING_STATES.CONFIRMED,
+  BOOKING_STATES.DECLINED,
+  BOOKING_STATES.ACCEPTED,
+]);
+
 function isInBookingFlow(phase) {
   return typeof phase === 'string' && phase.startsWith('__booking_');
+}
+
+function isTerminalBookingState(phase) {
+  return TERMINAL_BOOKING_STATES.has(phase);
+}
+
+function looksLikeBookingIntent(msg) {
+  if (!msg || typeof msg !== 'string') return false;
+  return BOOKING_INTENT_RE.test(msg.trim());
 }
 
 function isBookingAcceptance(msg) {
@@ -91,8 +107,10 @@ module.exports = {
   BOOKING_STATES,
   normalizeConfig,
   isInBookingFlow,
+  isTerminalBookingState,
   isBookingAcceptance,
   isBookingDecline,
+  looksLikeBookingIntent,
   buildBookingQuestion,
   looksLikeBookingOffer,
   formatSlotsMessage,
