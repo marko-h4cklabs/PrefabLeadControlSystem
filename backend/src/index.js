@@ -144,8 +144,29 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 });
 
-app.listen(PORT, () => {
+const reminderWorker = require('../services/appointmentReminderWorker');
+const followUpWorker = require('../services/followUpWorker');
+
+const server = app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
-  const reminderWorker = require('../services/appointmentReminderWorker');
   reminderWorker.start();
+  if (process.env.REDIS_URL) {
+    followUpWorker.start();
+  } else {
+    console.warn('[index] REDIS_URL not set, follow-up worker not started');
+  }
 });
+
+async function gracefulShutdown() {
+  console.log('[index] shutting down...');
+  reminderWorker.stop();
+  await followUpWorker.stop();
+  const queueService = require('../services/queueService');
+  await queueService.close();
+  server.close(() => process.exit(0));
+}
+
+process.on('SIGTERM', () => gracefulShutdown());
+process.on('SIGINT', () => gracefulShutdown());
+
+module.exports = { app, server, gracefulShutdown };
