@@ -124,29 +124,39 @@ router.get('/scheduling', async (req, res) => {
   }
 });
 
-// ---- Instagram settings ----
+// ---- ManyChat settings ----
 
-router.get('/instagram', async (req, res) => {
+function maskApiKey(apiKey) {
+  if (!apiKey || typeof apiKey !== 'string') return null;
+  const s = apiKey.trim();
+  if (s.length === 0) return null;
+  if (s.length <= 6) return '*'.repeat(s.length);
+  return '*'.repeat(s.length - 6) + s.slice(-6);
+}
+
+router.get('/manychat', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const result = await pool.query(
-      'SELECT instagram_account_id, meta_page_access_token FROM companies WHERE id = $1',
+      'SELECT manychat_api_key, manychat_page_id FROM companies WHERE id = $1',
       [companyId]
     );
     const row = result.rows[0];
     if (!row) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Company not found' } });
     }
+    const rawKey = row.manychat_api_key ?? null;
     res.json({
-      instagram_account_id: row.instagram_account_id ?? null,
-      has_page_token: !!(row.meta_page_access_token && String(row.meta_page_access_token).trim()),
+      manychat_api_key: maskApiKey(rawKey),
+      manychat_page_id: row.manychat_page_id ?? null,
+      has_api_key: !!(rawKey && String(rawKey).trim()),
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
-router.put('/instagram', requireRole('owner', 'admin'), async (req, res) => {
+router.put('/manychat', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const companyId = req.tenantId;
     const body = req.body ?? {};
@@ -154,13 +164,13 @@ router.put('/instagram', requireRole('owner', 'admin'), async (req, res) => {
     const params = [companyId];
     let idx = 2;
 
-    if ('instagram_account_id' in body) {
-      updates.push(`instagram_account_id = $${idx++}`);
-      params.push(body.instagram_account_id ?? null);
+    if ('manychat_api_key' in body) {
+      updates.push(`manychat_api_key = $${idx++}`);
+      params.push(body.manychat_api_key ?? null);
     }
-    if ('meta_page_access_token' in body) {
-      updates.push(`meta_page_access_token = $${idx++}`);
-      params.push(body.meta_page_access_token ?? null);
+    if ('manychat_page_id' in body) {
+      updates.push(`manychat_page_id = $${idx++}`);
+      params.push(body.manychat_page_id ?? null);
     }
     if (updates.length === 0) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'No fields to update' } });

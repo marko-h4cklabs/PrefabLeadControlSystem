@@ -68,9 +68,9 @@ const corsOptions = {
 app.use(helmet());
 app.use(cors(corsOptions));
 
-// Meta webhook must receive raw body for HMAC verification - mount BEFORE express.json()
-const metaRouter = require('./api/routes/meta');
-app.use('/api/meta', express.raw({ type: 'application/json' }), metaRouter);
+// ManyChat webhook must receive raw body for HMAC verification - mount BEFORE express.json()
+const manychatRouter = require('./api/routes/manychat');
+app.use('/api/webhooks/manychat', express.raw({ type: 'application/json' }), manychatRouter);
 
 app.use(express.json());
 
