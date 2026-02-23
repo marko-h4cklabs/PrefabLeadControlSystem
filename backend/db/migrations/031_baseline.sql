@@ -1,0 +1,3 @@
+-- Baseline: schema already exists in production.
+-- This migration is intentionally empty.
+-- Future schema changes go in 002_xxx.sql and onwards.

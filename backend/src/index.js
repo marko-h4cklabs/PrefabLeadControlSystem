@@ -66,6 +66,11 @@ const corsOptions = {
 
 app.use(helmet());
 app.use(cors(corsOptions));
+
+// Meta webhook must receive raw body for HMAC verification - mount BEFORE express.json()
+const metaRouter = require('./api/routes/meta');
+app.use('/api/meta', express.raw({ type: 'application/json' }), metaRouter);
+
 app.use(express.json());
 
 const authLimiter = rateLimit({

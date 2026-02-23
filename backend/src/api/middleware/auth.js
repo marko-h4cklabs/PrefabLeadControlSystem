@@ -45,7 +45,7 @@ async function authMiddleware(req, res, next) {
 }
 
 function requireRole(...allowedRoles) {
-  const roleMap = { owner: ['admin'], admin: ['admin'], member: ['admin', 'sales'] };
+  const roleMap = { owner: ['owner', 'admin'], admin: ['admin'], member: ['admin', 'sales'] };
   return (req, res, next) => {
     if (!req.user) {
       return errorResponse(res, 401, 'Authentication required', 'UNAUTHORIZED');
