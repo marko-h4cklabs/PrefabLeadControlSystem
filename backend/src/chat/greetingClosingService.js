@@ -1,40 +1,51 @@
 /**
- * Generate contextual 2-3 word greeting/closing via Claude.
- * Matches user energy and respects tone/persona.
+ * Generate contextual greeting based on opener_style and agent_name.
+ * Never use "Hello! I'm {name}, your AI assistant".
  */
-const Anthropic = require('@anthropic-ai/sdk');
 
-const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const CASUAL_OPENERS = [
+  "What's good, thanks for reaching out 👋",
+  "Hey! Thanks for the message",
+  "Hey there, what can I do for you?",
+  "Hey, glad you reached out — what's up?",
+];
 
-function trimToWords(text, maxWords = 3) {
-  if (!text || typeof text !== 'string') return '';
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  return words.slice(0, maxWords).join(' ');
+const PROFESSIONAL_OPENERS = [
+  "Thanks for reaching out, happy to help.",
+  "Hi there — thanks for your message.",
+  "Hello, thanks for getting in touch.",
+];
+
+const DIRECT_OPENERS = [
+  "Hey — what are you looking for?",
+  "What can I help you with?",
+  "Hey, what do you need?",
+];
+
+function pickRandom(arr) {
+  if (!Array.isArray(arr) || arr.length === 0) return arr[0];
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 async function generateGreeting(userMessage, behavior) {
   const beh = behavior ?? {};
-  const tone = beh.tone ?? 'professional';
-  const persona = beh.persona_style ?? 'busy';
+  const openerStyle = beh.opener_style ?? 'casual';
   const emojis = beh.emojis_enabled ?? false;
-  try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response = await client.messages.create({
-      model,
-      max_tokens: 32,
-      system: `You output a greeting. Rules:
-- ONLY 2-3 words. No punctuation.
-- Match user energy: if user says "hi" → simple; if formal → formal.
-- Tone: ${tone}. Persona: ${persona}. Busy = minimal.
-- No emojis unless explicitly allowed.`,
-      messages: [{ role: 'user', content: userMessage || 'hi' }],
-    });
-    const text = response.content?.find((b) => b.type === 'text')?.text ?? '';
-    return trimToWords(text.replace(/[.!?]+$/, ''), 3) || 'Hi';
-  } catch (err) {
-    console.info('[greetingClosingService] greeting fallback:', err.message);
-    return 'Hi';
+
+  let openers;
+  if (openerStyle === 'professional') {
+    openers = PROFESSIONAL_OPENERS;
+  } else if (openerStyle === 'direct') {
+    openers = DIRECT_OPENERS;
+  } else {
+    openers = CASUAL_OPENERS;
   }
+
+  let greeting = pickRandom(openers);
+  if (!emojis && greeting.includes('👋')) {
+    greeting = greeting.replace(/\s*👋\s*/g, ' ').trim();
+  }
+  return greeting;
 }
 
 async function generateClosing(userMessage, collectedFields, behavior) {
@@ -43,10 +54,11 @@ async function generateClosing(userMessage, collectedFields, behavior) {
   const persona = beh.persona_style ?? 'busy';
   const emojis = beh.emojis_enabled ?? false;
   try {
+    const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const collectedStr = Object.keys(collectedFields ?? {}).length ? `Collected: ${JSON.stringify(collectedFields)}` : 'No fields collected';
     const response = await client.messages.create({
-      model,
+      model: process.env.ANTHROPIC_MODEL || 'claude-sart-4-6',
       max_tokens: 32,
       system: `You output a closing. Rules:
 - ONLY 2-3 words. No punctuation.
@@ -56,7 +68,8 @@ async function generateClosing(userMessage, collectedFields, behavior) {
       messages: [{ role: 'user', content: userMessage ? `${userMessage}\n${collectedStr}` : collectedStr }],
     });
     const text = response.content?.find((b) => b.type === 'text')?.text ?? '';
-    return trimToWords(text.replace(/[.!?]+$/, ''), 3) || "We'll follow up";
+    const words = (text.replace(/[.!?]+$/, '').trim().split(/\s+/).filter(Boolean)).slice(0, 3);
+    return words.join(' ') || "We'll follow up";
   } catch (err) {
     console.info('[greetingClosingService] closing fallback:', err.message);
     return "We'll follow up";

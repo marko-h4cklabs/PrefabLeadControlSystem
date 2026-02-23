@@ -24,6 +24,14 @@ const behaviorBodySchema = z.object({
   emojis_enabled: z.boolean().optional(),
   persona_style: z.enum(['busy', 'explanational']).optional(),
   forbidden_topics: z.array(z.string().trim().max(64)).max(50).optional(),
+  agent_name: z.string().trim().max(100).optional(),
+  agent_backstory: z.string().trim().max(2000).nullable().optional(),
+  opener_style: z.enum(['casual', 'professional', 'direct']).optional(),
+  conversation_goal: z.enum(['book_call', 'collect_quote', 'qualify_lead', 'capture_contact']).optional(),
+  handoff_trigger: z.enum(['after_quote', 'after_booking', 'never', 'on_request']).optional(),
+  follow_up_style: z.enum(['soft', 'direct', 'value_add']).optional(),
+  human_fallback_message: z.string().trim().max(500).optional(),
+  bot_deny_response: z.string().trim().max(500).optional(),
 }).transform((d) => {
   const topics = d.forbidden_topics
     ? d.forbidden_topics.map((t) => t.trim()).filter(Boolean).slice(0, 50)

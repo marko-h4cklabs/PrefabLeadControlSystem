@@ -123,6 +123,14 @@ router.get('/behavior', async (req, res) => {
       emojis_enabled: behavior.emojis_enabled ?? false,
       persona_style: behavior.persona_style ?? 'busy',
       forbidden_topics: behavior.forbidden_topics ?? [],
+      agent_name: behavior.agent_name ?? 'Jarvis',
+      agent_backstory: behavior.agent_backstory ?? null,
+      opener_style: behavior.opener_style ?? 'casual',
+      conversation_goal: behavior.conversation_goal ?? 'collect_quote',
+      handoff_trigger: behavior.handoff_trigger ?? 'after_quote',
+      follow_up_style: behavior.follow_up_style ?? 'soft',
+      human_fallback_message: behavior.human_fallback_message ?? 'Let me get someone from the team to follow up with you directly.',
+      bot_deny_response: behavior.bot_deny_response ?? 'Nope, real person here 😄 What can I help you with?',
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);

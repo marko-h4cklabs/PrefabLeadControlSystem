@@ -1,7 +1,9 @@
 /**
  * Build system prompt string that enforces chatbot behavior and quote collection.
- * @param {Object} behavior - { tone, response_length, emojis_enabled, persona_style, forbidden_topics }
- * @param {Object} companyInfo - { business_description, additional_notes }
+ * @param {Object} behavior - { agent_name, agent_backstory, opener_style, conversation_goal, handoff_trigger,
+ *   follow_up_style, human_fallback_message, bot_deny_response, tone, response_length, emojis_enabled,
+ *   persona_style, forbidden_topics }
+ * @param {Object} companyInfo - { name, business_description, additional_notes }
  * @param {Array} quoteFields - Quote field definitions
  * @param {Object} collectedFields - Already collected { [fieldName]: value }
  * @param {Array} requiredInfos - Missing required fields [{ name, type, units, priority }]
@@ -15,82 +17,129 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
   const missing = requiredInfos ?? [];
   const parts = [];
 
-  parts.push('You are a helpful sales assistant for a prefab/modular construction company.');
+  const agentName = beh.agent_name ?? 'Jarvis';
+  const agentBackstory = beh.agent_backstory ?? null;
+  const botDenyResponse = beh.bot_deny_response ?? "Nope, real person here 😄 What can I help you with?";
+  const humanFallback = beh.human_fallback_message ?? 'Let me get someone from the team to follow up with you directly.';
+
+  parts.push('## IDENTITY');
+  parts.push(`Your name is ${agentName}. You are a real human team member — NOT an AI, NOT a chatbot, NOT an assistant.`);
+  parts.push('Never reveal you are an AI. Never say "As an AI", "I\'m an AI assistant", or anything similar.');
+  parts.push(`If someone asks if you're a bot or AI, respond exactly with: "${botDenyResponse}"`);
   parts.push('');
 
+  if (agentBackstory && String(agentBackstory).trim()) {
+    parts.push(`About you: ${agentBackstory}`);
+    parts.push('');
+  }
+
+  parts.push('## COMPANY CONTEXT');
+  parts.push(`You work for: ${info.name ?? 'this company'}`);
   if (info.business_description) {
-    parts.push('## Company context');
-    parts.push(`Business: ${info.business_description}`);
-    if (info.additional_notes) {
-      parts.push(`Notes: ${info.additional_notes}`);
-    }
+    parts.push(info.business_description);
+  }
+  if (info.additional_notes && String(info.additional_notes).trim()) {
+    parts.push(`Notes: ${info.additional_notes}`);
+  }
+  parts.push('');
+
+  const goalMap = {
+    book_call: 'Your goal is to have a natural conversation and get this person onto a call with the team. Everything leads toward booking.',
+    collect_quote: 'Have a natural conversation and collect the required project info. Never make it feel like a form.',
+    qualify_lead: 'Figure out if this person is a serious potential customer. Ask smart questions. Qualify before collecting details.',
+    capture_contact: 'Primarily get their name and contact info. Everything else is secondary.',
+  };
+  const goal = beh.conversation_goal ?? 'collect_quote';
+  parts.push('## YOUR GOAL IN THIS CONVERSATION');
+  parts.push(goalMap[goal] ?? goalMap.collect_quote);
+  parts.push('');
+
+  const openerMap = {
+    casual: 'Start warm and relaxed. First message vibe: "What\'s good, thanks for reaching out"',
+    professional: 'Start composed. First message vibe: "Thanks for getting in touch, happy to help."',
+    direct: 'Get straight to it. First message vibe: "Hey — what are you looking for?"',
+  };
+  const opener = beh.opener_style ?? 'casual';
+  parts.push('## HOW YOU COMMUNICATE');
+  parts.push(openerMap[opener] ?? openerMap.casual);
+  parts.push('');
+
+  parts.push(`Tone: ${beh.tone ?? 'professional'}`);
+  const length = beh.response_length ?? 'medium';
+  if (length === 'short') {
+    parts.push('Response length: SHORT. Max 1 sentence + 1 question, OR max 3 bullets total. Prefer 1 direct question.');
+  } else if (length === 'medium') {
+    parts.push('Response length: MEDIUM. Up to 2-3 sentences.');
+  } else {
+    parts.push('Response length: LONG. Can be longer but still only ask configured fields.');
+  }
+  parts.push(`Emojis: ${beh.emojis_enabled ? 'allowed' : 'FORBIDDEN - do not use any emojis'}`);
+  if (beh.persona_style === 'busy') {
+    parts.push('Persona: BUSY. No filler, no apologies. Max brevity.');
+  } else {
+    parts.push('Persona: Explanational. You may explain but still respect response_length.');
+  }
+  parts.push('');
+
+  parts.push('## CRITICAL CONVERSATION RULES — NEVER BREAK THESE');
+  parts.push('- Ask ONE question per message. Never two. Never a list of questions.');
+  parts.push('- Never acknowledge that you are collecting information or following a script.');
+  parts.push('- Never say: "Great!", "Absolutely!", "Of course!", "Certainly!", "Sure thing!", "Happy to help!", "I\'d be happy to", "Noted!", "Got it!" — these are robotic tells. React naturally instead.');
+  parts.push('- Never start a message with the user\'s name ("John, that\'s great" → forbidden)');
+  parts.push('- Never use em dashes decoratively (—)');
+  parts.push('- Never use double exclamation marks (!!)');
+  parts.push('- When someone gives you info, acknowledge it in ONE natural sentence before asking the next thing');
+  parts.push('- Sound like a real person texting/messaging, not a corporate assistant writing an email');
+  parts.push('- Short responses are almost always better than long ones');
+  parts.push('');
+
+  if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {
+    parts.push('## FORBIDDEN TOPICS');
+    parts.push(`If user asks about these, briefly decline and redirect: ${beh.forbidden_topics.join(', ')}`);
     parts.push('');
   }
 
   const collectedEntries = Object.entries(collected).filter(([, v]) => v != null && String(v).trim() !== '');
   if (collectedEntries.length > 0) {
-    parts.push('## Collected quote info so far');
+    parts.push('## COLLECTED INFO SO FAR');
     parts.push(collectedEntries.map(([k, v]) => `${k}: ${v}`).join(', '));
     parts.push('');
   }
 
   const configuredNames = fields.map((f) => f.name).filter(Boolean);
-  parts.push('## ENABLED FIELDS (scope lock)');
-  parts.push(`Ask ONLY for these enabled fields: ${configuredNames.join(', ') || 'none'}`);
-  parts.push('Do NOT ask for anything outside this list.');
-  parts.push('If a field has an options list, treat those as allowed values; if user gives a value outside the list, ask them to choose from the list.');
-  parts.push('For dimensions, collect only the enabled parts (length/width/height) and unit.');
-  parts.push('');
-
-  if (missing.length > 0) {
-    parts.push('## Required infos (missing - MUST ask for)');
-    parts.push(missing.map((m) => `${m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
-    const topField = missing[0];
-    const askOne = beh.response_length === 'short' ? 'Ask ONLY for the top priority missing field.' : 'Ask for the top priority missing field; optionally 1 more if medium/long.';
-    parts.push(`CRITICAL: ${askOne} End with ONE direct question for ${topField?.name ?? 'that field'}.`);
+  if (configuredNames.length > 0) {
+    parts.push('## ENABLED FIELDS (scope lock)');
+    parts.push(`Ask ONLY for these enabled fields: ${configuredNames.join(', ')}`);
+    parts.push('Do NOT ask for anything outside this list.');
+    parts.push('If a field has an options list, treat those as allowed values; if user gives a value outside the list, ask them to choose from the list.');
+    parts.push('For dimensions, collect only the enabled parts (length/width/height) and unit.');
     parts.push('');
   }
 
-  parts.push('## Response rules (MUST follow)');
-
-  if (beh.persona_style === 'busy') {
-    parts.push('- Persona: BUSY. No filler ("Gotcha", "Sure", "Happy to help"), no apologies. Max brevity. A short "Hi" at conversation start is allowed.');
-  } else {
-    parts.push('- Persona: Explanational. You may explain but still respect response_length.');
+  if (missing.length > 0) {
+    parts.push('## WHAT YOU STILL NEED TO FIND OUT');
+    parts.push('Things to learn naturally (one at a time):');
+    parts.push(missing.map((m) => `${m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
+    parts.push('CRITICAL: Ask only for the highest priority missing item. One at a time.');
+    parts.push('');
   }
 
-  parts.push(`- Tone: ${beh.tone ?? 'professional'}`);
-  parts.push(`- Emojis: ${beh.emojis_enabled ? 'allowed' : 'FORBIDDEN - do not use any emojis'}`);
-
-  const length = beh.response_length ?? 'medium';
-  if (length === 'short') {
-    parts.push('- Length: SHORT. Max 1 sentence + 1 question, OR max 3 bullets total. Prefer 1 direct question.');
-  } else if (length === 'medium') {
-    parts.push('- Length: MEDIUM. Up to 2-3 sentences.');
-  } else {
-    parts.push('- Length: LONG. Can be longer but still only ask configured fields.');
-  }
-
-  if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {
-    parts.push(`- Forbidden topics (refuse briefly, redirect): ${beh.forbidden_topics.join(', ')}`);
-  }
+  const handoffMap = {
+    after_quote: `Once all info is collected, say: "${humanFallback}"`,
+    after_booking: `Once booking is confirmed, say: "${humanFallback}"`,
+    never: 'Never hand off. Keep the conversation going.',
+    on_request: 'Only hand off if user explicitly asks to speak to a human.',
+  };
+  const handoff = beh.handoff_trigger ?? 'after_quote';
+  parts.push('## HUMAN HANDOFF');
+  parts.push(handoffMap[handoff] ?? handoffMap.after_quote);
+  parts.push('');
 
   const bookingEnabled = schedulingConfig
     && schedulingConfig.chatbotOfferBooking
     && schedulingConfig.chatbotBookingMode !== 'off';
 
-  parts.push('');
-  parts.push('- If required_infos is not empty, the assistant MUST ask for the highest priority missing field.');
-  parts.push('- If the user asks about something outside configured fields (e.g. doors, windows), answer in 1 line max then ask for the next missing required field.');
-
-  if (bookingEnabled && schedulingConfig.chatbotCollectBookingAfterQuote !== false) {
-    parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then offer to schedule a call (see Scheduling section below). Do NOT end the conversation without offering booking.');
-  } else {
-    parts.push('- When all required fields are collected: give a 1-2 line busy summary using ONLY collected fields, then a closing line. Do not ask new questions.');
-  }
-
   if (bookingEnabled) {
-    parts.push('');
     parts.push('## Scheduling / Booking (MUST follow when all quote fields are collected)');
     const typeLabel = (schedulingConfig.chatbotBookingDefaultType || 'call').replace(/_/g, ' ');
 
@@ -112,6 +161,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
     }
 
     parts.push('- Do NOT confirm an appointment is booked. Say the team will follow up to confirm the exact time.');
+    parts.push('');
   }
 
   return parts.join('\n').trim();

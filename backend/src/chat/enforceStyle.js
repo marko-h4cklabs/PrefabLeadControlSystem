@@ -7,6 +7,41 @@ function stripEmojis(text) {
   return text.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
 }
 
+const BOT_TELL_STARTS = [
+  /^Great![\s,]*/i,
+  /^Absolutely![\s,]*/i,
+  /^Of course![\s,]*/i,
+  /^Certainly![\s,]*/i,
+  /^Sure thing![\s,]*/i,
+  /^Happy to help[\s,]*/i,
+  /^I'd be happy to[\s,]*/i,
+  /^I'm here to[\s,]*/i,
+  /^As an AI[\s,]*/i,
+  /^As an assistant[\s,]*/i,
+];
+
+const BOT_TELL_ANYWHERE = [
+  /\s*As an AI[^.]*\.?/gi,
+  /\s*I am an AI[^.]*\.?/gi,
+  /\s*I'm an AI[^.]*\.?/gi,
+  /\s*artificial intelligence[^.]*\.?/gi,
+  /\s*language model[^.]*\.?/gi,
+  /\s*I was trained[^.]*\.?/gi,
+];
+
+function stripBotTells(text) {
+  if (!text || typeof text !== 'string') return text;
+  let s = text;
+  for (const re of BOT_TELL_STARTS) {
+    s = s.replace(re, '');
+  }
+  for (const re of BOT_TELL_ANYWHERE) {
+    s = s.replace(re, '');
+  }
+  s = s.replace(/!+/g, '!');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 const GREETING_PATTERNS = /\b(hi|hello|hey|welcome|greetings|good (morning|afternoon|evening)|thanks for (reaching out|contacting|writing)|great (question|choice|to hear)|glad (you|to)\b)/gi;
 const APOLOGY_FILLER_PATTERNS = /\b(got it|noted|gotcha|understood|sure thing|no problem|of course|absolutely|certainly|thanks|thank you|sorry|apologize|apologies|unfortunately|I'm afraid)\b/gi;
 
@@ -89,6 +124,7 @@ function enforceMissingFieldQuestion(text, topMissingField) {
 
 function enforceStyle(text, behavior, options = {}) {
   let result = text || '';
+  result = stripBotTells(result);
   const beh = behavior ?? {};
   const { nextRequiredField, topMissingField, forbiddenReplacement, allowedFieldNames } = options;
 
@@ -122,4 +158,4 @@ function enforceStyle(text, behavior, options = {}) {
   return result.trim() || text;
 }
 
-module.exports = { enforceStyle, stripEmojis, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion, enforceScope };
+module.exports = { enforceStyle, stripEmojis, stripBotTells, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion, enforceScope };
