@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { pool } = require('../../../db');
 const { notificationSettingsRepository, schedulingSettingsRepository } = require('../../../db/repositories');
 const { requireRole } = require('../middleware/auth');
 const { errorJson } = require('../middleware/errors');
@@ -120,6 +121,57 @@ router.get('/scheduling', async (req, res) => {
   } catch (err) {
     console.error('[settings/scheduling] GET error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load scheduling settings');
+  }
+});
+
+// ---- Instagram settings ----
+
+router.get('/instagram', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      'SELECT instagram_account_id, meta_page_access_token FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Company not found' } });
+    }
+    res.json({
+      instagram_account_id: row.instagram_account_id ?? null,
+      has_page_token: !!(row.meta_page_access_token && String(row.meta_page_access_token).trim()),
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/instagram', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const body = req.body ?? {};
+    const updates = [];
+    const params = [companyId];
+    let idx = 2;
+
+    if ('instagram_account_id' in body) {
+      updates.push(`instagram_account_id = $${idx++}`);
+      params.push(body.instagram_account_id ?? null);
+    }
+    if ('meta_page_access_token' in body) {
+      updates.push(`meta_page_access_token = $${idx++}`);
+      params.push(body.meta_page_access_token ?? null);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'No fields to update' } });
+    }
+    await pool.query(
+      `UPDATE companies SET ${updates.join(', ')} WHERE id = $1`,
+      params
+    );
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 

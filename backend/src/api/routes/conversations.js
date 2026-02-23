@@ -1,0 +1,151 @@
+/**
+ * Conversations API - voice messages and related endpoints.
+ */
+
+const express = require('express');
+const multer = require('multer');
+const router = express.Router();
+const {
+  leadRepository,
+  conversationRepository,
+  chatConversationRepository,
+  chatMessagesRepository,
+  chatbotQuoteFieldsRepository,
+} = require('../../../db/repositories');
+const whisperService = require('../../../services/whisperService');
+const elevenLabsService = require('../../../services/elevenLabsService');
+const aiReplyService = require('../../../services/aiReplyService');
+const { logLeadActivity } = require('../../../services/activityLogger');
+const { errorJson } = require('../middleware/errors');
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const AUDIO_MAX_BYTES = 25 * 1024 * 1024;
+const ALLOWED_AUDIO_TYPES = [
+  'audio/webm',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+];
+
+const voiceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: AUDIO_MAX_BYTES },
+  fileFilter: (req, file, cb) => {
+    const mt = file.mimetype || '';
+    if (!ALLOWED_AUDIO_TYPES.includes(mt)) {
+      return cb(new Error(`Invalid mime type. Allowed: ${ALLOWED_AUDIO_TYPES.join(', ')}`));
+    }
+    cb(null, true);
+  },
+});
+
+function handleMulterError(err, req, res, next) {
+  if (err) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Audio file too large (max 25MB)');
+    }
+    if (err.message && err.message.includes('Invalid mime')) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', err.message);
+    }
+    return errorJson(res, 400, 'VALIDATION_ERROR', err.message || 'Invalid upload');
+  }
+  next();
+}
+
+/**
+ * POST /api/conversations/:id/voice-message
+ * Accept voice message, transcribe, optionally generate AI voice reply.
+ */
+router.post(
+  '/:id/voice-message',
+  voiceUpload.single('audio'),
+  handleMulterError,
+  async (req, res) => {
+    try {
+      const leadId = req.params.id;
+      const companyId = req.tenantId;
+
+      if (!leadId || !UUID_REGEX.test(leadId)) {
+        return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid lead ID required');
+      }
+
+      const lead = await leadRepository.findById(companyId, leadId);
+      if (!lead) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      }
+
+      const file = req.file;
+      if (!file || !file.buffer) {
+        return errorJson(res, 400, 'VALIDATION_ERROR', 'Audio file is required (field: audio)');
+      }
+
+      const transcription = await whisperService.transcribeAudio(file.buffer, file.mimetype);
+      const transcriptionText = transcription.text || '';
+
+      const chatConv = await chatConversationRepository.getOrCreateByLead(companyId, leadId);
+
+      await chatMessagesRepository.appendMessage(chatConv.id, 'user', transcriptionText, {
+        has_audio: true,
+        audio_url: null,
+        audio_duration_seconds: transcription.duration ? Math.round(transcription.duration) : null,
+      });
+
+      await conversationRepository.appendMessage(leadId, 'user', transcriptionText);
+
+      await logLeadActivity({
+        companyId,
+        leadId,
+        eventType: 'voice_message_received',
+        actorType: 'system',
+        source: 'voice',
+        channel: lead.channel,
+        metadata: {},
+      }).catch(() => {});
+
+      let aiReply = null;
+      const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
+      const enabledFields = (quoteFields || []).filter((f) => f && f.is_enabled);
+      const hasChatbot = enabledFields.length > 0;
+      const hasElevenLabs = !!process.env.ELEVENLABS_API_KEY;
+
+      if (hasChatbot && hasElevenLabs) {
+        try {
+          const result = await aiReplyService.generateAiReply(companyId, leadId);
+          const replyText = result.assistant_message || '';
+
+          await conversationRepository.appendMessage(leadId, 'assistant', replyText);
+
+          const merged = result.parsed_fields ?? result.field_updates ?? {};
+          const curr = await conversationRepository.getByLeadId(leadId);
+          if (JSON.stringify(merged) !== JSON.stringify(curr?.parsed_fields ?? {}) && Object.keys(merged).length > 0) {
+            await conversationRepository.updateParsedFields(leadId, merged);
+          }
+
+          const audioBuffer = await elevenLabsService.textToSpeech(replyText);
+          const audioBase64 = audioBuffer.toString('base64');
+
+          await chatMessagesRepository.appendMessage(chatConv.id, 'assistant', replyText, {
+            has_audio: true,
+            audio_url: null,
+          });
+
+          aiReply = { text: replyText, audio_base64: audioBase64 };
+        } catch (err) {
+          console.error('[conversations/voice-message] AI reply error:', err.message);
+        }
+      }
+
+      res.json({
+        message: 'ok',
+        transcription: transcriptionText,
+        ai_reply: aiReply,
+      });
+    } catch (err) {
+      errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+    }
+  }
+);
+
+module.exports = router;

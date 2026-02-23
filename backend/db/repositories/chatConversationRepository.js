@@ -1,5 +1,24 @@
 const { pool } = require('../index');
 
+async function getOrCreateByLead(companyId, leadId) {
+  const existing = await pool.query(
+    `SELECT id, company_id, lead_id, created_at, updated_at, quote_snapshot
+     FROM chat_conversations
+     WHERE company_id = $1 AND lead_id = $2
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [companyId, leadId]
+  );
+  if (existing.rows[0]) return existing.rows[0];
+  const result = await pool.query(
+    `INSERT INTO chat_conversations (company_id, lead_id, updated_at)
+     VALUES ($1, $2, NOW())
+     RETURNING id, company_id, lead_id, created_at, updated_at, quote_snapshot`,
+    [companyId, leadId]
+  );
+  return result.rows[0];
+}
+
 async function getOrCreateActiveConversation(companyId) {
   const existing = await pool.query(
     `SELECT id, company_id, created_at, updated_at, quote_snapshot
@@ -105,6 +124,7 @@ async function updateBookingState(conversationId, companyId, bookingPatch) {
 module.exports = {
   createConversation,
   getConversation,
+  getOrCreateByLead,
   getOrCreateActiveConversation,
   getOrCreateState,
   updateState,

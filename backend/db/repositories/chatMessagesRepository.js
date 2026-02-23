@@ -1,11 +1,12 @@
 const { pool } = require('../index');
 
-async function appendMessage(conversationId, role, content) {
+async function appendMessage(conversationId, role, content, options = {}) {
+  const { has_audio = false, audio_url = null, audio_duration_seconds = null } = options;
   const result = await pool.query(
-    `INSERT INTO chat_messages (conversation_id, role, content)
-     VALUES ($1, $2, $3)
-     RETURNING id, conversation_id, role, content, created_at`,
-    [conversationId, role, content]
+    `INSERT INTO chat_messages (conversation_id, role, content, has_audio, audio_url, audio_duration_seconds)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, conversation_id, role, content, created_at, has_audio, audio_url, audio_duration_seconds`,
+    [conversationId, role, content, has_audio, audio_url, audio_duration_seconds]
   );
   return result.rows[0];
 }

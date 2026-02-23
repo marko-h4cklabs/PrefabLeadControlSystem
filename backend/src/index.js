@@ -18,6 +18,7 @@ const appointmentsRouter = require('./api/routes/appointments');
 const schedulingRequestsRouter = require('./api/routes/schedulingRequests');
 const chatbotSchedulingRouter = require('./api/routes/chatbotScheduling');
 const schedulingRouter = require('./api/routes/scheduling');
+const conversationsRouter = require('./api/routes/conversations');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 
@@ -126,6 +127,7 @@ app.use('/api/appointments', authMiddleware, tenantMiddleware, apiLimiter, appoi
 app.use('/api/scheduling-requests', authMiddleware, tenantMiddleware, apiLimiter, schedulingRequestsRouter);
 app.use('/api/scheduling', authMiddleware, tenantMiddleware, apiLimiter, schedulingRouter);
 app.use('/api/chatbot/scheduling', authMiddleware, tenantMiddleware, apiLimiter, chatbotSchedulingRouter);
+app.use('/api/conversations', authMiddleware, tenantMiddleware, apiLimiter, conversationsRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
