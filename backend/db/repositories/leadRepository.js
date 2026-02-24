@@ -219,7 +219,8 @@ async function create(companyId, data) {
 
   const nameVal = data.name ?? data.external_id ?? null;
   const externalIdVal = data.external_id ?? data.name ?? null;
-  const sourceVal = data.source === 'simulation' ? 'simulation' : 'inbox';
+  const sourceVal =
+    data.source === 'simulation' ? 'simulation' : data.source === 'imported' ? 'imported' : 'inbox';
   const result = await pool.query(
     `INSERT INTO leads (company_id, channel, external_id, name, score, status, status_id, assigned_sales, source)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -291,6 +292,10 @@ async function update(companyId, leadId, data) {
   if (data.assigned_setter !== undefined) {
     updates.push(`assigned_setter = $${paramIndex++}`);
     params.push(data.assigned_setter);
+  }
+  if (data.assigned_setter_id !== undefined) {
+    updates.push(`assigned_setter_id = $${paramIndex++}`);
+    params.push(data.assigned_setter_id);
   }
   if (data.assigned_closer !== undefined) {
     updates.push(`assigned_closer = $${paramIndex++}`);

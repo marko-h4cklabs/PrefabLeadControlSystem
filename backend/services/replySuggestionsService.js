@@ -3,6 +3,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const { pool } = require('../db');
 const {
   conversationRepository,
@@ -37,15 +38,13 @@ Each suggestion must follow all tone, persona, and behavior rules from the syste
 Each suggestion must be a complete ready-to-send message.`;
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await client.messages.create({
+  const { content } = await claudeWithRetry({
     model,
     max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: 'user', content: userPrompt }],
   });
-  const textBlock = response.content?.find((b) => b.type === 'text');
-  return textBlock?.text ?? '';
+  return content ?? '';
 }
 
 function buildUserPrompt(messages) {
@@ -95,7 +94,14 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   const userPrompt = buildUserPrompt(messages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);
-  const suggestions = parseSuggestionsJson(raw);
+  let suggestions;
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    suggestions = parseSuggestionsJson(cleaned);
+  } catch (e) {
+    console.error('[replySuggestions] Failed to parse LLM JSON response, skipping');
+    return [];
+  }
 
   const result = await pool.query(
     `INSERT INTO reply_suggestions (conversation_id, lead_id, company_id, suggestions, context_snapshot)

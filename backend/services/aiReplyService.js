@@ -1,5 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
+// OPENAI_API_KEY=your_openai_key (optional fallback when Claude is overloaded)
+const { pool } = require('../db');
 const {
   conversationRepository,
   chatbotBehaviorRepository,
@@ -75,17 +77,13 @@ function mergeParsedFields(current, updates, allowedFieldNames, quoteFields = []
 }
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await claudeWithRetry(() =>
-    client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    })
-  );
-  const textBlock = response.content?.find((b) => b.type === 'text');
-  return textBlock?.text ?? '';
+  const { content } = await claudeWithRetry({
+    model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+  return content ?? '';
 }
 
 function buildUserPrompt(messages) {
@@ -129,10 +127,12 @@ async function generateAiReply(companyId, leadId) {
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-  const [behavior, companyInfo] = await Promise.all([
+  const [behavior, companyInfo, personaRow] = await Promise.all([
     chatbotBehaviorRepository.get(companyId),
     chatbotCompanyInfoRepository.get(companyId),
+    pool.query('SELECT id, name, system_prompt FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
   ]);
+  const activePersona = personaRow;
 
   const lastUserMsg = (conversation.messages ?? []).filter((m) => m.role === 'user').pop();
   const userText = lastUserMsg?.content ?? '';
@@ -175,10 +175,19 @@ async function generateAiReply(companyId, leadId) {
 
   let assistantMessage;
 
+  function mergePersonaPrompt(basePrompt) {
+    if (activePersona && activePersona.system_prompt && activePersona.system_prompt.trim()) {
+      console.log('[aiReplyService] Using active persona:', activePersona.name);
+      return (activePersona.system_prompt.trim() + '\n\n' + basePrompt).trim();
+    }
+    return basePrompt;
+  }
+
   if (requiredInfos.length > 0 && !userText.trim()) {
     assistantMessage = buildFieldQuestion(topMissing.name, behavior, topMissing.units);
   } else if (requiredInfos.length > 0) {
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, requiredInfos);
+    const basePrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, requiredInfos);
+    const systemPrompt = mergePersonaPrompt(basePrompt);
     const userPrompt = buildUserPrompt(conversation.messages);
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);
@@ -186,7 +195,8 @@ async function generateAiReply(companyId, leadId) {
     const fieldUpdatesNoPictures = filterOutPicturesFromUpdates(parsed.field_updates);
     parsedFields = mergeParsedFields(parsedFields, fieldUpdatesNoPictures, allowedFieldNames, orderedQuoteFields);
   } else {
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
+    const basePrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
+    const systemPrompt = mergePersonaPrompt(basePrompt);
     const userPrompt = buildUserPrompt(conversation.messages);
     const rawOutput = await callClaude(systemPrompt, userPrompt);
     const parsed = parseClaudeOutput(rawOutput);

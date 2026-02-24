@@ -1,0 +1,22 @@
+-- Stripe billing. Env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRO_PRICE_ID, STRIPE_ENTERPRISE_PRICE_ID
+
+ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(30) DEFAULT 'trial',
+  ADD COLUMN IF NOT EXISTS subscription_plan VARCHAR(20) DEFAULT 'trial',
+  ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMP DEFAULT (NOW() + INTERVAL '14 days'),
+  ADD COLUMN IF NOT EXISTS subscription_ends_at TIMESTAMP DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS monthly_message_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS message_count_reset_at TIMESTAMP DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS billing_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
+  event_type VARCHAR(50) NOT NULL,
+  stripe_event_id TEXT,
+  amount NUMERIC(10,2),
+  currency VARCHAR(10) DEFAULT 'EUR',
+  metadata JSONB,
+  created_at TIMESTAMP DEFAULT NOW()
+);

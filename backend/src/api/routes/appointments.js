@@ -6,6 +6,7 @@ const { logLeadActivity } = require('../../../services/activityLogger');
 const { getAvailability } = require('../../../services/availabilityService');
 const reminderWorker = require('../../../services/appointmentReminderWorker');
 const googleCalendarService = require('../../services/googleCalendarService');
+const { createNotification } = require('../../services/notificationService');
 const {
   createAppointmentSchema,
   updateAppointmentSchema,
@@ -81,6 +82,7 @@ async function createAppointmentHandler(req, res, overrideLeadId) {
       body: `${derivedTitle} with ${leadName} on ${fmtTime(start_at)}`,
       url: `/inbox/${lead_id}`,
     }).catch(() => {});
+    createNotification(companyId, 'booking_confirmed', 'Call Booked', `Call with ${leadName} scheduled`, lead_id).catch(() => {});
 
     if ((status || appointment.status) === 'scheduled') {
       const warmingService = require('../../services/warmingService');

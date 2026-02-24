@@ -17,12 +17,26 @@ function toNotificationResponse(row) {
   };
 }
 
+router.get('/unread-count', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const count = await notificationRepository.unreadCount(companyId);
+    return res.json({ count: count ?? 0 });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-    const unreadOnly = req.query.unreadOnly === 'true' || req.query.unreadOnly === true;
+    const unreadOnly =
+      req.query.unread_only === 'true' ||
+      req.query.unread_only === true ||
+      req.query.unreadOnly === 'true' ||
+      req.query.unreadOnly === true;
 
     const [notifications, total, unreadCount] = await Promise.all([
       notificationRepository.list(companyId, { limit, offset, unreadOnly }),

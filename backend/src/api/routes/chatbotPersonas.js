@@ -1,0 +1,155 @@
+const express = require('express');
+const router = express.Router();
+const { pool } = require('../../../db');
+const { errorJson } = require('../middleware/errors');
+
+// GET /api/chatbot/personas
+router.get('/', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const r = await pool.query(
+      `SELECT id, company_id, name, agent_name, system_prompt, tone, opener_style, is_active, is_default, created_at
+       FROM chatbot_personas WHERE company_id = $1 ORDER BY name`,
+      [companyId]
+    );
+    const items = (r.rows || []).map((row) => ({
+      id: row.id,
+      company_id: row.company_id,
+      name: row.name,
+      agent_name: row.agent_name ?? 'Jarvis',
+      system_prompt: row.system_prompt ?? null,
+      tone: row.tone ?? 'professional',
+      opener_style: row.opener_style ?? 'casual',
+      is_active: row.is_active === true,
+      is_default: row.is_default === true,
+      created_at: row.created_at,
+    }));
+    return res.json({ items });
+  } catch (err) {
+    console.error('[chatbot/personas] list:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list personas');
+  }
+});
+
+// POST /api/chatbot/personas
+router.post('/', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { name, agent_name, system_prompt, tone, opener_style } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'name is required');
+    }
+    const r = await pool.query(
+      `INSERT INTO chatbot_personas (company_id, name, agent_name, system_prompt, tone, opener_style)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, company_id, name, agent_name, system_prompt, tone, opener_style, is_active, is_default, created_at`,
+      [
+        companyId,
+        name.trim(),
+        (agent_name && String(agent_name).trim()) || 'Jarvis',
+        (system_prompt && String(system_prompt).trim()) || null,
+        (tone && String(tone).trim()) || 'professional',
+        (opener_style && String(opener_style).trim()) || 'casual',
+      ]
+    );
+    const row = r.rows[0];
+    return res.status(201).json(row);
+  } catch (err) {
+    console.error('[chatbot/personas] create:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create persona');
+  }
+});
+
+// PUT /api/chatbot/personas/:id
+router.put('/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const id = req.params.id;
+    const { name, agent_name, system_prompt, tone, opener_style } = req.body || {};
+    const updates = [];
+    const values = [id, companyId];
+    let idx = 3;
+    if (name !== undefined) {
+      updates.push(`name = $${idx++}`);
+      values.push(String(name).trim());
+    }
+    if (agent_name !== undefined) {
+      updates.push(`agent_name = $${idx++}`);
+      values.push(String(agent_name).trim());
+    }
+    if (system_prompt !== undefined) {
+      updates.push(`system_prompt = $${idx++}`);
+      values.push(system_prompt === null ? null : String(system_prompt).trim());
+    }
+    if (tone !== undefined) {
+      updates.push(`tone = $${idx++}`);
+      values.push(String(tone).trim());
+    }
+    if (opener_style !== undefined) {
+      updates.push(`opener_style = $${idx++}`);
+      values.push(String(opener_style).trim());
+    }
+    if (updates.length === 0) {
+      const r = await pool.query(
+        'SELECT id, company_id, name, agent_name, system_prompt, tone, opener_style, is_active, is_default, created_at FROM chatbot_personas WHERE id = $1 AND company_id = $2',
+        [id, companyId]
+      );
+      if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
+      return res.json(r.rows[0]);
+    }
+    const r = await pool.query(
+      `UPDATE chatbot_personas SET ${updates.join(', ')} WHERE id = $1 AND company_id = $2
+       RETURNING id, company_id, name, agent_name, system_prompt, tone, opener_style, is_active, is_default, created_at`,
+      values
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
+    return res.json(r.rows[0]);
+  } catch (err) {
+    console.error('[chatbot/personas] update:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update persona');
+  }
+});
+
+// PUT /api/chatbot/personas/:id/activate
+router.put('/:id/activate', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const id = req.params.id;
+    await pool.query(
+      'UPDATE chatbot_personas SET is_active = false WHERE company_id = $1',
+      [companyId]
+    );
+    const r = await pool.query(
+      'UPDATE chatbot_personas SET is_active = true WHERE id = $1 AND company_id = $2 RETURNING id, name, is_active',
+      [id, companyId]
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
+    return res.json(r.rows[0]);
+  } catch (err) {
+    console.error('[chatbot/personas] activate:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to activate persona');
+  }
+});
+
+// DELETE /api/chatbot/personas/:id
+router.delete('/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const id = req.params.id;
+    const check = await pool.query(
+      'SELECT id, is_active FROM chatbot_personas WHERE id = $1 AND company_id = $2',
+      [id, companyId]
+    );
+    if (!check.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
+    if (check.rows[0].is_active) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Cannot delete active persona. Activate another first.');
+    }
+    await pool.query('DELETE FROM chatbot_personas WHERE id = $1 AND company_id = $2', [id, companyId]);
+    return res.json({ success: true, id });
+  } catch (err) {
+    console.error('[chatbot/personas] delete:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete persona');
+  }
+});
+
+module.exports = router;

@@ -11,6 +11,38 @@ const {
 const queueService = require('../../../services/queueService');
 const { errorJson } = require('../middleware/errors');
 
+// GET /api/admin/system-health — detailed health (admin only)
+router.get('/system-health', async (req, res) => {
+  try {
+    const queueStats = await queueService.getQueueStats().catch(() => ({ waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }));
+    const webhookLog = await pool.query(
+      `SELECT id, company_id, subscriber_id, message_preview, processing_time_ms, success, created_at
+       FROM manychat_webhook_log ORDER BY created_at DESC LIMIT 10`
+    ).catch(() => ({ rows: [] }));
+    const poolTotal = typeof pool.totalCount === 'number' ? pool.totalCount : (pool._allConnections?.length ?? null);
+    const poolIdle = typeof pool.idleCount === 'number' ? pool.idleCount : null;
+    const mem = process.memoryUsage();
+    res.json({
+      queue: queueStats,
+      last_webhook_events: (webhookLog.rows || []).map((r) => ({
+        id: r.id,
+        company_id: r.company_id,
+        subscriber_id: r.subscriber_id,
+        message_preview: r.message_preview ? String(r.message_preview).slice(0, 80) + '...' : null,
+        processing_time_ms: r.processing_time_ms,
+        success: r.success,
+        created_at: r.created_at,
+      })),
+      database_pool: { total: poolTotal, idle: poolIdle },
+      memory: { rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal },
+      uptime_seconds: Math.floor(process.uptime()),
+      ai_provider: process.env.OPENAI_API_KEY ? 'claude_with_openai_fallback' : 'claude',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function escapeIlikePattern(s) {

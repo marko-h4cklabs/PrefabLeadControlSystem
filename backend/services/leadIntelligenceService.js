@@ -5,6 +5,7 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
+// OPENAI_API_KEY=your_openai_key (optional fallback)
 const { pool } = require('../db');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -80,17 +81,13 @@ function parseIntentJson(raw) {
 }
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await claudeWithRetry(() =>
-    client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    })
-  );
-  const textBlock = response.content?.find((b) => b.type === 'text');
-  return textBlock?.text ?? '';
+  const { content } = await claudeWithRetry({
+    model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
+  return content ?? '';
 }
 
 /**
@@ -111,7 +108,8 @@ async function runIntentScoring(leadId, companyId, messages) {
 
   let parsed;
   try {
-    parsed = parseIntentJson(raw);
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    parsed = parseIntentJson(cleaned);
   } catch (err) {
     console.error('[leadIntelligence] intent JSON parse error:', err.message);
     return { justBecameHotLead: false };
@@ -150,6 +148,22 @@ async function runIntentScoring(leadId, companyId, messages) {
        VALUES ($1, $2, $3, $4)`,
       [leadId, companyId, parsed.reasoning || 'Score or tags indicated hot lead', parsed.intent_score]
     );
+    if (typeof require !== 'undefined') {
+      try {
+        const { createNotification } = require('../src/services/notificationService');
+        const leadRow = await pool.query('SELECT name FROM leads WHERE id = $1 AND company_id = $2', [leadId, companyId]);
+        const leadName = leadRow.rows[0]?.name || 'Lead';
+        await createNotification(
+          companyId,
+          'hot_lead',
+          '🔥 Hot Lead Alert',
+          `${leadName} has a score of ${parsed.intent_score}/100`,
+          leadId
+        );
+      } catch (e) {
+        console.warn('[leadIntelligence] createNotification hot_lead:', e.message);
+      }
+    }
   }
 
   return { justBecameHotLead };

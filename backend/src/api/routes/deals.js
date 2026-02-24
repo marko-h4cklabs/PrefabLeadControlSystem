@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
 const { dealRepository, leadRepository } = require('../../../db/repositories');
+const { createNotification } = require('../../services/notificationService');
 const { errorJson } = require('../middleware/errors');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,6 +48,28 @@ router.post('/', async (req, res) => {
       `INSERT INTO pipeline_history (lead_id, company_id, pipeline_stage, deal_value, changed_at) VALUES ($1, $2, 'closed_won', $3, $4)`,
       [lead_id, companyId, amount, closedAt]
     );
+
+    const setterName = body.setter_name ?? deal.setter_name;
+    if (setterName && typeof setterName === 'string') {
+      const tm = await pool.query(
+        'SELECT id, name FROM team_members WHERE company_id = $1 AND LOWER(TRIM(name)) = LOWER(TRIM($2)) AND is_active = true',
+        [companyId, setterName]
+      );
+      if (tm.rows[0]) {
+        const setterId = tm.rows[0].id;
+        const today = closedAt.toISOString().slice(0, 10);
+        await pool.query(
+          `INSERT INTO setter_performance (company_id, setter_id, setter_name, date, deals_closed, revenue_attributed)
+           VALUES ($1, $2, $3, $4::date, 1, $5)
+           ON CONFLICT (company_id, setter_id, date) DO UPDATE SET
+             deals_closed = setter_performance.deals_closed + 1,
+             revenue_attributed = setter_performance.revenue_attributed + $5`,
+          [companyId, setterId, setterName.trim(), today, amount]
+        );
+      }
+    }
+
+    createNotification(companyId, 'deal_logged', '💰 Deal Logged', `€${amount} deal closed with ${lead.name || 'lead'}`, lead_id).catch(() => {});
 
     res.status(201).json(deal);
   } catch (err) {

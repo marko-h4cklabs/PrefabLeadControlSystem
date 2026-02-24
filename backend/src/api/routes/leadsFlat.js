@@ -30,6 +30,7 @@ const { errorJson } = require('../middleware/errors');
 const { computeFieldsState } = require('../../chat/fieldsState');
 const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
 const { pool } = require('../../../db');
+const leadImportRouter = require('./leadImport');
 const {
   listLeadsQuerySchema,
   createLeadBodySchema,
@@ -76,6 +77,8 @@ function toLeadPublic(lead) {
     updated_at: lead.updated_at,
   };
 }
+
+router.use(leadImportRouter);
 
 router.get('/statuses', async (req, res) => {
   try {
@@ -148,6 +151,120 @@ router.get('/', async (req, res) => {
     });
   } catch (err) {
     console.error('[leads] list error:', err.message);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// GET /api/leads/search?q=...
+router.get('/search', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const q = (req.query.q || '').trim();
+    if (!q) {
+      return res.json({ leads: [], total: 0 });
+    }
+    const pattern = '%' + q.replace(/%/g, '\\%').replace(/_/g, '\\_') + '%';
+    const r = await pool.query(
+      `SELECT l.id, l.name, l.external_id, l.channel, l.status, l.pipeline_stage, l.intent_score, l.budget_detected, l.created_at,
+              cls.name AS status_name,
+              (SELECT c.messages FROM conversations c WHERE c.lead_id = l.id LIMIT 1) AS messages_json
+       FROM leads l
+       LEFT JOIN company_lead_statuses cls ON cls.id = l.status_id AND cls.company_id = l.company_id
+       WHERE l.company_id = $1
+         AND (l.name ILIKE $2 OR l.external_id ILIKE $2 OR (l.budget_detected::text ILIKE $2)
+              OR EXISTS (SELECT 1 FROM conversations c WHERE c.lead_id = l.id AND c.messages::text ILIKE $2))
+       ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC
+       LIMIT 50`,
+      [companyId, pattern]
+    );
+    const leads = (r.rows || []).map((row) => {
+      let snippet = null;
+      if (row.messages_json && Array.isArray(row.messages_json)) {
+        const texts = row.messages_json.map((m) => (m && m.content) || '').filter(Boolean);
+        snippet = texts.join(' ').slice(0, 120) + (texts.join(' ').length > 120 ? '...' : '');
+      }
+      return {
+        id: row.id,
+        name: row.name ?? row.external_id ?? null,
+        external_id: row.external_id,
+        channel: row.channel,
+        status: row.status,
+        status_name: row.status_name,
+        pipeline_stage: row.pipeline_stage,
+        intent_score: row.intent_score,
+        budget_detected: row.budget_detected,
+        created_at: row.created_at,
+        snippet,
+      };
+    });
+    res.json({ leads, total: leads.length });
+  } catch (err) {
+    console.error('[leads] search:', err.message);
+    res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+// GET /api/leads/filter?status=&pipeline_stage=&is_hot_lead=&has_budget=&intent_score_min=&channel=&assigned_to=&from=&to=
+router.get('/filter', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const {
+      status,
+      pipeline_stage,
+      is_hot_lead,
+      has_budget,
+      intent_score_min,
+      channel,
+      assigned_to,
+      from,
+      to,
+    } = req.query;
+    let sql = `SELECT l.*, cls.name AS status_name
+               FROM leads l
+               LEFT JOIN company_lead_statuses cls ON cls.id = l.status_id AND cls.company_id = l.company_id
+               WHERE l.company_id = $1`;
+    const params = [companyId];
+    let idx = 2;
+    if (status) {
+      sql += ` AND l.status = $${idx++}`;
+      params.push(status);
+    }
+    if (pipeline_stage) {
+      sql += ` AND l.pipeline_stage = $${idx++}`;
+      params.push(pipeline_stage);
+    }
+    if (is_hot_lead === 'true' || is_hot_lead === true) {
+      sql += ` AND l.is_hot_lead = true`;
+    }
+    if (has_budget === 'true' || has_budget === true) {
+      sql += ` AND l.budget_detected IS NOT NULL AND l.budget_detected::text <> ''`;
+    }
+    if (intent_score_min != null && intent_score_min !== '') {
+      sql += ` AND l.intent_score >= $${idx++}`;
+      params.push(parseInt(intent_score_min, 10));
+    }
+    if (channel) {
+      sql += ` AND l.channel = $${idx++}`;
+      params.push(channel);
+    }
+    if (assigned_to) {
+      sql += ` AND l.assigned_setter_id = $${idx++}`;
+      params.push(assigned_to);
+    }
+    if (from) {
+      sql += ` AND l.created_at >= $${idx++}::timestamptz`;
+      params.push(from);
+    }
+    if (to) {
+      sql += ` AND l.created_at <= $${idx++}::timestamptz`;
+      params.push(to);
+    }
+    sql += ` ORDER BY l.updated_at DESC NULLS LAST, l.created_at DESC LIMIT 200`;
+    const r = await pool.query(sql, params);
+    const leads = (r.rows || []).map((row) => toLeadResponse({ ...row, status_name: row.status_name }));
+    res.json({ leads });
+  } catch (err) {
+    console.error('[leads] filter:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -330,6 +447,51 @@ router.get('/:leadId/no-show-risk', async (req, res) => {
     res.json({ no_show_risk_score: score, risk_level });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/:leadId/block', ensureLeadForCrm, async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const leadId = req.crmLeadId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    const externalId = lead.external_id || String(leadId);
+    const channel = lead.channel || 'instagram';
+    await pool.query(
+      `INSERT INTO blocked_users (company_id, external_id, channel, reason)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (company_id, external_id, channel) DO NOTHING`,
+      [companyId, externalId, channel, 'Blocked from lead detail']
+    );
+    await leadRepository.update(companyId, leadId, { status: 'disqualified', pipeline_stage: 'disqualified' });
+    return res.json({ success: true, blocked: true });
+  } catch (err) {
+    console.error('[leads] block:', err.message);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
+  }
+});
+
+router.put('/:leadId/assign', ensureLeadForCrm, async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const leadId = req.crmLeadId;
+    const setter_id = req.body?.setter_id ?? null;
+    if (setter_id !== null) {
+      const check = await pool.query(
+        'SELECT id FROM team_members WHERE id = $1 AND company_id = $2 AND is_active = true',
+        [setter_id, companyId]
+      );
+      if (!check.rows[0]) {
+        return errorJson(res, 400, 'VALIDATION_ERROR', 'setter_id not found or inactive');
+      }
+    }
+    await leadRepository.update(companyId, leadId, { assigned_setter_id: setter_id });
+    const updated = await leadRepository.findById(companyId, leadId);
+    return res.json(toLeadResponse(updated));
+  } catch (err) {
+    console.error('[leads] assign:', err.message);
+    return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 

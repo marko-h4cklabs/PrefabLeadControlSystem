@@ -26,6 +26,8 @@ const warmingRouter = require('./api/routes/warming');
 const dealsRouter = require('./api/routes/deals');
 const pipelineRouter = require('./api/routes/pipeline');
 const calendarRouter = require('./api/routes/calendar');
+const billingRouter = require('./api/routes/billing');
+const teamRouter = require('./api/routes/team');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const isAdmin = require('./middleware/isAdmin');
@@ -79,6 +81,9 @@ app.use(cors(corsOptions));
 // ManyChat webhook must receive raw body for HMAC verification - mount BEFORE express.json()
 const manychatRouter = require('./api/routes/manychat');
 app.use('/api/webhooks/manychat', express.raw({ type: 'application/json' }), manychatRouter);
+// Stripe webhook needs raw body for signature verification
+const billingWebhookRouter = require('./api/routes/billingWebhook');
+app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billingWebhookRouter);
 
 app.use(express.json());
 
@@ -98,9 +103,8 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
+const healthRouter = require('./api/routes/health');
+app.use('/api/health', healthRouter);
 
 const { chatAttachmentRepository } = require('../db/repositories');
 app.get('/public/attachments/:id/:token', async (req, res) => {
@@ -141,6 +145,10 @@ app.use('/api/warming', authMiddleware, tenantMiddleware, apiLimiter, warmingRou
 app.use('/api/deals', authMiddleware, tenantMiddleware, apiLimiter, dealsRouter);
 app.use('/api/pipeline', authMiddleware, tenantMiddleware, apiLimiter, pipelineRouter);
 app.use('/api/calendar', authMiddleware, tenantMiddleware, apiLimiter, calendarRouter);
+app.use('/api/billing', authMiddleware, tenantMiddleware, apiLimiter, billingRouter);
+app.use('/api/team', authMiddleware, tenantMiddleware, apiLimiter, teamRouter);
+const autoresponderRouter = require('./api/routes/autoresponder');
+app.use('/api/autoresponder', authMiddleware, tenantMiddleware, apiLimiter, autoresponderRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {

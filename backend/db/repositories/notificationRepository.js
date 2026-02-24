@@ -1,12 +1,13 @@
 const { pool } = require('../index');
 
 async function create(companyId, data) {
-  const { leadId, type, title, body, url } = data;
+  const { leadId, type, title, body, url, message } = data;
+  const bodyVal = body ?? message ?? null;
   const result = await pool.query(
     `INSERT INTO notifications (company_id, lead_id, type, title, body, url)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, company_id, lead_id, type, title, body, url, is_read, created_at`,
-    [companyId, leadId ?? null, type, title, body ?? null, url ?? null]
+    [companyId, leadId ?? null, type, title, bodyVal ?? null, url ?? null]
   );
   return result.rows[0];
 }

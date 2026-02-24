@@ -84,6 +84,11 @@ function quotePresetsValidationError(res, parsed, body) {
   });
 }
 
+const personaRouter = require('./chatbotPersonas');
+const templateRouter = require('./chatbotTemplates');
+router.use('/personas', personaRouter);
+router.use('/templates', templateRouter);
+
 router.get('/company-info', async (req, res) => {
   try {
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);

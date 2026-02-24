@@ -19,8 +19,28 @@ const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
 const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
 const { sendInstagramMessage } = require('../../services/manychatService');
+const { createNotification } = require('../../services/notificationService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
+
+const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
+
+async function incrementMessageCountAndWarn(companyId) {
+  const r = await pool.query(
+    `UPDATE companies SET monthly_message_count = COALESCE(monthly_message_count, 0) + 1
+     WHERE id = $1
+     RETURNING monthly_message_count, subscription_plan`,
+    [companyId]
+  );
+  const row = r.rows[0];
+  if (!row) return;
+  const limit = MESSAGE_LIMITS[row.subscription_plan] ?? 100;
+  if (row.monthly_message_count > limit) {
+    console.warn(
+      `[billing] Company ${companyId} exceeded message limit: ${row.monthly_message_count} > ${limit}`
+    );
+  }
+}
 
 /**
  * POST /api/webhooks/manychat
@@ -65,6 +85,9 @@ router.post('/', rawJsonParser, async (req, res) => {
 });
 
 async function processManyChatPayload(payload) {
+  const startedAt = Date.now();
+  let companyId = null;
+  let success = false;
   const subscriber = payload.subscriber ?? {};
   const subscriberId = String(subscriber.id ?? '');
   const subscriberName = subscriber.name ?? null;
@@ -74,8 +97,10 @@ async function processManyChatPayload(payload) {
   const pageId = String(payload.page_id ?? '');
   const messageId = payload.id ?? null;
   const timestamp = payload.timestamp ?? null;
+  const messagePreview = messageText ? String(messageText).slice(0, 500) : null;
 
-  if (!messageText || !messageText.trim()) return;
+  try {
+  if (!messageText || !messageText.trim()) { return; }
   if (!pageId) {
     console.warn('[manychat/webhook] Missing page_id');
     return;
@@ -95,11 +120,19 @@ async function processManyChatPayload(payload) {
     return;
   }
 
-  const companyId = companyRow.id;
+  companyId = companyRow.id;
   const manychatApiKey = companyRow.manychat_api_key ?? null;
   const operating_mode = companyRow.operating_mode && ['autopilot', 'copilot'].includes(companyRow.operating_mode)
     ? companyRow.operating_mode
     : null;
+
+  const blockedCheck = await pool.query(
+    'SELECT 1 FROM blocked_users WHERE company_id = $1 AND external_id = $2 AND channel = $3 LIMIT 1',
+    [companyId, subscriberId, 'instagram']
+  );
+  if (blockedCheck.rows && blockedCheck.rows.length > 0) {
+    return;
+  }
 
   let lead = await leadRepository.findByCompanyChannelExternalId(companyId, 'instagram', subscriberId, 'inbox');
   const isNewLead = !lead;
@@ -111,6 +144,7 @@ async function processManyChatPayload(payload) {
       source: 'inbox',
       name: subscriberName || null,
     });
+    createNotification(companyId, 'new_lead', 'New lead from Instagram', lead.name || 'New lead', lead.id).catch(() => {});
     notifyNewLeadCreated(companyId, lead).catch(() => {});
     logLeadActivity({
       companyId,
@@ -132,6 +166,13 @@ async function processManyChatPayload(payload) {
 
   const content = messageText.trim();
   await conversationRepository.appendMessage(lead.id, 'user', content);
+
+  const conversationForCount = await conversationRepository.getByLeadId(lead.id);
+  const userMessageCount = (conversationForCount?.messages || []).filter((m) => m.role === 'user').length;
+  const { evaluateAutoresponderRules } = require('../../services/autoresponderService');
+  await evaluateAutoresponderRules(lead, { text: content }, companyRow, manychatApiKey, { messageCount: userMessageCount }).catch((err) => {
+    console.warn('[manychat] autoresponder:', err.message);
+  });
 
   await pool.query('UPDATE leads SET last_engagement_at = NOW() WHERE id = $1', [lead.id]);
   const warmingService = require('../../services/warmingService');
@@ -180,6 +221,9 @@ async function processManyChatPayload(payload) {
 
         if (manychatApiKey && result.assistant_message) {
           await sendInstagramMessage(subscriberId, result.assistant_message, manychatApiKey);
+          incrementMessageCountAndWarn(companyId).catch((err) =>
+            console.warn('[manychat/webhook] message count increment:', err.message)
+          );
         } else if (!manychatApiKey) {
           console.warn('[manychat/webhook] manychat_api_key not set for company', companyId);
         }
@@ -197,6 +241,15 @@ async function processManyChatPayload(payload) {
     } catch (err) {
       console.error('[manychat/webhook] AI reply/suggestions failed:', err);
     }
+  }
+  success = true;
+  } finally {
+    const processingTimeMs = Date.now() - startedAt;
+    pool.query(
+      `INSERT INTO manychat_webhook_log (company_id, subscriber_id, message_preview, processing_time_ms, success)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [companyId, subscriberId || null, messagePreview, processingTimeMs, success]
+    ).catch((e) => console.warn('[manychat] webhook log insert failed:', e.message));
   }
 }
 
