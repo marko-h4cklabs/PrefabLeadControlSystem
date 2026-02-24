@@ -34,7 +34,7 @@ router.post('/make-admin', async (req, res) => {
   }
 });
 
-// GET /api/admin/stats — aggregate counts
+// GET /api/admin/stats — aggregate counts from DB
 router.get('/stats', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -42,7 +42,10 @@ router.get('/stats', async (req, res) => {
         (SELECT COUNT(*)::int FROM companies) AS total_companies,
         (SELECT COUNT(*)::int FROM leads) AS total_leads,
         (SELECT COUNT(*)::int FROM chat_conversations) AS total_conversations,
-        (SELECT COUNT(*)::int FROM appointments) AS total_appointments
+        (SELECT COUNT(*)::int FROM appointments) AS total_appointments,
+        (SELECT COUNT(*)::int FROM chat_messages WHERE created_at::date = CURRENT_DATE) AS total_messages_today,
+        (SELECT COUNT(*)::int FROM hot_lead_alerts WHERE dismissed_at IS NULL) AS hot_leads_active,
+        (SELECT COUNT(*)::int FROM users WHERE created_at::date = CURRENT_DATE) AS new_signups_today
     `);
     const row = result.rows[0];
     res.json({
@@ -50,6 +53,9 @@ router.get('/stats', async (req, res) => {
       total_leads: parseInt(row?.total_leads, 10) || 0,
       total_conversations: parseInt(row?.total_conversations, 10) || 0,
       total_appointments: parseInt(row?.total_appointments, 10) || 0,
+      total_messages_today: parseInt(row?.total_messages_today, 10) || 0,
+      hot_leads_active: parseInt(row?.hot_leads_active, 10) || 0,
+      new_signups_today: parseInt(row?.new_signups_today, 10) || 0,
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -65,12 +71,15 @@ router.get('/companies', async (req, res) => {
     const offset = (page - 1) * limit;
 
     let sql = `
-      SELECT c.id, c.name, c.created_at,
+      SELECT c.id, c.name, c.created_at, c.operating_mode,
+        (c.manychat_api_key IS NOT NULL) AS manychat_connected,
         COUNT(DISTINCT l.id)::int AS lead_count,
-        COUNT(DISTINCT u.id)::int AS user_count
+        COUNT(DISTINCT cc.id)::int AS conversation_count,
+        MAX(m.created_at) AS last_active
       FROM companies c
       LEFT JOIN leads l ON l.company_id = c.id
-      LEFT JOIN users u ON u.company_id = c.id
+      LEFT JOIN chat_conversations cc ON cc.company_id = c.id
+      LEFT JOIN chat_messages m ON m.conversation_id = cc.id
     `;
     const params = [];
     let paramIndex = 1;
@@ -79,7 +88,7 @@ router.get('/companies', async (req, res) => {
       sql += ` WHERE c.name ILIKE $${paramIndex}`;
       paramIndex++;
     }
-    sql += ' GROUP BY c.id, c.name, c.created_at ORDER BY c.created_at DESC';
+    sql += ' GROUP BY c.id, c.name, c.created_at, c.operating_mode, c.manychat_api_key ORDER BY c.created_at DESC';
     params.push(limit, offset);
     sql += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
 
@@ -88,8 +97,11 @@ router.get('/companies', async (req, res) => {
       id: r.id,
       name: r.name,
       created_at: r.created_at,
+      operating_mode: r.operating_mode ?? null,
       lead_count: parseInt(r.lead_count, 10) || 0,
-      user_count: parseInt(r.user_count, 10) || 0,
+      conversation_count: parseInt(r.conversation_count, 10) || 0,
+      last_active: r.last_active ?? null,
+      manychat_connected: Boolean(r.manychat_connected),
     }));
     res.json({ data });
   } catch (err) {
@@ -97,7 +109,7 @@ router.get('/companies', async (req, res) => {
   }
 });
 
-// GET /api/admin/companies/:id — full company detail
+// GET /api/admin/companies/:id — full company detail including last 5 leads
 router.get('/companies/:id', async (req, res) => {
   try {
     const companyId = req.params.id;
@@ -117,6 +129,7 @@ router.get('/companies/:id', async (req, res) => {
       totalAppointments,
       upcomingAppointments,
       usersList,
+      lastLeads,
     ] = await Promise.all([
       pool.query(
         `SELECT status, COUNT(*)::int AS cnt FROM leads WHERE company_id = $1 GROUP BY status`,
@@ -147,6 +160,11 @@ router.get('/companies/:id', async (req, res) => {
         [companyId]
       ),
       userRepository.findAll(companyId),
+      pool.query(
+        `SELECT id, name, channel, status, created_at, updated_at
+         FROM leads WHERE company_id = $1 ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 5`,
+        [companyId]
+      ),
     ]);
     const leads_by_status = Object.fromEntries(
       (leadsByStatus.rows || []).map((r) => [r.status, parseInt(r.cnt, 10) || 0])
@@ -163,6 +181,14 @@ router.get('/companies/:id', async (req, res) => {
       role: u.role,
       created_at: u.created_at,
     }));
+    const last_5_leads = (lastLeads.rows || []).map((r) => ({
+      id: r.id,
+      name: r.name,
+      channel: r.channel,
+      status: r.status,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    }));
     res.json({
       data: {
         company,
@@ -177,6 +203,7 @@ router.get('/companies/:id', async (req, res) => {
           upcoming_appointments: parseInt(upcomingAppointments.rows[0]?.cnt, 10) || 0,
         },
         users,
+        last_5_leads,
       },
     });
   } catch (err) {
@@ -210,8 +237,15 @@ router.post('/impersonate', async (req, res) => {
         return errorJson(res, 404, 'NOT_FOUND', 'No owner or admin user found for this company');
       }
     }
-    const token = jwt.sign(
-      { id: targetUser.id, companyId, role: targetUser.role },
+    const adminUserId = req.adminUser?.id ?? req.user?.id;
+    const impersonateToken = jwt.sign(
+      {
+        id: targetUser.id,
+        companyId,
+        role: targetUser.role,
+        is_impersonation: true,
+        original_admin_id: adminUserId,
+      },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -219,20 +253,30 @@ router.post('/impersonate', async (req, res) => {
       req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
         ? req.headers.authorization.slice(7).trim()
         : null;
-    res.json({ token, admin_token: adminToken });
+    res.json({
+      impersonate_token: impersonateToken,
+      admin_token: adminToken,
+      company_id: companyId,
+      company_name: company.name ?? null,
+    });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
 
-// POST /api/admin/impersonate/end — body { admin_token }, restores original session
+// POST /api/admin/impersonate/end — body { admin_token }, validates and returns { restored: true }
 router.post('/impersonate/end', async (req, res) => {
   try {
     const { admin_token: adminToken } = req.body ?? {};
     if (!adminToken || typeof adminToken !== 'string') {
       return errorJson(res, 400, 'VALIDATION_ERROR', 'admin_token required');
     }
-    res.json({ token: adminToken.trim() });
+    try {
+      jwt.verify(adminToken.trim(), process.env.JWT_SECRET);
+    } catch {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Invalid or expired admin_token');
+    }
+    res.json({ restored: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -487,9 +531,10 @@ router.get('/hot-leads', async (req, res) => {
     const companyId = req.query.company_id;
     let sql = `
       SELECT a.id, a.lead_id, a.company_id, a.trigger_reason, a.intent_score, a.created_at,
-             l.name AS lead_name, l.channel AS lead_channel
+             l.name AS lead_name, l.channel AS lead_channel, c.name AS company_name
       FROM hot_lead_alerts a
       JOIN leads l ON l.id = a.lead_id
+      LEFT JOIN companies c ON c.id = a.company_id
       WHERE a.dismissed_at IS NULL
     `;
     const params = [];
@@ -503,6 +548,7 @@ router.get('/hot-leads', async (req, res) => {
       id: r.id,
       lead_id: r.lead_id,
       company_id: r.company_id,
+      company_name: r.company_name ?? null,
       trigger_reason: r.trigger_reason,
       intent_score: r.intent_score,
       created_at: r.created_at,
@@ -510,6 +556,51 @@ router.get('/hot-leads', async (req, res) => {
       lead_channel: r.lead_channel,
     }));
     res.json({ data });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/users — all users with company name, email, created_at, is_admin
+router.get('/users', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.email, u.created_at, u.is_admin, u.company_id, c.name AS company_name
+      FROM users u
+      LEFT JOIN companies c ON c.id = u.company_id
+      ORDER BY u.created_at DESC
+    `);
+    const data = (result.rows || []).map((r) => ({
+      id: r.id,
+      email: r.email,
+      created_at: r.created_at,
+      is_admin: Boolean(r.is_admin),
+      company_id: r.company_id,
+      company_name: r.company_name ?? null,
+    }));
+    res.json({ data });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// PUT /api/admin/users/:id/toggle-admin — toggle is_admin for a user
+router.put('/users/:id/toggle-admin', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    if (!userId || !UUID_REGEX.test(userId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid user ID (UUID) required');
+    }
+    const user = await userRepository.getUserById(userId);
+    if (!user) {
+      return errorJson(res, 404, 'NOT_FOUND', 'User not found');
+    }
+    const newValue = !user.is_admin;
+    const updated = await userRepository.setIsAdmin(userId, newValue);
+    if (!updated) {
+      return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update user');
+    }
+    res.json({ user_id: userId, is_admin: updated.is_admin });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

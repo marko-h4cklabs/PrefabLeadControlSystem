@@ -161,13 +161,21 @@ router.post('/login', async (req, res) => {
 
 const { authMiddleware } = require('../middleware/auth');
 
-router.get('/me', authMiddleware, (req, res) => {
-  res.json({
-    id: req.user.id,
-    email: req.user.email,
-    role: req.user.role,
-    companyId: req.user.companyId,
-  });
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const company = await companyRepository.findById(req.user.companyId);
+    const operating_mode = company?.operating_mode ?? null;
+    res.json({
+      id: req.user.id,
+      email: req.user.email,
+      role: req.user.role,
+      companyId: req.user.companyId,
+      is_admin: Boolean(req.user.is_admin),
+      operating_mode,
+    });
+  } catch (err) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+  }
 });
 
 module.exports = router;

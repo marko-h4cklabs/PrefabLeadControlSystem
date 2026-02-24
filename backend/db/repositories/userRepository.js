@@ -86,9 +86,14 @@ async function setIsAdmin(userId, isAdmin) {
   return result.rowCount > 0 ? toPlainUser(result.rows[0]) : null;
 }
 
+async function getUserById(userId) {
+  return findByIdOnly(userId);
+}
+
 module.exports = {
   findById,
   findByIdOnly,
+  getUserById,
   findByEmail,
   findByEmailOnly,
   findAll,

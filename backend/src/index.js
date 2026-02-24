@@ -22,7 +22,7 @@ const conversationsRouter = require('./api/routes/conversations');
 const hotLeadsRouter = require('./api/routes/hotLeads');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
-const { isAdminMiddleware } = require('./api/middleware/isAdmin');
+const isAdmin = require('./middleware/isAdmin');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -119,7 +119,7 @@ app.use('/api/me', apiLimiter, meRouter);
 app.use('/api/companies', authMiddleware, tenantMiddleware, apiLimiter, companiesRouter);
 app.use('/api/leads', authMiddleware, tenantMiddleware, apiLimiter, leadsFlatRouter);
 app.use('/api/integrations', apiLimiter, integrationsRouter);
-app.use('/api/admin', authMiddleware, isAdminMiddleware, tenantMiddleware, apiLimiter, adminRouter);
+app.use('/api/admin', isAdmin, tenantMiddleware, apiLimiter, adminRouter);
 app.use('/api/chatbot', authMiddleware, tenantMiddleware, apiLimiter, chatbotRouter);
 app.use('/api/notifications', authMiddleware, tenantMiddleware, apiLimiter, notificationsRouter);
 app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsRouter);
