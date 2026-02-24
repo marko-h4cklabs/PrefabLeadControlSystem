@@ -4,6 +4,7 @@ const multer = require('multer');
 const FormData = require('form-data');
 const axios = require('axios');
 const { pool } = require('../../../db');
+const { isElevenLabsConfigured, getElevenLabsKey, getUsage, getVoices, textToSpeech } = require('../../../utils/elevenLabsClient');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -32,42 +33,95 @@ const PREMADE_VOICES = [
 ];
 
 router.get('/settings', async (req, res) => {
-  res.json({
-    voice_enabled: false,
-    voice_mode: 'match',
-    selected_voice_id: null,
-    selected_voice_name: null,
-    stability: 0.5,
-    similarity_boost: 0.75,
-    style: 0,
-    speaker_boost: true,
-    voice_model: 'eleven_turbo_v2_5',
-  });
+  try {
+    const result = await pool.query(
+      `SELECT voice_enabled, voice_mode, voice_model, voice_selected_id,
+              voice_selected_name, voice_stability, voice_similarity_boost,
+              voice_style, voice_speaker_boost
+       FROM companies WHERE id = $1`,
+      [req.tenantId]
+    );
+    const row = result.rows[0] || {};
+    res.json({
+      voice_enabled: row.voice_enabled || false,
+      voice_mode: row.voice_mode || 'match',
+      voice_model: row.voice_model || 'eleven_turbo_v2_5',
+      selected_voice_id: row.voice_selected_id || null,
+      selected_voice_name: row.voice_selected_name || null,
+      stability: parseFloat(row.voice_stability) ?? 0.5,
+      similarity_boost: parseFloat(row.voice_similarity_boost) ?? 0.75,
+      style: parseFloat(row.voice_style) ?? 0,
+      speaker_boost: row.voice_speaker_boost !== false,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.put('/settings', async (req, res) => {
-  res.json({ success: true });
+  try {
+    const {
+      voice_enabled,
+      voice_mode,
+      voice_model,
+      selected_voice_id,
+      selected_voice_name,
+      stability,
+      similarity_boost,
+      style,
+      speaker_boost,
+    } = req.body ?? {};
+
+    const setParts = [];
+    const values = [];
+    let idx = 1;
+    const addField = (col, val) => {
+      if (val !== undefined) {
+        setParts.push(`${col} = $${idx++}`);
+        values.push(val);
+      }
+    };
+    addField('voice_enabled', voice_enabled);
+    addField('voice_mode', voice_mode);
+    addField('voice_model', voice_model);
+    addField('voice_selected_id', selected_voice_id);
+    addField('voice_selected_name', selected_voice_name);
+    addField('voice_stability', stability);
+    addField('voice_similarity_boost', similarity_boost);
+    addField('voice_style', style);
+    addField('voice_speaker_boost', speaker_boost);
+
+    if (setParts.length === 0) return res.json({ success: true });
+
+    values.push(req.tenantId);
+    await pool.query(`UPDATE companies SET ${setParts.join(', ')} WHERE id = $${idx}`, values);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/voices', async (req, res) => {
-  if (!process.env.ELEVENLABS_API_KEY) {
-    return res.json({ voices: PREMADE_VOICES });
-  }
+  if (!isElevenLabsConfigured()) return res.json({ voices: PREMADE_VOICES });
   try {
-    const response = await axios.get('https://api.elevenlabs.io/v1/voices', {
-      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY },
-      timeout: 10000,
-    });
-    const voices = response.data.voices || [];
-    const all = [...PREMADE_VOICES.filter((p) => !voices.find((v) => v.voice_id === p.voice_id)), ...voices];
-    res.json({ voices: all });
+    const voices = await getVoices();
+    const merged = [...PREMADE_VOICES.filter((p) => !voices.find((v) => v.voice_id === p.voice_id)), ...voices];
+    res.json({ voices: merged });
   } catch (err) {
     res.json({ voices: PREMADE_VOICES });
   }
 });
 
 router.get('/usage', async (req, res) => {
-  res.json({ characters_used: 0, character_limit: 10000 });
+  if (!isElevenLabsConfigured()) {
+    return res.json({ characters_used: 0, character_limit: 10000, configured: false });
+  }
+  try {
+    const usage = await getUsage();
+    res.json({ ...usage, configured: true });
+  } catch (err) {
+    res.json({ characters_used: 0, character_limit: 10000, configured: false, error: err.message });
+  }
 });
 
 router.get('/clones', async (req, res) => {
@@ -84,10 +138,10 @@ router.get('/clones', async (req, res) => {
 });
 
 router.post('/clone', upload.array('samples', 5), async (req, res) => {
-  if (!process.env.ELEVENLABS_API_KEY) {
-    return res.status(400).json({
-      error:
-        'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to your Railway environment variables.',
+  if (!isElevenLabsConfigured()) {
+    return res.status(503).json({
+      error: 'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to your Railway environment variables.',
+      configured: false,
     });
   }
   try {
@@ -113,7 +167,7 @@ router.post('/clone', upload.array('samples', 5), async (req, res) => {
     form.append('remove_background_noise', 'false');
 
     const response = await axios.post('https://api.elevenlabs.io/v1/voices/add', form, {
-      headers: { ...form.getHeaders(), 'xi-api-key': process.env.ELEVENLABS_API_KEY },
+      headers: { ...form.getHeaders(), 'xi-api-key': getElevenLabsKey() },
       timeout: 60000,
     });
 
@@ -141,17 +195,37 @@ router.post('/clone', upload.array('samples', 5), async (req, res) => {
 });
 
 router.post('/preview', async (req, res) => {
-  if (!process.env.ELEVENLABS_API_KEY) {
-    return res.status(400).json({ error: 'ElevenLabs not configured' });
+  if (!isElevenLabsConfigured()) return res.status(503).json({ error: 'ElevenLabs not configured', configured: false });
+  try {
+    const { voice_id, text } = req.body ?? {};
+    const audio = await textToSpeech(voice_id, text || 'Hi! This is a preview of how I sound.');
+    res.json(audio);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.status(503).json({ error: 'ElevenLabs not configured' });
 });
 
 router.post('/test', async (req, res) => {
-  if (!process.env.ELEVENLABS_API_KEY) {
-    return res.status(400).json({ error: 'ElevenLabs not configured' });
+  if (!isElevenLabsConfigured()) return res.status(503).json({ error: 'ElevenLabs not configured', configured: false });
+  try {
+    const { text } = req.body ?? {};
+    const companyRow = await pool.query(
+      'SELECT voice_selected_id, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost, voice_model FROM companies WHERE id = $1',
+      [req.tenantId]
+    );
+    const c = companyRow.rows[0] || {};
+    if (!c.voice_selected_id) return res.status(400).json({ error: 'No voice selected' });
+    const audio = await textToSpeech(c.voice_selected_id, text || 'Hi! This is a test.', {
+      model: c.voice_model,
+      stability: c.voice_stability,
+      similarity_boost: c.voice_similarity_boost,
+      style: c.voice_style,
+      speaker_boost: c.voice_speaker_boost,
+    });
+    res.json(audio);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.status(503).json({ error: 'ElevenLabs not configured' });
 });
 
 router.delete('/clone/:id', async (req, res) => {

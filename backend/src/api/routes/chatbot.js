@@ -418,9 +418,16 @@ router.put('/behavior', async (req, res) => {
 router.get('/booking-settings', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const [behavior, companyRow] = await Promise.all([
+    const [behavior, companyRow, quoteFieldsResult] = await Promise.all([
       chatbotBehaviorRepository.get(companyId),
       pool.query('SELECT calendly_url FROM companies WHERE id = $1', [companyId]).then((r) => r.rows[0]),
+      pool.query(
+        `SELECT id, name, label, is_enabled, is_custom, variable_name, field_type
+         FROM chatbot_quote_fields
+         WHERE company_id = $1
+         ORDER BY priority ASC`,
+        [companyId]
+      ),
     ]);
     console.log('[chatbot/GET booking-settings]', behavior ? { booking_trigger_enabled: behavior.booking_trigger_enabled, booking_trigger_score: behavior.booking_trigger_score, booking_platform: behavior.booking_platform, calendly_url: behavior.calendly_url, booking_offer_message: behavior.booking_offer_message, booking_required_fields: behavior.booking_required_fields } : null);
     res.json({
@@ -430,6 +437,7 @@ router.get('/booking-settings', async (req, res) => {
       calendly_url: behavior?.calendly_url ?? companyRow?.calendly_url ?? '',
       booking_offer_message: behavior?.booking_offer_message ?? '',
       booking_required_fields: Array.isArray(behavior?.booking_required_fields) ? behavior.booking_required_fields : ['full_name', 'email_address'],
+      available_fields: quoteFieldsResult.rows || [],
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
