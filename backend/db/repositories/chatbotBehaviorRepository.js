@@ -24,6 +24,12 @@ const DEFAULTS = {
   urgency_style: 'genuine',
   social_proof_enabled: false,
   social_proof_examples: null,
+  booking_trigger_enabled: false,
+  booking_trigger_score: 60,
+  booking_platform: 'google_calendar',
+  calendly_url: null,
+  booking_offer_message: null,
+  booking_required_fields: ['full_name', 'email_address'],
 };
 
 const COLUMNS = [
@@ -50,6 +56,12 @@ const COLUMNS = [
   'urgency_style',
   'social_proof_enabled',
   'social_proof_examples',
+  'booking_trigger_enabled',
+  'booking_trigger_score',
+  'booking_platform',
+  'calendly_url',
+  'booking_offer_message',
+  'booking_required_fields',
 ];
 
 function rowToObject(row) {
@@ -78,6 +90,12 @@ function rowToObject(row) {
     urgency_style: row.urgency_style ?? DEFAULTS.urgency_style,
     social_proof_enabled: row.social_proof_enabled ?? DEFAULTS.social_proof_enabled,
     social_proof_examples: row.social_proof_examples ?? DEFAULTS.social_proof_examples,
+    booking_trigger_enabled: row.booking_trigger_enabled ?? DEFAULTS.booking_trigger_enabled,
+    booking_trigger_score: row.booking_trigger_score ?? DEFAULTS.booking_trigger_score,
+    booking_platform: row.booking_platform ?? DEFAULTS.booking_platform,
+    calendly_url: row.calendly_url ?? DEFAULTS.calendly_url,
+    booking_offer_message: row.booking_offer_message ?? DEFAULTS.booking_offer_message,
+    booking_required_fields: Array.isArray(row.booking_required_fields) ? row.booking_required_fields : DEFAULTS.booking_required_fields,
   };
 }
 
@@ -119,6 +137,14 @@ async function upsert(companyId, payload) {
   const urgency_style = payload.urgency_style !== undefined ? payload.urgency_style : (current.urgency_style ?? DEFAULTS.urgency_style);
   const social_proof_enabled = payload.social_proof_enabled !== undefined ? payload.social_proof_enabled : (current.social_proof_enabled ?? DEFAULTS.social_proof_enabled);
   const social_proof_examples = payload.social_proof_examples !== undefined ? payload.social_proof_examples : (current.social_proof_examples ?? DEFAULTS.social_proof_examples);
+  const booking_trigger_enabled = payload.booking_trigger_enabled !== undefined ? payload.booking_trigger_enabled : (current.booking_trigger_enabled ?? DEFAULTS.booking_trigger_enabled);
+  const booking_trigger_score = payload.booking_trigger_score !== undefined ? payload.booking_trigger_score : (current.booking_trigger_score ?? DEFAULTS.booking_trigger_score);
+  const booking_platform = payload.booking_platform !== undefined ? payload.booking_platform : (current.booking_platform ?? DEFAULTS.booking_platform);
+  const calendly_url = payload.calendly_url !== undefined ? payload.calendly_url : (current.calendly_url ?? DEFAULTS.calendly_url);
+  const booking_offer_message = payload.booking_offer_message !== undefined ? payload.booking_offer_message : (current.booking_offer_message ?? DEFAULTS.booking_offer_message);
+  const booking_required_fields = payload.booking_required_fields !== undefined
+    ? (Array.isArray(payload.booking_required_fields) ? payload.booking_required_fields : DEFAULTS.booking_required_fields)
+    : (current.booking_required_fields ?? DEFAULTS.booking_required_fields);
 
   await pool.query(
     `INSERT INTO chatbot_behavior (
@@ -126,20 +152,23 @@ async function upsert(companyId, payload) {
       agent_name, agent_backstory, opener_style, conversation_goal, handoff_trigger,
       follow_up_style, human_fallback_message, bot_deny_response,
       prohibited_topics, competitor_mentions, price_reveal, closing_style, language_code,
-      response_delay_seconds, max_messages_before_handoff, urgency_style, social_proof_enabled, social_proof_examples, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW())
+      response_delay_seconds, max_messages_before_handoff, urgency_style, social_proof_enabled, social_proof_examples,
+      booking_trigger_enabled, booking_trigger_score, booking_platform, calendly_url, booking_offer_message, booking_required_fields, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, NOW())
     ON CONFLICT (company_id) DO UPDATE SET
       tone = $2, response_length = $3, emojis_enabled = $4, persona_style = $5, forbidden_topics = $6,
       agent_name = $7, agent_backstory = $8, opener_style = $9, conversation_goal = $10, handoff_trigger = $11,
       follow_up_style = $12, human_fallback_message = $13, bot_deny_response = $14,
       prohibited_topics = $15, competitor_mentions = $16, price_reveal = $17, closing_style = $18, language_code = $19,
-      response_delay_seconds = $20, max_messages_before_handoff = $21, urgency_style = $22, social_proof_enabled = $23, social_proof_examples = $24, updated_at = NOW()`,
+      response_delay_seconds = $20, max_messages_before_handoff = $21, urgency_style = $22, social_proof_enabled = $23, social_proof_examples = $24,
+      booking_trigger_enabled = $25, booking_trigger_score = $26, booking_platform = $27, calendly_url = $28, booking_offer_message = $29, booking_required_fields = $30, updated_at = NOW()`,
     [
       companyId, tone, response_length, emojis_enabled, persona_style, forbidden_topics,
       agent_name, agent_backstory, opener_style, conversation_goal, handoff_trigger,
       follow_up_style, human_fallback_message, bot_deny_response,
       prohibited_topics, competitor_mentions, price_reveal, closing_style, language_code,
       response_delay_seconds, max_messages_before_handoff, urgency_style, social_proof_enabled, social_proof_examples,
+      booking_trigger_enabled, booking_trigger_score, booking_platform, calendly_url, booking_offer_message, booking_required_fields,
     ]
   );
   return get(companyId);

@@ -8,7 +8,9 @@ const {
   chatAttachmentRepository,
   companyRepository,
   leadRepository,
+  schedulingRequestRepository,
 } = require('../db/repositories');
+const { createNotification } = require('../src/services/notificationService');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
 const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
 const { computeFieldsState } = require('../src/chat/fieldsState');
@@ -88,6 +90,62 @@ async function callClaude(systemPrompt, messages, maxTokens = 1024) {
     messages,
   });
   return content ?? '';
+}
+
+function detectBookingConfirmation(incomingMessage, conversationMessages, behavior) {
+  if (!behavior?.booking_trigger_enabled) return false;
+  const messages = conversationMessages ?? [];
+  const lastAiMessages = messages
+    .filter((m) => m.role === 'assistant')
+    .slice(-2)
+    .map((m) => m.transcription || m.content || '');
+  const bookingWasOffered = lastAiMessages.some(
+    (m) =>
+      m.toLowerCase().includes('book') ||
+      m.toLowerCase().includes('calendar') ||
+      m.toLowerCase().includes('schedule') ||
+      m.toLowerCase().includes('set up a call') ||
+      m.toLowerCase().includes('calendly')
+  );
+  if (!bookingWasOffered) return false;
+  const acceptPhrases = [
+    'yes',
+    'sure',
+    'okay',
+    'ok',
+    'sounds good',
+    'perfect',
+    "let's do it",
+    'book it',
+    'go ahead',
+    'yes please',
+  ];
+  const lower = (incomingMessage || '').toLowerCase();
+  return acceptPhrases.some((p) => lower.includes(p));
+}
+
+async function handleBookingFlow(lead, company, behavior, conversation, companyId) {
+  try {
+    await schedulingRequestRepository.create({
+      companyId,
+      leadId: lead.id,
+      conversationId: conversation?.id ?? null,
+      source: 'chatbot',
+      status: 'open',
+      requestType: 'call',
+      notes: 'Requested via AI chat',
+    });
+    const leadName = lead?.name || lead?.external_id || 'Lead';
+    await createNotification(
+      companyId,
+      'booking_requested',
+      'Lead wants to book',
+      `${leadName} accepted your booking offer`,
+      lead.id
+    );
+  } catch (err) {
+    console.error('[bookingFlow] Error:', err.message);
+  }
 }
 
 function buildClaudeMessages(conversationMessages, incomingMessage) {
@@ -232,6 +290,11 @@ async function generateAiReply(companyId, leadId) {
       console.warn('[aiReply] Quality issues detected:', qualityIssues);
     }
     assistantMessage = rawReply;
+
+    const bookingConfirmed = detectBookingConfirmation(userText, conversation.messages, behavior);
+    if (bookingConfirmed && lead) {
+      await handleBookingFlow(lead, company, behavior, conversation, companyId);
+    }
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {

@@ -41,6 +41,51 @@ function validateAndCleanReply(reply, behavior) {
     );
   }
 
+  // Remove filler transition phrases — these sound robotic and unnatural
+  const fillerPhrases = [
+    /\bmoving forward[,.]?\s*/gi,
+    /\bstanding by[,.]?\s*/gi,
+    /\bnoted[,.]?\s*(will assist|i'll help|let me)[,.]?\s*/gi,
+    /\bnoted[,.]?\s*/gi,
+    /\bgot it[,.]?\s*(i'll|let me|will)\s*/gi,
+    /\bsounds good[,.]?\s*(let me|i'll|will)\s*/gi,
+    /\bperfect[,.]?\s*(let me|i'll|will)\s*/gi,
+    /\bgreat choice[,.]?\s*/gi,
+    /\bexcellent[,.]?\s*/gi,
+    /\babsolutely[,.]?\s*/gi,
+    /\bcertainly[,.]?\s*/gi,
+    /\bof course[,.]?\s*/gi,
+    /\bsure thing[,.]?\s*/gi,
+    /\bwill do[,.]?\s*/gi,
+    /\bright away[,.]?\s*/gi,
+    /\bstanding by\s*/gi,
+    /\bmuch appreciated[,.]?\s*/gi,
+    /\btalk soon[,.]?\s*/gi,
+    /\bhope this helps[,.]?\s*/gi,
+    /\bdoes that make sense\??\s*/gi,
+    /\blet me know if you (have any|need any) (questions|help)[.!]?\s*/gi,
+    /\bfeel free to (ask|reach out)[.!]?\s*/gi,
+    /\bdon't hesitate to (ask|reach out)[.!]?\s*/gi,
+    /\bi hope (this|that) (helps|answers)[.!]?\s*/gi,
+    /\bi understand (your|that)[,.]?\s*/gi,
+    /\bthank you for (reaching out|your message|contacting)[.!]?\s*/gi,
+    /\bthanks for (reaching out|your message|contacting)[.!]?\s*/gi,
+  ];
+  fillerPhrases.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+
+  // Also remove standalone filler words at the START of a reply
+  cleaned = cleaned.replace(/^(absolutely|certainly|of course|sure|great|perfect|wonderful|fantastic|awesome|noted)[,!.]?\s+/gi, '');
+
+  // Clean up double spaces and leading/trailing whitespace after removals
+  cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+
+  // If the reply starts with a lowercase letter after stripping (due to phrase removal), capitalize it
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+
   cleaned = cleaned.trim();
 
   if (!cleaned) {

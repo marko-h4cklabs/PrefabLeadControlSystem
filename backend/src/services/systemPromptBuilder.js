@@ -115,6 +115,49 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona) 
     ? `\nNEVER discuss or engage with these topics: ${behavior.prohibited_topics}`
     : '';
 
+  const fillerRules = `
+FORBIDDEN PHRASES (never use these under any circumstances):
+- "Moving forward" — sounds robotic
+- "Standing by" — sounds like a call center script
+- "Noted" as a standalone response
+- "Absolutely", "Certainly", "Of course" as openers
+- "Don't hesitate to reach out"
+- "Feel free to ask"
+- "Hope this helps"
+- "Does that make sense?"
+- "Talk soon" or "Much appreciated" as closers
+- "Thank you for reaching out"
+- Any phrase that sounds like it came from a customer service template
+Just respond naturally like a real human in a DM conversation.
+`;
+
+  let bookingSection = '';
+  if (behavior?.booking_trigger_enabled) {
+    const platform = behavior.booking_platform || 'google_calendar';
+    const requiredFields = behavior.booking_required_fields || ['full_name', 'email_address'];
+    const offerMessage =
+      behavior.booking_offer_message ||
+      (platform === 'calendly'
+        ? `Great, I'd love to set up a call! Here's my booking link: ${behavior.calendly_url || '[CALENDLY_URL]'}`
+        : `Great, I'd love to set up a call! Let me check my availability — what days and times work best for you?`);
+
+    bookingSection = `
+
+BOOKING TRIGGER RULES:
+Once you have collected: ${Array.isArray(requiredFields) ? requiredFields.join(', ') : requiredFields} AND the lead seems interested (asking real questions, showing intent), proactively offer to book a call.
+Use this message to offer booking: "${offerMessage}"
+After offering, if they accept:
+${
+  platform === 'calendly'
+    ? `- Send them the Calendly link and tell them to pick a time that works`
+    : `- Ask what days/times work for them this week or next week
+- Confirm the time slot
+- The booking will be created automatically in the calendar`
+}
+Only offer booking ONCE per conversation. If they decline, respect it and continue the conversation naturally.
+`;
+  }
+
   const languageInstruction =
     behavior?.language_code && behavior.language_code !== 'en'
       ? `\nIMPORTANT: Respond in ${getLanguageName(behavior.language_code)} unless the lead writes in a different language, in which case match their language.`
@@ -146,6 +189,8 @@ ${prohibitedText}
 ${languageInstruction}
 ${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}` : ''}
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
+${fillerRules}
+${bookingSection}
 `
     : `
 You are ${agentName}, a sales representative for ${companyName}.
@@ -180,6 +225,8 @@ CRITICAL RULES:
 8. Ask ONE question at a time. Never ask multiple questions in the same message.
 9. Always move the conversation forward toward: ${conversationGoal}
 10. If the lead seems frustrated or upset, acknowledge it first before responding to their question.
+${fillerRules}
+${bookingSection}
 
 ${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}` : ''}
 

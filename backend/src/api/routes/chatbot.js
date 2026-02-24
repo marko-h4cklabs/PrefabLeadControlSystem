@@ -344,6 +344,54 @@ router.put('/behavior', async (req, res) => {
   }
 });
 
+router.get('/booking-settings', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const [behavior, companyRow] = await Promise.all([
+      chatbotBehaviorRepository.get(companyId),
+      pool.query('SELECT calendly_url FROM companies WHERE id = $1', [companyId]).then((r) => r.rows[0]),
+    ]);
+    res.json({
+      booking_trigger_enabled: behavior?.booking_trigger_enabled ?? false,
+      booking_trigger_score: behavior?.booking_trigger_score ?? 60,
+      booking_platform: behavior?.booking_platform ?? 'google_calendar',
+      calendly_url: behavior?.calendly_url ?? companyRow?.calendly_url ?? '',
+      booking_offer_message: behavior?.booking_offer_message ?? '',
+      booking_required_fields: Array.isArray(behavior?.booking_required_fields) ? behavior.booking_required_fields : ['full_name', 'email_address'],
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/booking-settings', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const {
+      booking_trigger_enabled,
+      booking_trigger_score,
+      booking_platform,
+      calendly_url,
+      booking_offer_message,
+      booking_required_fields,
+    } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(companyId, {
+      booking_trigger_enabled,
+      booking_trigger_score,
+      booking_platform,
+      calendly_url,
+      booking_offer_message,
+      booking_required_fields: Array.isArray(booking_required_fields) ? booking_required_fields : undefined,
+    });
+    if (calendly_url !== undefined) {
+      await pool.query('UPDATE companies SET calendly_url = $1 WHERE id = $2', [calendly_url ?? null, companyId]);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/quote-fields', async (req, res) => {
   try {
     const fields = await chatbotQuoteFieldsRepository.listWithCustom(req.tenantId);
