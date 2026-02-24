@@ -1,17 +1,21 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
-// OPENAI_API_KEY=your_openai_key (optional fallback when Claude is overloaded)
 const { pool } = require('../db');
 const {
   conversationRepository,
   chatbotBehaviorRepository,
   chatbotCompanyInfoRepository,
+  chatbotQuoteFieldsRepository,
   chatAttachmentRepository,
+  companyRepository,
+  leadRepository,
 } = require('../db/repositories');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
 const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
 const { computeFieldsState } = require('../src/chat/fieldsState');
-const { buildSystemPrompt, buildFieldQuestion } = require('../src/chat/systemPrompt');
+const { buildSystemPrompt, buildLeadContext } = require('../src/services/systemPromptBuilder');
+const { buildFieldQuestion } = require('../src/chat/systemPrompt');
+const { detectObjection } = require('../src/services/objectionHandler');
+const { validateAndCleanReply, checkReplyQuality } = require('../src/services/replyValidator');
 const { enforceStyle } = require('../src/chat/enforceStyle');
 const {
   shouldGreet,
@@ -76,21 +80,40 @@ function mergeParsedFields(current, updates, allowedFieldNames, quoteFields = []
   return merged;
 }
 
-async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
+async function callClaude(systemPrompt, messages, maxTokens = 1024) {
   const { content } = await claudeWithRetry({
     model,
     max_tokens: maxTokens,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
+    messages,
   });
   return content ?? '';
 }
 
-function buildUserPrompt(messages) {
-  const history = (messages ?? [])
-    .map((m) => `${m.role}: ${m.content}`)
-    .join('\n');
-  return `Conversation so far:\n${history || '(no messages yet)'}\n\nGenerate the next assistant reply. Output ONLY valid JSON: {"assistant_message": "your reply", "field_updates": {}}`;
+function buildClaudeMessages(conversationMessages, incomingMessage) {
+  const recentMessages = (conversationMessages || []).slice(-20);
+  const claudeMessages = recentMessages
+    .map((msg) => ({
+      role: msg.role === 'user' ? 'user' : 'assistant',
+      content: msg.transcription || msg.content || '',
+    }))
+    .filter((m) => m.content.trim() !== '');
+
+  if (claudeMessages.length > 0 && claudeMessages[0].role === 'assistant') {
+    claudeMessages.unshift({ role: 'user', content: '[conversation started]' });
+  }
+
+  const lastMessage = claudeMessages[claudeMessages.length - 1];
+  if (lastMessage?.role !== 'user') {
+    claudeMessages.push({ role: 'user', content: incomingMessage || '' });
+  }
+
+  claudeMessages.push({
+    role: 'user',
+    content:
+      'Generate the next assistant reply. Output ONLY valid JSON: {"assistant_message": "your reply text", "field_updates": {}}. No other text.',
+  });
+  return claudeMessages;
 }
 
 function parseClaudeOutput(raw) {
@@ -127,12 +150,21 @@ async function generateAiReply(companyId, leadId) {
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-  const [behavior, companyInfo, personaRow] = await Promise.all([
+  const [behavior, companyInfo, companyRecord, personaRow, lead, leadIntelligence] = await Promise.all([
     chatbotBehaviorRepository.get(companyId),
     chatbotCompanyInfoRepository.get(companyId),
-    pool.query('SELECT id, name, system_prompt FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
+    companyRepository.findById(companyId),
+    pool.query('SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
+    leadRepository.findById(companyId, leadId),
+    pool.query('SELECT intent_score, budget_detected, urgency_level, intent_tags, conversation_summary, pipeline_stage FROM leads WHERE id = $1 AND company_id = $2', [leadId, companyId]).then((r) => r.rows[0] ?? null),
   ]);
   const activePersona = personaRow;
+  const company = {
+    name: companyRecord?.name || 'our company',
+    business_description: companyInfo?.business_description ?? '',
+    additional_notes: companyInfo?.additional_notes ?? '',
+  };
+  const leadForContext = lead && leadIntelligence ? { ...lead, ...leadIntelligence } : lead;
 
   const lastUserMsg = (conversation.messages ?? []).filter((m) => m.role === 'user').pop();
   const userText = lastUserMsg?.content ?? '';
@@ -175,34 +207,31 @@ async function generateAiReply(companyId, leadId) {
 
   let assistantMessage;
 
-  function mergePersonaPrompt(basePrompt) {
-    if (activePersona && activePersona.system_prompt && activePersona.system_prompt.trim()) {
-      console.log('[aiReplyService] Using active persona:', activePersona.name);
-      return (activePersona.system_prompt.trim() + '\n\n' + basePrompt).trim();
-    }
-    return basePrompt;
-  }
-
   if (requiredInfos.length > 0 && !userText.trim()) {
     assistantMessage = buildFieldQuestion(topMissing.name, behavior, topMissing.units);
-  } else if (requiredInfos.length > 0) {
-    const basePrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, requiredInfos);
-    const systemPrompt = mergePersonaPrompt(basePrompt);
-    const userPrompt = buildUserPrompt(conversation.messages);
-    const rawOutput = await callClaude(systemPrompt, userPrompt);
-    const parsed = parseClaudeOutput(rawOutput);
-    assistantMessage = parsed.assistant_message;
-    const fieldUpdatesNoPictures = filterOutPicturesFromUpdates(parsed.field_updates);
-    parsedFields = mergeParsedFields(parsedFields, fieldUpdatesNoPictures, allowedFieldNames, orderedQuoteFields);
   } else {
-    const basePrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFields, collectedMap, []);
-    const systemPrompt = mergePersonaPrompt(basePrompt);
-    const userPrompt = buildUserPrompt(conversation.messages);
-    const rawOutput = await callClaude(systemPrompt, userPrompt);
+    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona);
+    const leadContext = await buildLeadContext(leadForContext);
+    systemPrompt += leadContext;
+    const objection = detectObjection(userText);
+    if (objection) {
+      systemPrompt += `\n\nOBJECTION DETECTED: "${objection.type}"\nSuggested approach: ${objection.hint}`;
+    }
+    systemPrompt += '\n\nRespond with ONLY a JSON object: {"assistant_message": "your reply text", "field_updates": {}}. No other text.';
+
+    const claudeMessages = buildClaudeMessages(conversation.messages, userText);
+    const rawOutput = await callClaude(systemPrompt, claudeMessages);
     const parsed = parseClaudeOutput(rawOutput);
-    assistantMessage = parsed.assistant_message;
+    let rawReply = parsed.assistant_message;
     const fieldUpdatesNoPictures = filterOutPicturesFromUpdates(parsed.field_updates);
     parsedFields = mergeParsedFields(parsedFields, fieldUpdatesNoPictures, allowedFieldNames, orderedQuoteFields);
+
+    rawReply = validateAndCleanReply(rawReply, behavior);
+    const qualityIssues = checkReplyQuality(rawReply);
+    if (qualityIssues.length > 0) {
+      console.warn('[aiReply] Quality issues detected:', qualityIssues);
+    }
+    assistantMessage = rawReply;
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {

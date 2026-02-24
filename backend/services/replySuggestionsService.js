@@ -11,31 +11,48 @@ const {
   chatbotCompanyInfoRepository,
   chatbotQuoteFieldsRepository,
 } = require('../db/repositories');
-const { buildSystemPrompt } = require('../src/chat/systemPrompt');
+const { buildSystemPrompt } = require('../src/services/systemPromptBuilder');
+const { companyRepository } = require('../db/repositories');
 const { sendInstagramMessage } = require('../src/services/manychatService');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
-const COPILOT_APPEND = `
+function buildSuggestionPrompt(behavior) {
+  const goal = behavior?.conversation_goal || 'booking a call';
+  const lengthHint = behavior?.response_length === 'short' ? '1-2' : '2-4';
+  const emojisOk = behavior?.emojis_enabled ? '' : 'No emojis. ';
+  return `
 
-Instead of sending ONE reply, generate exactly 3 different reply options for the human setter to choose from.
+Based on this conversation, generate EXACTLY 3 different reply options.
+Each must have a distinct STRATEGY, not just a different tone.
 
-Each option should have a different approach:
-Option 1 — Direct and concise: Gets straight to the point
-Option 2 — Empathetic and warm: Acknowledges their situation before moving forward
-Option 3 — Strategic: Moves the conversation toward the goal most effectively
+REPLY 1 — DIRECT CLOSER:
+Short, confident, moves directly toward ${goal}.
+No fluff. Clear next step.
+
+REPLY 2 — VALUE BUILDER:
+Leads with a relevant insight, result, or social proof.
+Makes them feel they'd be missing out by not continuing.
+
+REPLY 3 — CURIOUS QUALIFIER:
+Asks one smart question to understand their situation better.
+Makes them feel heard and understood.
 
 Return ONLY valid JSON in this exact format, nothing else:
 {
   "suggestions": [
-    { "index": 0, "label": "Direct", "text": "..." },
-    { "index": 1, "label": "Empathetic", "text": "..." },
-    { "index": 2, "label": "Strategic", "text": "..." }
+    { "index": 0, "label": "Direct Closer", "text": "..." },
+    { "index": 1, "label": "Value Builder", "text": "..." },
+    { "index": 2, "label": "Curious Qualifier", "text": "..." }
   ]
 }
 
-Each suggestion must follow all tone, persona, and behavior rules from the system prompt.
-Each suggestion must be a complete ready-to-send message.`;
+Apply these rules to ALL replies:
+- ${emojisOk}Max ${lengthHint} sentences each
+- Sound human, not robotic
+- No formal greetings or sign-offs
+`;
+}
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
   const { content } = await claudeWithRetry({
@@ -61,8 +78,8 @@ function parseSuggestionsJson(raw) {
   const parsed = JSON.parse(jsonStr);
   const suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
   return suggestions
-    .filter((s) => s && Number.isInteger(s.index) && typeof s.label === 'string' && typeof s.text === 'string')
-    .map((s) => ({ index: s.index, label: String(s.label).slice(0, 50), text: String(s.text).slice(0, 4000) }))
+    .filter((s) => s && Number.isInteger(s.index) && typeof s.label === 'string' && (typeof s.text === 'string' || typeof s.content === 'string'))
+    .map((s) => ({ index: s.index, label: String(s.label).slice(0, 50), text: String(s.text || s.content || '').slice(0, 4000) }))
     .slice(0, 3);
 }
 
@@ -74,23 +91,28 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     throw new Error('leadId, conversationId, and companyId are required');
   }
 
-  const [companyInfo, quoteFields, convRow] = await Promise.all([
+  const [companyInfo, companyRecord, quoteFields, convRow, personaRow] = await Promise.all([
     chatbotCompanyInfoRepository.get(companyId),
+    companyRepository.findById(companyId),
     chatbotQuoteFieldsRepository.list(companyId),
     pool.query('SELECT parsed_fields, quote_snapshot FROM conversations WHERE id = $1 AND lead_id = $2', [conversationId, leadId]),
+    pool.query('SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
   ]);
 
   const conv = convRow.rows[0];
-  const parsed_fields = conv?.parsed_fields ?? {};
   const quoteSnapshot = conv?.quote_snapshot ?? [];
   const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
-  const orderedQuoteFields = (Array.isArray(quoteSnapshot) ? quoteSnapshot : [])
+  const orderedQuoteFields = (Array.isArray(quoteSnapshot) ? quoteSnapshot : quoteFields || [])
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
-  const collectedMap = typeof parsed_fields === 'object' ? parsed_fields : {};
 
-  const baseSystemPrompt = buildSystemPrompt(behavior ?? {}, companyInfo ?? {}, orderedQuoteFields, collectedMap, [], null);
-  const systemPrompt = baseSystemPrompt + COPILOT_APPEND;
+  const company = {
+    name: companyRecord?.name || 'our company',
+    business_description: companyInfo?.business_description ?? '',
+    additional_notes: companyInfo?.additional_notes ?? '',
+  };
+  const baseSystemPrompt = await buildSystemPrompt(company, behavior ?? {}, orderedQuoteFields, personaRow);
+  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(behavior ?? {});
   const userPrompt = buildUserPrompt(messages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);

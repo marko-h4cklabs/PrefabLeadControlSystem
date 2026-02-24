@@ -7,7 +7,10 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "db:migrate": "node db/migrate.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "load-test": "node load-tests/concurrent-webhook-test.js",
+    "load-test:db": "node load-tests/db-stress-test.js",
+    "load-test:artillery": "bash load-tests/run-load-test.sh"
   },
   "keywords": [],
   "author": "",
@@ -36,6 +39,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "artillery": "^2.0.30",
     "nodemon": "^3.1.14"
   }
 }

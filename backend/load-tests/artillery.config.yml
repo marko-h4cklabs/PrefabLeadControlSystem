@@ -1,0 +1,80 @@
+config:
+  target: "https://prefableadcontrolsystem-production.up.railway.app"
+  phases:
+    - name: "Warm up"
+      duration: 30
+      arrivalRate: 2
+    - name: "Ramp up"
+      duration: 60
+      arrivalRate: 5
+      rampTo: 20
+    - name: "Sustained load"
+      duration: 120
+      arrivalRate: 20
+    - name: "Spike test"
+      duration: 30
+      arrivalRate: 50
+    - name: "Cool down"
+      duration: 30
+      arrivalRate: 5
+  defaults:
+    headers:
+      Content-Type: "application/json"
+  plugins:
+    metrics-by-endpoint: {}
+  reporter:
+    - json
+    - html
+
+scenarios:
+  - name: "Health check"
+    weight: 10
+    flow:
+      - get:
+          url: "/api/health"
+          expect:
+            - statusCode: 200
+
+  - name: "ManyChat webhook simulation"
+    weight: 40
+    flow:
+      - post:
+          url: "/api/webhook/manychat/{{ $processEnvironment.WEBHOOK_TOKEN || 'test' }}"
+          headers:
+            Content-Type: "application/json"
+          json:
+            subscriber:
+              id: "{{ $randomString() }}"
+              name: "Load Test User {{ $randomInt(1, 1000) }}"
+            message:
+              text: "Hi I'm interested in your service"
+              type: "text"
+            page_id: "{{ $processEnvironment.TEST_PAGE_ID || 'test_page' }}"
+
+  - name: "API read operations"
+    weight: 30
+    flow:
+      - get:
+          url: "/api/leads?limit=20"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.TEST_TOKEN }}"
+      - get:
+          url: "/api/analytics/overview"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.TEST_TOKEN }}"
+      - get:
+          url: "/api/notifications/unread-count"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.TEST_TOKEN }}"
+
+  - name: "Pipeline operations"
+    weight: 20
+    flow:
+      - get:
+          url: "/api/pipeline"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.TEST_TOKEN }}"
+      - get:
+          url: "/api/pipeline/stats"
+          headers:
+            Authorization: "Bearer {{ $processEnvironment.TEST_TOKEN }}"

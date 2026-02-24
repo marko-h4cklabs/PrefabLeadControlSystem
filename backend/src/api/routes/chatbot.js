@@ -9,9 +9,13 @@ const {
   chatMessagesRepository,
   schedulingSettingsRepository,
   schedulingRequestRepository,
+  companyRepository,
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
-const { buildSystemPrompt, buildFieldQuestion } = require('../../chat/systemPrompt');
+const { buildSystemPrompt: buildSystemPromptLegacy, buildFieldQuestion } = require('../../chat/systemPrompt');
+const { buildSystemPrompt, buildLeadContext } = require('../../services/systemPromptBuilder');
+const { validateAndCleanReply } = require('../../services/replyValidator');
+const { claudeWithRetry } = require('../../utils/claudeWithRetry');
 const { callLLM } = require('../../chat/chatService');
 const { extractFieldsWithClaude, getAllowedFieldNames } = require('../../chat/extractService');
 const { enforceStyle } = require('../../chat/enforceStyle');
@@ -44,6 +48,7 @@ const {
   quotePresetsBodySchema,
 } = require('../validators/chatbotSchemas');
 const { errorJson } = require('../middleware/errors');
+const { pool } = require('../../../db');
 
 function validationError(res, parsed) {
   return res.status(400).json({
@@ -122,20 +127,72 @@ router.put('/company-info', async (req, res) => {
 router.get('/behavior', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    res.json(behavior);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/behavior/preview', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const [companyRecord, companyInfo, behavior, quoteFields, personaRow] = await Promise.all([
+      companyRepository.findById(companyId),
+      chatbotCompanyInfoRepository.get(companyId),
+      chatbotBehaviorRepository.get(companyId),
+      chatbotQuoteFieldsRepository.list(companyId),
+      pool.query(
+        'SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1',
+        [companyId]
+      ).then((r) => r.rows[0] ?? null),
+    ]);
+    const company = {
+      name: companyRecord?.name || 'our company',
+      business_description: companyInfo?.business_description ?? '',
+      additional_notes: companyInfo?.additional_notes ?? '',
+    };
+    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow);
+    res.json({ prompt });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/behavior/test', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const message = req.body?.message;
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'message (string) is required' } });
+    }
+    const [companyRecord, companyInfo, behavior, quoteFields, personaRow] = await Promise.all([
+      companyRepository.findById(companyId),
+      chatbotCompanyInfoRepository.get(companyId),
+      chatbotBehaviorRepository.get(companyId),
+      chatbotQuoteFieldsRepository.list(companyId),
+      pool.query(
+        'SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1',
+        [companyId]
+      ).then((r) => r.rows[0] ?? null),
+    ]);
+    const company = {
+      name: companyRecord?.name || 'our company',
+      business_description: companyInfo?.business_description ?? '',
+      additional_notes: companyInfo?.additional_notes ?? '',
+    };
+    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow);
+    const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+    const { content, provider } = await claudeWithRetry({
+      model,
+      max_tokens: 1024,
+      system: prompt + '\n\nRespond naturally as the sales rep. One short reply only. No JSON.',
+      messages: [{ role: 'user', content: message.trim() }],
+    });
+    const reply = validateAndCleanReply(content ?? '', behavior);
     res.json({
-      tone: behavior.tone ?? 'professional',
-      response_length: behavior.response_length ?? 'medium',
-      emojis_enabled: behavior.emojis_enabled ?? false,
-      persona_style: behavior.persona_style ?? 'busy',
-      forbidden_topics: behavior.forbidden_topics ?? [],
-      agent_name: behavior.agent_name ?? 'Jarvis',
-      agent_backstory: behavior.agent_backstory ?? null,
-      opener_style: behavior.opener_style ?? 'casual',
-      conversation_goal: behavior.conversation_goal ?? 'collect_quote',
-      handoff_trigger: behavior.handoff_trigger ?? 'after_quote',
-      follow_up_style: behavior.follow_up_style ?? 'soft',
-      human_fallback_message: behavior.human_fallback_message ?? 'Let me get someone from the team to follow up with you directly.',
-      bot_deny_response: behavior.bot_deny_response ?? 'Nope, real person here 😄 What can I help you with?',
+      reply,
+      provider: provider || 'claude',
+      prompt_preview: prompt.slice(0, 500) + (prompt.length > 500 ? '...' : ''),
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -758,7 +815,7 @@ router.post('/chat', async (req, res) => {
       let offerMsg = '';
       if (trigger.reason === 'auto_after_quote' && quoteComplete) {
         try {
-          const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
+          const systemPrompt = buildSystemPromptLegacy(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
           offerMsg = await callLLM(systemPrompt, message, behavior);
           offerMsg = enforceStyle(offerMsg, behavior, { allowedFieldNames });
           if (shouldGreet(assistantCountBefore)) {
@@ -851,7 +908,7 @@ router.post('/chat', async (req, res) => {
       console.warn('[chat] unexpected fallthrough: selectedReplyPath=%s, returning generic AI anyway', selectedReplyPath);
     }
     selectedReplyPath = selectedReplyPath === 'generic_ai_fallback' ? 'generic_ai_fallback' : 'generic_ai';
-    const systemPrompt = buildSystemPrompt(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
+    const systemPrompt = buildSystemPromptLegacy(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
     let assistantMessage = await callLLM(systemPrompt, message, behavior);
     assistantMessage = enforceStyle(assistantMessage, behavior, { allowedFieldNames });
     if (shouldGreet(assistantCountBefore)) {

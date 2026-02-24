@@ -14,6 +14,16 @@ const DEFAULTS = {
   follow_up_style: 'soft',
   human_fallback_message: 'Let me get someone from the team to follow up with you directly.',
   bot_deny_response: 'Nope, real person here 😄 What can I help you with?',
+  prohibited_topics: null,
+  competitor_mentions: 'deflect',
+  price_reveal: 'ask_first',
+  closing_style: 'soft',
+  language_code: 'en',
+  response_delay_seconds: 0,
+  max_messages_before_handoff: 20,
+  urgency_style: 'genuine',
+  social_proof_enabled: false,
+  social_proof_examples: null,
 };
 
 const COLUMNS = [
@@ -30,6 +40,16 @@ const COLUMNS = [
   'follow_up_style',
   'human_fallback_message',
   'bot_deny_response',
+  'prohibited_topics',
+  'competitor_mentions',
+  'price_reveal',
+  'closing_style',
+  'language_code',
+  'response_delay_seconds',
+  'max_messages_before_handoff',
+  'urgency_style',
+  'social_proof_enabled',
+  'social_proof_examples',
 ];
 
 function rowToObject(row) {
@@ -48,6 +68,16 @@ function rowToObject(row) {
     follow_up_style: row.follow_up_style ?? DEFAULTS.follow_up_style,
     human_fallback_message: row.human_fallback_message ?? DEFAULTS.human_fallback_message,
     bot_deny_response: row.bot_deny_response ?? DEFAULTS.bot_deny_response,
+    prohibited_topics: row.prohibited_topics ?? DEFAULTS.prohibited_topics,
+    competitor_mentions: row.competitor_mentions ?? DEFAULTS.competitor_mentions,
+    price_reveal: row.price_reveal ?? DEFAULTS.price_reveal,
+    closing_style: row.closing_style ?? DEFAULTS.closing_style,
+    language_code: row.language_code ?? DEFAULTS.language_code,
+    response_delay_seconds: row.response_delay_seconds ?? DEFAULTS.response_delay_seconds,
+    max_messages_before_handoff: row.max_messages_before_handoff ?? DEFAULTS.max_messages_before_handoff,
+    urgency_style: row.urgency_style ?? DEFAULTS.urgency_style,
+    social_proof_enabled: row.social_proof_enabled ?? DEFAULTS.social_proof_enabled,
+    social_proof_examples: row.social_proof_examples ?? DEFAULTS.social_proof_examples,
   };
 }
 
@@ -79,21 +109,37 @@ async function upsert(companyId, payload) {
   const follow_up_style = payload.follow_up_style !== undefined ? payload.follow_up_style : (current.follow_up_style ?? DEFAULTS.follow_up_style);
   const human_fallback_message = payload.human_fallback_message !== undefined ? payload.human_fallback_message : (current.human_fallback_message ?? DEFAULTS.human_fallback_message);
   const bot_deny_response = payload.bot_deny_response !== undefined ? payload.bot_deny_response : (current.bot_deny_response ?? DEFAULTS.bot_deny_response);
+  const prohibited_topics = payload.prohibited_topics !== undefined ? payload.prohibited_topics : (current.prohibited_topics ?? DEFAULTS.prohibited_topics);
+  const competitor_mentions = payload.competitor_mentions !== undefined ? payload.competitor_mentions : (current.competitor_mentions ?? DEFAULTS.competitor_mentions);
+  const price_reveal = payload.price_reveal !== undefined ? payload.price_reveal : (current.price_reveal ?? DEFAULTS.price_reveal);
+  const closing_style = payload.closing_style !== undefined ? payload.closing_style : (current.closing_style ?? DEFAULTS.closing_style);
+  const language_code = payload.language_code !== undefined ? payload.language_code : (current.language_code ?? DEFAULTS.language_code);
+  const response_delay_seconds = payload.response_delay_seconds !== undefined ? payload.response_delay_seconds : (current.response_delay_seconds ?? DEFAULTS.response_delay_seconds);
+  const max_messages_before_handoff = payload.max_messages_before_handoff !== undefined ? payload.max_messages_before_handoff : (current.max_messages_before_handoff ?? DEFAULTS.max_messages_before_handoff);
+  const urgency_style = payload.urgency_style !== undefined ? payload.urgency_style : (current.urgency_style ?? DEFAULTS.urgency_style);
+  const social_proof_enabled = payload.social_proof_enabled !== undefined ? payload.social_proof_enabled : (current.social_proof_enabled ?? DEFAULTS.social_proof_enabled);
+  const social_proof_examples = payload.social_proof_examples !== undefined ? payload.social_proof_examples : (current.social_proof_examples ?? DEFAULTS.social_proof_examples);
 
   await pool.query(
     `INSERT INTO chatbot_behavior (
       company_id, tone, response_length, emojis_enabled, persona_style, forbidden_topics,
       agent_name, agent_backstory, opener_style, conversation_goal, handoff_trigger,
-      follow_up_style, human_fallback_message, bot_deny_response, updated_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+      follow_up_style, human_fallback_message, bot_deny_response,
+      prohibited_topics, competitor_mentions, price_reveal, closing_style, language_code,
+      response_delay_seconds, max_messages_before_handoff, urgency_style, social_proof_enabled, social_proof_examples, updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW())
     ON CONFLICT (company_id) DO UPDATE SET
       tone = $2, response_length = $3, emojis_enabled = $4, persona_style = $5, forbidden_topics = $6,
       agent_name = $7, agent_backstory = $8, opener_style = $9, conversation_goal = $10, handoff_trigger = $11,
-      follow_up_style = $12, human_fallback_message = $13, bot_deny_response = $14, updated_at = NOW()`,
+      follow_up_style = $12, human_fallback_message = $13, bot_deny_response = $14,
+      prohibited_topics = $15, competitor_mentions = $16, price_reveal = $17, closing_style = $18, language_code = $19,
+      response_delay_seconds = $20, max_messages_before_handoff = $21, urgency_style = $22, social_proof_enabled = $23, social_proof_examples = $24, updated_at = NOW()`,
     [
       companyId, tone, response_length, emojis_enabled, persona_style, forbidden_topics,
       agent_name, agent_backstory, opener_style, conversation_goal, handoff_trigger,
       follow_up_style, human_fallback_message, bot_deny_response,
+      prohibited_topics, competitor_mentions, price_reveal, closing_style, language_code,
+      response_delay_seconds, max_messages_before_handoff, urgency_style, social_proof_enabled, social_proof_examples,
     ]
   );
   return get(companyId);

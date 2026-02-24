@@ -19,19 +19,29 @@ const companyInfoBodySchema = z
   });
 
 const behaviorBodySchema = z.object({
-  tone: z.enum(['professional', 'friendly']).optional(),
+  tone: z.enum(['professional', 'friendly', 'casual', 'direct', 'empathetic', 'humorous', 'busy']).optional(),
   response_length: z.enum(['short', 'medium', 'long']).optional(),
   emojis_enabled: z.boolean().optional(),
   persona_style: z.enum(['busy', 'explanational']).optional(),
   forbidden_topics: z.array(z.string().trim().max(64)).max(50).optional(),
   agent_name: z.string().trim().max(100).optional(),
   agent_backstory: z.string().trim().max(2000).nullable().optional(),
-  opener_style: z.enum(['casual', 'professional', 'direct']).optional(),
-  conversation_goal: z.enum(['book_call', 'collect_quote', 'qualify_lead', 'capture_contact']).optional(),
+  opener_style: z.enum(['casual', 'professional', 'direct', 'formal', 'question', 'statement', 'greeting']).optional(),
+  conversation_goal: z.string().trim().max(500).optional(),
   handoff_trigger: z.enum(['after_quote', 'after_booking', 'never', 'on_request']).optional(),
-  follow_up_style: z.enum(['soft', 'direct', 'value_add']).optional(),
+  follow_up_style: z.enum(['soft', 'direct', 'value_add', 'value_first', 'gentle', 'persistent']).optional(),
   human_fallback_message: z.string().trim().max(500).optional(),
   bot_deny_response: z.string().trim().max(500).optional(),
+  prohibited_topics: z.string().trim().max(2000).nullable().optional(),
+  competitor_mentions: z.enum(['deflect', 'acknowledge', 'ignore']).optional(),
+  price_reveal: z.enum(['reveal', 'ask_first', 'book_first']).optional(),
+  closing_style: z.enum(['soft', 'direct', 'assumptive']).optional(),
+  language_code: z.string().trim().max(10).optional(),
+  response_delay_seconds: z.number().int().min(0).max(60).optional(),
+  max_messages_before_handoff: z.number().int().min(1).max(100).optional(),
+  urgency_style: z.string().trim().max(20).optional(),
+  social_proof_enabled: z.boolean().optional(),
+  social_proof_examples: z.string().trim().max(3000).nullable().optional(),
 }).transform((d) => {
   const topics = d.forbidden_topics
     ? d.forbidden_topics.map((t) => t.trim()).filter(Boolean).slice(0, 50)
