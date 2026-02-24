@@ -20,6 +20,7 @@ const chatbotSchedulingRouter = require('./api/routes/chatbotScheduling');
 const schedulingRouter = require('./api/routes/scheduling');
 const conversationsRouter = require('./api/routes/conversations');
 const hotLeadsRouter = require('./api/routes/hotLeads');
+const warmingRouter = require('./api/routes/warming');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const isAdmin = require('./middleware/isAdmin');
@@ -131,6 +132,7 @@ app.use('/api/scheduling', authMiddleware, tenantMiddleware, apiLimiter, schedul
 app.use('/api/chatbot/scheduling', authMiddleware, tenantMiddleware, apiLimiter, chatbotSchedulingRouter);
 app.use('/api/conversations', authMiddleware, tenantMiddleware, apiLimiter, conversationsRouter);
 app.use('/api/hot-leads', authMiddleware, tenantMiddleware, apiLimiter, hotLeadsRouter);
+app.use('/api/warming', authMiddleware, tenantMiddleware, apiLimiter, warmingRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
@@ -151,12 +153,21 @@ app.use((err, req, res, next) => {
 
 const reminderWorker = require('../services/appointmentReminderWorker');
 const followUpWorker = require('../services/followUpWorker');
+const warmingWorker = require('./workers/warmingWorker');
+const warmingService = require('./services/warmingService');
+
+const WARMING_CRON_MS = 60 * 60 * 1000;
+let warmingCronTimer = null;
 
 const server = app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
   reminderWorker.start();
   if (process.env.REDIS_URL) {
     followUpWorker.start();
+    warmingWorker.start();
+    warmingCronTimer = setInterval(() => {
+      warmingService.runHourlyNoReply72hEnrollment().catch((err) => console.error('[warming] cron error:', err.message));
+    }, WARMING_CRON_MS);
   } else {
     console.warn('[index] REDIS_URL not set, follow-up worker not started');
   }
@@ -164,8 +175,10 @@ const server = app.listen(PORT, () => {
 
 async function gracefulShutdown() {
   console.log('[index] shutting down...');
+  if (warmingCronTimer) clearInterval(warmingCronTimer);
   reminderWorker.stop();
   await followUpWorker.stop();
+  await warmingWorker.stop();
   const queueService = require('../services/queueService');
   await queueService.close();
   server.close(() => process.exit(0));

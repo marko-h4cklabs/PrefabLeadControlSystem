@@ -315,6 +315,19 @@ router.get('/:leadId/suggestions/latest', async (req, res) => {
   }
 });
 
+router.get('/:leadId/no-show-risk', async (req, res) => {
+  try {
+    const leadId = req.params.leadId;
+    const lead = await leadRepository.findById(req.tenantId, leadId);
+    if (!lead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    const warmingService = require('../../services/warmingService');
+    const { score, risk_level } = await warmingService.calculateNoShowRisk(leadId);
+    res.json({ no_show_risk_score: score, risk_level });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');

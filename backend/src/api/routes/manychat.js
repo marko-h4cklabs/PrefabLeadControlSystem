@@ -133,6 +133,11 @@ async function processManyChatPayload(payload) {
   const content = messageText.trim();
   await conversationRepository.appendMessage(lead.id, 'user', content);
 
+  await pool.query('UPDATE leads SET last_engagement_at = NOW() WHERE id = $1', [lead.id]);
+  const warmingService = require('../../services/warmingService');
+  warmingService.cancelEnrollment(lead.id, 'no_show_detected').catch(() => {});
+  warmingService.cancelEnrollment(lead.id, 'no_reply_72h').catch(() => {});
+
   logLeadActivity({
     companyId,
     leadId: lead.id,

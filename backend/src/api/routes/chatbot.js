@@ -648,6 +648,8 @@ router.post('/chat', async (req, res) => {
             selectedReplyPath = 'booking_confirmed';
             const confirmMsg = `Your ${typeLabel} has been confirmed for ${slot.label}. We look forward to speaking with you!`;
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirmMsg);
+            const warmingService = require('../../services/warmingService');
+            warmingService.enrollLead(reqLeadId, companyId, 'call_booked').catch((err) => console.error('[chat-booking] warming enroll error:', err.message));
             console.info('[chat-booking] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
             return respond(confirmMsg, { ui_action: 'booking_success', booking: buildBookingPayload('confirmed', { appointment, appointmentId: appointment.id }) });
           }

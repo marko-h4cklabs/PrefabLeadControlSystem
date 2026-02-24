@@ -80,6 +80,11 @@ async function createAppointmentHandler(req, res, overrideLeadId) {
       url: `/inbox/${lead_id}`,
     }).catch(() => {});
 
+    if ((status || appointment.status) === 'scheduled') {
+      const warmingService = require('../../services/warmingService');
+      warmingService.enrollLead(lead_id, companyId, 'call_booked').catch((err) => console.error('[appointments] warming enroll error:', err.message));
+    }
+
     res.status(201).json(appointment);
   } catch (err) {
     logDbError('create', err);
@@ -204,6 +209,11 @@ router.patch('/:id', async (req, res) => {
         body: `${updated.title} with ${updated.lead?.name || 'Lead'} – ${fmtTime(updated.startAt)}`,
         url: `/inbox/${existing.leadId}`,
       }).catch(() => {});
+    }
+
+    if (parsed.data.status === 'no_show') {
+      const warmingService = require('../../services/warmingService');
+      warmingService.enrollLead(existing.leadId, companyId, 'no_show_detected').catch((err) => console.error('[appointments] warming no-show enroll error:', err.message));
     }
 
     res.json(updated);

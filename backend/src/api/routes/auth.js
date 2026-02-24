@@ -81,6 +81,9 @@ router.post('/signup', async (req, res) => {
       client.release();
     }
 
+    const warmingService = require('../../services/warmingService');
+    warmingService.ensureDefaultSequences(company.id).catch(() => {});
+
     const token = jwt.sign(
       { id: user.id, companyId: company.id, role: user.role },
       process.env.JWT_SECRET,
