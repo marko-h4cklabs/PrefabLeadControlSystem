@@ -107,6 +107,7 @@ router.get('/identity', async (req, res) => {
       companyRepository.findById(companyId),
       chatbotCompanyInfoRepository.get(companyId),
     ]);
+    console.log('[chatbot/GET identity]', { behavior: behavior ? { agent_name: behavior.agent_name, agent_backstory: behavior.agent_backstory } : null });
     res.json({
       agent_name: behavior?.agent_name ?? '',
       agent_backstory: behavior?.agent_backstory ?? '',
@@ -125,9 +126,12 @@ router.put('/identity', async (req, res) => {
     const { agent_name, agent_backstory, business_name, business_description, additional_context } = req.body ?? {};
     await chatbotBehaviorRepository.upsert(companyId, { agent_name: agent_name ?? undefined, agent_backstory: agent_backstory ?? undefined });
     if (business_name !== undefined || business_description !== undefined || additional_context !== undefined) {
-      if (business_name !== undefined) {
-        await pool.query('UPDATE companies SET name = COALESCE($1, name) WHERE id = $2', [business_name || null, companyId]);
-      }
+      await pool.query(
+        `UPDATE companies SET
+          name = CASE WHEN $1::text IS NOT NULL THEN $1 ELSE name END
+        WHERE id = $2`,
+        [business_name !== undefined ? business_name : null, companyId]
+      );
       await chatbotCompanyInfoRepository.upsert(companyId, {
         business_description: business_description !== undefined ? business_description : undefined,
         additional_notes: additional_context !== undefined ? additional_context : undefined,
@@ -142,6 +146,7 @@ router.put('/identity', async (req, res) => {
 router.get('/guardrails', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    console.log('[chatbot/GET guardrails]', behavior ? { bot_deny_response: behavior.bot_deny_response, prohibited_topics: behavior.prohibited_topics, handoff_trigger: behavior.handoff_trigger, human_fallback_message: behavior.human_fallback_message, max_messages_before_handoff: behavior.max_messages_before_handoff } : null);
     res.json({
       bot_deny_response: behavior?.bot_deny_response ?? '',
       prohibited_topics: behavior?.prohibited_topics ?? '',
@@ -173,6 +178,7 @@ router.put('/guardrails', async (req, res) => {
 router.get('/strategy', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    console.log('[chatbot/GET strategy]', behavior ? { conversation_goal: behavior.conversation_goal, follow_up_style: behavior.follow_up_style, closing_style: behavior.closing_style, competitor_mentions: behavior.competitor_mentions, price_reveal: behavior.price_reveal } : null);
     res.json({
       primary_goal: behavior?.conversation_goal ?? '',
       follow_up_style: behavior?.follow_up_style ?? 'gentle',
@@ -204,6 +210,7 @@ router.put('/strategy', async (req, res) => {
 router.get('/social-proof', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    console.log('[chatbot/GET social-proof]', behavior ? { social_proof_enabled: behavior.social_proof_enabled, social_proof_examples: behavior.social_proof_examples } : null);
     res.json({
       enabled: behavior?.social_proof_enabled ?? false,
       examples: behavior?.social_proof_examples ?? '',
@@ -315,6 +322,7 @@ router.put('/company-info', async (req, res) => {
 router.get('/behavior', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    console.log('[chatbot/GET behavior]', behavior);
     res.json(behavior);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -414,6 +422,7 @@ router.get('/booking-settings', async (req, res) => {
       chatbotBehaviorRepository.get(companyId),
       pool.query('SELECT calendly_url FROM companies WHERE id = $1', [companyId]).then((r) => r.rows[0]),
     ]);
+    console.log('[chatbot/GET booking-settings]', behavior ? { booking_trigger_enabled: behavior.booking_trigger_enabled, booking_trigger_score: behavior.booking_trigger_score, booking_platform: behavior.booking_platform, calendly_url: behavior.calendly_url, booking_offer_message: behavior.booking_offer_message, booking_required_fields: behavior.booking_required_fields } : null);
     res.json({
       booking_trigger_enabled: behavior?.booking_trigger_enabled ?? false,
       booking_trigger_score: behavior?.booking_trigger_score ?? 60,
@@ -438,14 +447,21 @@ router.put('/booking-settings', async (req, res) => {
       booking_offer_message,
       booking_required_fields,
     } = req.body ?? {};
+    const bookingRequiredFields = Array.isArray(req.body?.booking_required_fields)
+      ? req.body.booking_required_fields
+      : ['full_name', 'email_address'];
+
     await chatbotBehaviorRepository.upsert(companyId, {
       booking_trigger_enabled,
       booking_trigger_score,
       booking_platform,
       calendly_url,
       booking_offer_message,
-      booking_required_fields: Array.isArray(booking_required_fields) ? booking_required_fields : undefined,
     });
+    await pool.query(
+      'UPDATE chatbot_behavior SET booking_required_fields = $1, updated_at = NOW() WHERE company_id = $2',
+      [bookingRequiredFields, companyId]
+    );
     if (calendly_url !== undefined) {
       await pool.query('UPDATE companies SET calendly_url = $1 WHERE id = $2', [calendly_url ?? null, companyId]);
     }
