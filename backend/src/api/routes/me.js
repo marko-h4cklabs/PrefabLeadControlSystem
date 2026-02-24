@@ -12,7 +12,9 @@ router.get('/', (req, res) => {
   res.json({
     id: req.user.id,
     email: req.user.email,
+    name: req.user.name ?? null,
     company_id: req.user.companyId,
+    is_admin: Boolean(req.user.is_admin),
   });
 });
 

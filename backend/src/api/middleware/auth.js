@@ -31,6 +31,7 @@ async function authMiddleware(req, res, next) {
       companyId: user.company_id,
       role: user.role,
       email: user.email,
+      is_admin: Boolean(user.is_admin),
     };
     next();
   } catch (err) {

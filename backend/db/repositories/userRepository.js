@@ -8,6 +8,7 @@ function toPlainUser(row) {
     email: row.email,
     password_hash: row.password_hash,
     role: row.role,
+    is_admin: Boolean(row.is_admin),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -77,6 +78,14 @@ async function update(companyId, userId, data) {
   return toPlainUser(result.rows[0]);
 }
 
+async function setIsAdmin(userId, isAdmin) {
+  const result = await pool.query(
+    'UPDATE users SET is_admin = $2, updated_at = NOW() WHERE id = $1 RETURNING *',
+    [userId, !!isAdmin]
+  );
+  return result.rowCount > 0 ? toPlainUser(result.rows[0]) : null;
+}
+
 module.exports = {
   findById,
   findByIdOnly,
@@ -85,4 +94,5 @@ module.exports = {
   findAll,
   create,
   update,
+  setIsAdmin,
 };

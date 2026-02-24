@@ -9,7 +9,6 @@ const {
   userRepository,
 } = require('../../../db/repositories');
 const queueService = require('../../../services/queueService');
-const { requireRole } = require('../middleware/auth');
 const { errorJson } = require('../middleware/errors');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -18,8 +17,229 @@ function escapeIlikePattern(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
-// GET /api/admin/workspaces
-router.get('/workspaces', requireRole('owner', 'admin'), async (req, res) => {
+// POST /api/admin/make-admin — only callable by is_admin users (enforced by isAdminMiddleware)
+router.post('/make-admin', async (req, res) => {
+  try {
+    const { user_id: userId } = req.body ?? {};
+    if (!userId || !UUID_REGEX.test(userId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'user_id (UUID) required');
+    }
+    const updated = await userRepository.setIsAdmin(userId, true);
+    if (!updated) {
+      return errorJson(res, 404, 'NOT_FOUND', 'User not found');
+    }
+    res.json({ success: true, user_id: userId });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/stats — aggregate counts
+router.get('/stats', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        (SELECT COUNT(*)::int FROM companies) AS total_companies,
+        (SELECT COUNT(*)::int FROM leads) AS total_leads,
+        (SELECT COUNT(*)::int FROM chat_conversations) AS total_conversations,
+        (SELECT COUNT(*)::int FROM appointments) AS total_appointments
+    `);
+    const row = result.rows[0];
+    res.json({
+      total_companies: parseInt(row?.total_companies, 10) || 0,
+      total_leads: parseInt(row?.total_leads, 10) || 0,
+      total_conversations: parseInt(row?.total_conversations, 10) || 0,
+      total_appointments: parseInt(row?.total_appointments, 10) || 0,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/companies — paginated list, ?search= & ?page= & ?limit=
+router.get('/companies', async (req, res) => {
+  try {
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const offset = (page - 1) * limit;
+
+    let sql = `
+      SELECT c.id, c.name, c.created_at,
+        COUNT(DISTINCT l.id)::int AS lead_count,
+        COUNT(DISTINCT u.id)::int AS user_count
+      FROM companies c
+      LEFT JOIN leads l ON l.company_id = c.id
+      LEFT JOIN users u ON u.company_id = c.id
+    `;
+    const params = [];
+    let paramIndex = 1;
+    if (search) {
+      params.push('%' + escapeIlikePattern(search) + '%');
+      sql += ` WHERE c.name ILIKE $${paramIndex}`;
+      paramIndex++;
+    }
+    sql += ' GROUP BY c.id, c.name, c.created_at ORDER BY c.created_at DESC';
+    params.push(limit, offset);
+    sql += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+
+    const result = await pool.query(sql, params);
+    const data = (result.rows || []).map((r) => ({
+      id: r.id,
+      name: r.name,
+      created_at: r.created_at,
+      lead_count: parseInt(r.lead_count, 10) || 0,
+      user_count: parseInt(r.user_count, 10) || 0,
+    }));
+    res.json({ data });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/companies/:id — full company detail
+router.get('/companies/:id', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID (UUID) required');
+    }
+    const company = await companyRepository.findById(companyId);
+    if (!company) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    }
+    const [
+      leadsByStatus,
+      leadsByChannel,
+      totalLeads,
+      totalConversations,
+      messagesStats,
+      totalAppointments,
+      upcomingAppointments,
+      usersList,
+    ] = await Promise.all([
+      pool.query(
+        `SELECT status, COUNT(*)::int AS cnt FROM leads WHERE company_id = $1 GROUP BY status`,
+        [companyId]
+      ),
+      pool.query(
+        `SELECT channel, COUNT(*)::int AS cnt FROM leads WHERE company_id = $1 GROUP BY channel`,
+        [companyId]
+      ),
+      pool.query('SELECT COUNT(*)::int AS cnt FROM leads WHERE company_id = $1', [companyId]),
+      pool.query(
+        'SELECT COUNT(*)::int AS cnt FROM chat_conversations WHERE company_id = $1',
+        [companyId]
+      ),
+      pool.query(
+        `SELECT
+          SUM(CASE WHEN m.role = 'assistant' THEN 1 ELSE 0 END)::int AS sent,
+          SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END)::int AS received
+        FROM chat_messages m
+        JOIN chat_conversations c ON m.conversation_id = c.id
+        WHERE c.company_id = $1`,
+        [companyId]
+      ),
+      pool.query('SELECT COUNT(*)::int AS cnt FROM appointments WHERE company_id = $1', [companyId]),
+      pool.query(
+        `SELECT COUNT(*)::int AS cnt FROM appointments
+         WHERE company_id = $1 AND status = 'scheduled' AND start_at > NOW()`,
+        [companyId]
+      ),
+      userRepository.findAll(companyId),
+    ]);
+    const leads_by_status = Object.fromEntries(
+      (leadsByStatus.rows || []).map((r) => [r.status, parseInt(r.cnt, 10) || 0])
+    );
+    const leads_by_channel = Object.fromEntries(
+      (leadsByChannel.rows || []).map((r) => [r.channel, parseInt(r.cnt, 10) || 0])
+    );
+    const msgRow = messagesStats.rows[0];
+    const messages_sent = parseInt(msgRow?.sent, 10) || 0;
+    const messages_received = parseInt(msgRow?.received, 10) || 0;
+    const users = (usersList || []).map((u) => ({
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      created_at: u.created_at,
+    }));
+    res.json({
+      data: {
+        company,
+        stats: {
+          total_leads: parseInt(totalLeads.rows[0]?.cnt, 10) || 0,
+          leads_by_status,
+          leads_by_channel,
+          total_conversations: parseInt(totalConversations.rows[0]?.cnt, 10) || 0,
+          messages_sent,
+          messages_received,
+          total_appointments: parseInt(totalAppointments.rows[0]?.cnt, 10) || 0,
+          upcoming_appointments: parseInt(upcomingAppointments.rows[0]?.cnt, 10) || 0,
+        },
+        users,
+      },
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/impersonate — body { company_id }, returns { token, admin_token }
+router.post('/impersonate', async (req, res) => {
+  try {
+    const { company_id: companyId } = req.body ?? {};
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'company_id (UUID) required');
+    }
+    const company = await companyRepository.findById(companyId);
+    if (!company) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    }
+    const ownerResult = await pool.query(
+      "SELECT id, email, role FROM users WHERE company_id = $1 AND role = 'owner' LIMIT 1",
+      [companyId]
+    );
+    let targetUser = ownerResult.rows[0];
+    if (!targetUser) {
+      const adminResult = await pool.query(
+        "SELECT id, email, role FROM users WHERE company_id = $1 AND role = 'admin' LIMIT 1",
+        [companyId]
+      );
+      targetUser = adminResult.rows[0];
+      if (!targetUser) {
+        return errorJson(res, 404, 'NOT_FOUND', 'No owner or admin user found for this company');
+      }
+    }
+    const token = jwt.sign(
+      { id: targetUser.id, companyId, role: targetUser.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    const adminToken =
+      req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7).trim()
+        : null;
+    res.json({ token, admin_token: adminToken });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/impersonate/end — body { admin_token }, restores original session
+router.post('/impersonate/end', async (req, res) => {
+  try {
+    const { admin_token: adminToken } = req.body ?? {};
+    if (!adminToken || typeof adminToken !== 'string') {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'admin_token required');
+    }
+    res.json({ token: adminToken.trim() });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/workspaces (legacy; same as /companies)
+router.get('/workspaces', async (req, res) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
@@ -62,7 +282,7 @@ router.get('/workspaces', requireRole('owner', 'admin'), async (req, res) => {
 });
 
 // GET /api/admin/workspaces/:companyId/leads (must be before :companyId to match first)
-router.get('/workspaces/:companyId/leads', requireRole('owner', 'admin'), async (req, res) => {
+router.get('/workspaces/:companyId/leads', async (req, res) => {
   try {
     const companyId = req.params.companyId;
     if (!companyId || !UUID_REGEX.test(companyId)) {
@@ -107,13 +327,9 @@ router.get('/workspaces/:companyId/leads', requireRole('owner', 'admin'), async 
   }
 });
 
-// POST /api/admin/workspaces/:companyId/impersonate (owner only)
-router.post('/workspaces/:companyId/impersonate', requireRole('owner', 'admin'), async (req, res) => {
+// POST /api/admin/workspaces/:companyId/impersonate (legacy; prefer POST /impersonate)
+router.post('/workspaces/:companyId/impersonate', async (req, res) => {
   try {
-    if (req.user.role !== 'owner') {
-      return errorJson(res, 403, 'FORBIDDEN', 'Impersonation requires owner role');
-    }
-
     const companyId = req.params.companyId;
     if (!companyId || !UUID_REGEX.test(companyId)) {
       return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID (UUID) required');
@@ -174,7 +390,7 @@ router.post('/workspaces/:companyId/impersonate', requireRole('owner', 'admin'),
 });
 
 // GET /api/admin/workspaces/:companyId
-router.get('/workspaces/:companyId', requireRole('owner', 'admin'), async (req, res) => {
+router.get('/workspaces/:companyId', async (req, res) => {
   try {
     const companyId = req.params.companyId;
     if (!companyId || !UUID_REGEX.test(companyId)) {
@@ -265,39 +481,8 @@ router.get('/workspaces/:companyId', requireRole('owner', 'admin'), async (req, 
   }
 });
 
-// GET /api/admin/stats
-router.get('/stats', requireRole('owner', 'admin'), async (req, res) => {
-  try {
-    const result = await pool.query(`
-      SELECT
-        (SELECT COUNT(*)::int FROM companies) AS total_workspaces,
-        (SELECT COUNT(*)::int FROM leads) AS total_leads,
-        (SELECT COUNT(*)::int FROM chat_conversations) AS total_conversations,
-        (SELECT COUNT(*)::int FROM chat_messages) AS total_messages,
-        (SELECT COUNT(*)::int FROM appointments) AS total_appointments,
-        (SELECT COUNT(*)::int FROM companies WHERE created_at > NOW() - INTERVAL '30 days') AS new_workspaces_last_30_days,
-        (SELECT COUNT(*)::int FROM leads WHERE created_at > NOW() - INTERVAL '30 days') AS new_leads_last_30_days
-    `);
-
-    const row = result.rows[0];
-    const data = {
-      total_workspaces: parseInt(row?.total_workspaces, 10) || 0,
-      total_leads: parseInt(row?.total_leads, 10) || 0,
-      total_conversations: parseInt(row?.total_conversations, 10) || 0,
-      total_messages: parseInt(row?.total_messages, 10) || 0,
-      total_appointments: parseInt(row?.total_appointments, 10) || 0,
-      new_workspaces_last_30_days: parseInt(row?.new_workspaces_last_30_days, 10) || 0,
-      new_leads_last_30_days: parseInt(row?.new_leads_last_30_days, 10) || 0,
-    };
-
-    res.json({ data });
-  } catch (err) {
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
-  }
-});
-
 // GET /api/admin/queue/stats
-router.get('/queue/stats', requireRole('owner', 'admin'), async (req, res) => {
+router.get('/queue/stats', async (req, res) => {
   try {
     const data = await queueService.getQueueStats();
     res.json({ data });
@@ -307,7 +492,7 @@ router.get('/queue/stats', requireRole('owner', 'admin'), async (req, res) => {
 });
 
 // POST /api/admin/queue/follow-up
-router.post('/queue/follow-up', requireRole('owner', 'admin'), async (req, res) => {
+router.post('/queue/follow-up', async (req, res) => {
   try {
     const { leadId, companyId, type, delayMinutes, message } = req.body || {};
     if (!leadId || !companyId || !type) {
@@ -335,7 +520,7 @@ router.post('/queue/follow-up', requireRole('owner', 'admin'), async (req, res) 
 });
 
 // DELETE /api/admin/queue/follow-up/:leadId/:type
-router.delete('/queue/follow-up/:leadId/:type', requireRole('owner', 'admin'), async (req, res) => {
+router.delete('/queue/follow-up/:leadId/:type', async (req, res) => {
   try {
     const { leadId, type } = req.params;
     if (!leadId || !type) {
@@ -348,10 +533,7 @@ router.delete('/queue/follow-up/:leadId/:type', requireRole('owner', 'admin'), a
   }
 });
 
-router.post(
-  '/snapshot',
-  requireRole('owner', 'admin'),
-  async (req, res) => {
+router.post('/snapshot', async (req, res) => {
     try {
       const companyId = req.tenantId;
       const snapshotDate = new Date().toISOString().slice(0, 10);
