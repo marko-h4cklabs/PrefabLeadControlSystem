@@ -30,7 +30,10 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     }
 
     const companyResult = await pool.query(
-      'SELECT id, manychat_api_key, operating_mode FROM companies WHERE webhook_token = $1',
+      `SELECT id, manychat_api_key, operating_mode,
+              voice_enabled, voice_mode, voice_selected_id, voice_model,
+              voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost
+       FROM companies WHERE webhook_token = $1`,
       [webhookToken]
     );
     const companyRow = companyResult.rows[0];

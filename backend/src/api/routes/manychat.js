@@ -18,7 +18,7 @@ const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
 const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
-const { sendInstagramMessage, sendManyChatImage } = require('../../services/manychatService');
+const { sendInstagramMessage, sendManyChatImage, sendManyChatFile } = require('../../services/manychatService');
 const { createNotification } = require('../../services/notificationService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
@@ -182,7 +182,10 @@ async function processManyChatPayload(payload, overrideCompany) {
       return;
     }
     const companyResult = await pool.query(
-      'SELECT id, manychat_api_key, operating_mode FROM companies WHERE manychat_page_id = $1',
+      `SELECT id, manychat_api_key, operating_mode,
+              voice_enabled, voice_mode, voice_selected_id, voice_model,
+              voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost
+       FROM companies WHERE manychat_page_id = $1`,
       [pageId]
     );
     companyRow = companyResult.rows[0];
@@ -237,7 +240,8 @@ async function processManyChatPayload(payload, overrideCompany) {
   }
 
   let content = '';
-  if (extracted.type === 'audio' || extracted.type === 'voice') {
+  const isAudioMessage = extracted.type === 'audio' || extracted.type === 'voice';
+  if (isAudioMessage) {
     let transcription = null;
     if (process.env.OPENAI_API_KEY && extracted.audioUrl) {
       try {
@@ -370,6 +374,44 @@ async function processManyChatPayload(payload, overrideCompany) {
               for (const img of images) {
                 await sendManyChatImage(lead, img.url, img.caption, companyRow);
               }
+            }
+          }
+
+          // Voice reply: generate TTS audio and send as file via ManyChat
+          const shouldSendVoice =
+            companyRow.voice_enabled &&
+            companyRow.voice_selected_id &&
+            (companyRow.voice_mode === 'always' || (companyRow.voice_mode === 'match' && isAudioMessage));
+
+          if (shouldSendVoice) {
+            try {
+              const { textToSpeech } = require('../../utils/elevenLabsClient');
+              const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
+
+              const ttsResult = await textToSpeech(companyRow.voice_selected_id, result.assistant_message, {
+                model: companyRow.voice_model || 'eleven_turbo_v2_5',
+                stability: parseFloat(companyRow.voice_stability) || 0.5,
+                similarity_boost: parseFloat(companyRow.voice_similarity_boost) || 0.75,
+                style: parseFloat(companyRow.voice_style) || 0,
+                speaker_boost: companyRow.voice_speaker_boost !== false,
+              });
+
+              const audioBuffer = Buffer.from(ttsResult.audio_base64, 'base64');
+              const attachment = await chatAttachmentRepository.create(companyId, lead.id, {
+                mimeType: 'audio/mpeg',
+                fileName: 'voice-reply.mp3',
+                byteSize: audioBuffer.length,
+                buffer: audioBuffer,
+                conversationId: conversation?.id ?? null,
+              });
+
+              const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
+              const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}`;
+
+              await sendManyChatFile(subscriberId, audioPublicUrl, manychatApiKey);
+              console.log('[manychat/webhook] Voice reply sent:', audioPublicUrl);
+            } catch (voiceErr) {
+              console.warn('[manychat/webhook] Voice reply failed, text was already sent:', voiceErr.message);
             }
           }
         } else if (!manychatApiKey) {

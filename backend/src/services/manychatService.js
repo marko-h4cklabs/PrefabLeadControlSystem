@@ -81,4 +81,32 @@ async function sendManyChatImage(lead, imageUrl, caption, company) {
   }
 }
 
-module.exports = { sendInstagramMessage, getPageInfo, sendManyChatImage };
+async function sendManyChatFile(subscriberId, fileUrl, apiKey) {
+  const response = await axios.post(
+    'https://api.manychat.com/fb/sending/sendContent',
+    {
+      subscriber_id: subscriberId,
+      data: {
+        version: 'v2',
+        content: {
+          type: 'instagram',
+          messages: [
+            {
+              type: 'file',
+              url: fileUrl,
+            },
+          ],
+        },
+      },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  return response.data;
+}
+
+module.exports = { sendInstagramMessage, getPageInfo, sendManyChatImage, sendManyChatFile };
