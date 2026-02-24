@@ -1,10 +1,32 @@
 const express = require('express');
 const router = express.Router();
-const { analyticsRepository } = require('../../../db/repositories');
+const { analyticsRepository, dealRepository } = require('../../../db/repositories');
 const { analyticsQuerySchema } = require('../validators/analyticsSchemas');
 const { errorJson } = require('../middleware/errors');
 
 const ANALYTICS_DEBUG = process.env.ANALYTICS_DEBUG === 'true';
+
+router.get('/overview', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { pool } = require('../../../db');
+    const [summary, dealsStats, warmingCount] = await Promise.all([
+      analyticsRepository.getFullSummary(companyId, { days: 30 }).catch(() => null),
+      dealRepository.getStats(companyId).catch(() => null),
+      pool.query(
+        'SELECT COUNT(*)::int AS n FROM warming_enrollments WHERE company_id = $1 AND status = $2',
+        [companyId, 'active']
+      ).then((r) => parseInt(r.rows[0]?.n, 10) || 0).catch(() => 0),
+    ]);
+    res.json({
+      summary: summary ?? null,
+      deals_stats: dealsStats ?? null,
+      warming_active_enrollments: warmingCount,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
 
 router.get('/dashboard', async (req, res) => {
   try {
@@ -28,6 +50,7 @@ router.get('/dashboard', async (req, res) => {
       topSignals,
       availableChannels,
       rawCounts,
+      dealsStats,
     ] = await Promise.all([
       analyticsRepository.getFullSummary(companyId, opts),
       analyticsRepository.getLeadsOverTime(companyId, opts),
@@ -37,6 +60,7 @@ router.get('/dashboard', async (req, res) => {
       analyticsRepository.getTopSignals(companyId, opts),
       analyticsRepository.getAvailableChannels(companyId, opts),
       ANALYTICS_DEBUG ? analyticsRepository.getRawCounts(companyId, opts) : Promise.resolve(null),
+      dealRepository.getStats(companyId, { from: startDate ?? null, to: endDate ?? null }).catch(() => null),
     ]);
 
     const dataAsOf = new Date().toISOString();
@@ -60,6 +84,7 @@ router.get('/dashboard', async (req, res) => {
       data_as_of: dataAsOf,
       available_channels: availableChannels ?? [],
       summary,
+      deals_stats: dealsStats ?? null,
       leadsOverTime,
       channelBreakdown,
       statusBreakdown,

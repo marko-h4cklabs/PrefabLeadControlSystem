@@ -21,6 +21,7 @@ const schedulingRouter = require('./api/routes/scheduling');
 const conversationsRouter = require('./api/routes/conversations');
 const hotLeadsRouter = require('./api/routes/hotLeads');
 const warmingRouter = require('./api/routes/warming');
+const dealsRouter = require('./api/routes/deals');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const isAdmin = require('./middleware/isAdmin');
@@ -133,6 +134,7 @@ app.use('/api/chatbot/scheduling', authMiddleware, tenantMiddleware, apiLimiter,
 app.use('/api/conversations', authMiddleware, tenantMiddleware, apiLimiter, conversationsRouter);
 app.use('/api/hot-leads', authMiddleware, tenantMiddleware, apiLimiter, hotLeadsRouter);
 app.use('/api/warming', authMiddleware, tenantMiddleware, apiLimiter, warmingRouter);
+app.use('/api/deals', authMiddleware, tenantMiddleware, apiLimiter, dealsRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
@@ -155,9 +157,13 @@ const reminderWorker = require('../services/appointmentReminderWorker');
 const followUpWorker = require('../services/followUpWorker');
 const warmingWorker = require('./workers/warmingWorker');
 const warmingService = require('./services/warmingService');
+const revenueSnapshotService = require('./services/revenueSnapshotService');
 
 const WARMING_CRON_MS = 60 * 60 * 1000;
+const REVENUE_CRON_MS = 60 * 60 * 1000; // check every hour, run at midnight
 let warmingCronTimer = null;
+let revenueCronTimer = null;
+let lastRevenueSnapshotDate = null;
 
 const server = app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
@@ -171,11 +177,20 @@ const server = app.listen(PORT, () => {
   } else {
     console.warn('[index] REDIS_URL not set, follow-up worker not started');
   }
+  revenueCronTimer = setInterval(() => {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    if (now.getHours() === 0 && lastRevenueSnapshotDate !== today) {
+      lastRevenueSnapshotDate = today;
+      revenueSnapshotService.runDailySnapshot().catch((err) => console.error('[revenueSnapshot] error:', err.message));
+    }
+  }, REVENUE_CRON_MS);
 });
 
 async function gracefulShutdown() {
   console.log('[index] shutting down...');
   if (warmingCronTimer) clearInterval(warmingCronTimer);
+  if (revenueCronTimer) clearInterval(revenueCronTimer);
   reminderWorker.stop();
   await followUpWorker.stop();
   await warmingWorker.stop();

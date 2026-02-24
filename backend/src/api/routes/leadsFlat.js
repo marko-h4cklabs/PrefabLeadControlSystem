@@ -328,6 +328,24 @@ router.get('/:leadId/no-show-risk', async (req, res) => {
   }
 });
 
+router.put('/:leadId/attribution', async (req, res) => {
+  try {
+    const leadId = req.params.leadId;
+    const lead = await leadRepository.findById(req.tenantId, leadId);
+    if (!lead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    const body = req.body || {};
+    const updated = await leadRepository.update(req.tenantId, leadId, {
+      source_content: body.source_content,
+      source_campaign: body.source_campaign,
+      assigned_setter: body.assigned_setter,
+      assigned_closer: body.assigned_closer,
+    });
+    res.json(updated || lead);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');

@@ -16,6 +16,13 @@ function toPlainLead(row, statusRow = null) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     source: row.source ?? 'inbox',
+    source_content: row.source_content ?? null,
+    source_campaign: row.source_campaign ?? null,
+    assigned_setter: row.assigned_setter ?? null,
+    assigned_closer: row.assigned_closer ?? null,
+    pipeline_stage: row.pipeline_stage ?? null,
+    deal_value: row.deal_value != null ? Number(row.deal_value) : null,
+    closed_at: row.closed_at ?? null,
   };
   if (statusRow) {
     lead.status_obj = { id: statusRow.id, name: statusRow.name };
@@ -262,6 +269,34 @@ async function update(companyId, leadId, data) {
   if (data.name !== undefined) {
     updates.push(`name = $${paramIndex++}`);
     params.push(data.name);
+  }
+  if (data.source_content !== undefined) {
+    updates.push(`source_content = $${paramIndex++}`);
+    params.push(data.source_content);
+  }
+  if (data.source_campaign !== undefined) {
+    updates.push(`source_campaign = $${paramIndex++}`);
+    params.push(data.source_campaign);
+  }
+  if (data.assigned_setter !== undefined) {
+    updates.push(`assigned_setter = $${paramIndex++}`);
+    params.push(data.assigned_setter);
+  }
+  if (data.assigned_closer !== undefined) {
+    updates.push(`assigned_closer = $${paramIndex++}`);
+    params.push(data.assigned_closer);
+  }
+  if (data.pipeline_stage !== undefined) {
+    updates.push(`pipeline_stage = $${paramIndex++}`);
+    params.push(data.pipeline_stage);
+  }
+  if (data.deal_value !== undefined) {
+    updates.push(`deal_value = $${paramIndex++}`);
+    params.push(data.deal_value);
+  }
+  if (data.closed_at !== undefined) {
+    updates.push(`closed_at = $${paramIndex++}`);
+    params.push(data.closed_at);
   }
   if (updates.length === 0) {
     const existing = await findById(companyId, leadId);
