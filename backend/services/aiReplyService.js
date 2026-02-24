@@ -1,4 +1,5 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const {
   conversationRepository,
   chatbotBehaviorRepository,
@@ -75,12 +76,14 @@ function mergeParsedFields(current, updates, allowedFieldNames, quoteFields = []
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await client.messages.create({
-    model,
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  const response = await claudeWithRetry(() =>
+    client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+  );
   const textBlock = response.content?.find((b) => b.type === 'text');
   return textBlock?.text ?? '';
 }

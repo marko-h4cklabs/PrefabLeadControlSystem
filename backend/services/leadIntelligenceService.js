@@ -4,6 +4,7 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const { pool } = require('../db');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -80,12 +81,14 @@ function parseIntentJson(raw) {
 
 async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await client.messages.create({
-    model,
-    max_tokens: maxTokens,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
-  });
+  const response = await claudeWithRetry(() =>
+    client.messages.create({
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+  );
   const textBlock = response.content?.find((b) => b.type === 'text');
   return textBlock?.text ?? '';
 }

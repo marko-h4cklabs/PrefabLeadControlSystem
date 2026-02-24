@@ -1,4 +1,6 @@
 require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -164,28 +166,97 @@ const REVENUE_CRON_MS = 60 * 60 * 1000; // check every hour, run at midnight
 let warmingCronTimer = null;
 let revenueCronTimer = null;
 let lastRevenueSnapshotDate = null;
+let server = null;
 
-const server = app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-  reminderWorker.start();
-  if (process.env.REDIS_URL) {
-    followUpWorker.start();
-    warmingWorker.start();
-    warmingCronTimer = setInterval(() => {
-      warmingService.runHourlyNoReply72hEnrollment().catch((err) => console.error('[warming] cron error:', err.message));
-    }, WARMING_CRON_MS);
-  } else {
-    console.warn('[index] REDIS_URL not set, follow-up worker not started');
-  }
-  revenueCronTimer = setInterval(() => {
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    if (now.getHours() === 0 && lastRevenueSnapshotDate !== today) {
-      lastRevenueSnapshotDate = today;
-      revenueSnapshotService.runDailySnapshot().catch((err) => console.error('[revenueSnapshot] error:', err.message));
+const MIGRATIONS_DIR = path.join(__dirname, '..', 'db', 'migrations');
+
+async function runMigrations() {
+  const { pool } = require('../db');
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      filename VARCHAR(255) PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  const applied = await pool.query('SELECT filename FROM schema_migrations');
+  let appliedSet = new Set((applied.rows || []).map((r) => r.filename));
+  if (appliedSet.size === 0) {
+    let legacy = { rows: [] };
+    try {
+      legacy = await pool.query('SELECT name FROM _migrations ORDER BY id');
+    } catch (_) {
+      /* _migrations table may not exist */
     }
-  }, REVENUE_CRON_MS);
-});
+    if (legacy.rows && legacy.rows.length > 0) {
+      for (const r of legacy.rows) {
+        await pool.query(
+          'INSERT INTO schema_migrations (filename, applied_at) VALUES ($1, NOW()) ON CONFLICT (filename) DO NOTHING',
+          [r.name]
+        ).catch(() => {});
+      }
+      const reapplied = await pool.query('SELECT filename FROM schema_migrations');
+      appliedSet = new Set((reapplied.rows || []).map((r) => r.filename));
+      console.log('[migrations] Backfilled schema_migrations from _migrations:', legacy.rows.length, 'migration(s)');
+    }
+  }
+  if (!fs.existsSync(MIGRATIONS_DIR)) {
+    console.log('[migrations] No migrations directory found, skipping.');
+    return;
+  }
+  const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
+  const pending = files.filter((f) => !appliedSet.has(f));
+  if (pending.length === 0) {
+    console.log('[migrations] No pending migrations.');
+    return;
+  }
+  console.log(`[migrations] ${pending.length} pending migration(s): ${pending.join(', ')}`);
+  for (const filename of pending) {
+    try {
+      const filePath = path.join(MIGRATIONS_DIR, filename);
+      const sql = fs.readFileSync(filePath, 'utf8').trim();
+      if (sql) {
+        await pool.query(sql);
+      }
+      await pool.query('INSERT INTO schema_migrations (filename, applied_at) VALUES ($1, NOW())', [filename]);
+      console.log(`[migrations] Applied: ${filename}`);
+    } catch (err) {
+      console.error(`[migrations] FAILED: ${filename} —`, err.message);
+      console.error('[migrations] Server will start anyway. Fix the migration and redeploy.');
+    }
+  }
+}
+
+function startServer() {
+  server = app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+    reminderWorker.start();
+    if (process.env.REDIS_URL) {
+      followUpWorker.start();
+      warmingWorker.start();
+      warmingCronTimer = setInterval(() => {
+        warmingService.runHourlyNoReply72hEnrollment().catch((err) => console.error('[warming] cron error:', err.message));
+      }, WARMING_CRON_MS);
+    } else {
+      console.warn('[index] REDIS_URL not set, follow-up worker not started');
+    }
+    revenueCronTimer = setInterval(() => {
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      if (now.getHours() === 0 && lastRevenueSnapshotDate !== today) {
+        lastRevenueSnapshotDate = today;
+        revenueSnapshotService.runDailySnapshot().catch((err) => console.error('[revenueSnapshot] error:', err.message));
+      }
+    }, REVENUE_CRON_MS);
+  });
+}
+
+runMigrations()
+  .catch((err) => {
+    console.error('[migrations] Error running migrations:', err.message);
+  })
+  .finally(() => {
+    startServer();
+  });
 
 async function gracefulShutdown() {
   console.log('[index] shutting down...');
