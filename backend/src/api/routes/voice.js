@@ -4,7 +4,7 @@ const multer = require('multer');
 const FormData = require('form-data');
 const axios = require('axios');
 const { pool } = require('../../../db');
-const { isElevenLabsConfigured, getElevenLabsKey, getUsage, getVoices, textToSpeech } = require('../../../utils/elevenLabsClient');
+const { isElevenLabsConfigured, getElevenLabsKey, getUsage, getVoices, textToSpeech } = require('../../utils/elevenLabsClient');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
