@@ -10,6 +10,7 @@ const { sendAppointmentConfirmationEmail } = require('../../../services/appointm
 const { chatbotIntakeSchema } = require('../validators/schedulingRequestSchemas');
 const { isSlotAvailable } = require('../../../services/availabilityService');
 const { normalizeSchedulingSettings } = require('../../../services/schedulingNormalizer');
+const googleCalendarService = require('../../services/googleCalendarService');
 const { BOOKING_STATES, buildBookingPayload } = require('../../chat/bookingOfferHelper');
 const { errorJson } = require('../middleware/errors');
 
@@ -210,6 +211,10 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       completedAppointmentId: appointment.id,
       confirmedAt: new Date().toISOString(),
     });
+
+    googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
+      console.error('[chatbot/scheduling] Google sync:', err.message)
+    );
 
     const slotLabel = startDate.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' })
       + ' at ' + startDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });

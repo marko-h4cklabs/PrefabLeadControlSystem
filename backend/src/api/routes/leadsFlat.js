@@ -58,6 +58,9 @@ function toLeadResponse(lead) {
     created_at: lead.created_at,
     updated_at: lead.updated_at,
     source: lead.source ?? 'inbox',
+    intent_score: lead.intent_score ?? null,
+    budget_detected: lead.budget_detected ?? null,
+    is_hot_lead: lead.is_hot_lead ?? false,
   };
 }
 
@@ -101,7 +104,7 @@ router.get('/', async (req, res) => {
       const msg = err.formErrors?.join?.(' ') || 'Invalid query parameters';
       return res.status(400).json({ error: msg });
     }
-    const { limit, offset, status, statusId, status_id, query, source } = parsed.data;
+    const { limit, offset, status, statusId, status_id, query, source, sort, order } = parsed.data;
     let filterStatusId = statusId || status_id;
     if (filterStatusId === 'all' || filterStatusId === '__ALL__') {
       filterStatusId = null;
@@ -114,6 +117,8 @@ router.get('/', async (req, res) => {
       source: filterSource,
       limit,
       offset,
+      sort,
+      order,
     });
     const total = await leadRepository.count(req.tenantId, { status, status_id: filterStatusId, query, source: filterSource });
     const leadsWithSummary = await Promise.all(

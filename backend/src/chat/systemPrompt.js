@@ -160,6 +160,10 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
       parts.push('- Before confirming a booking request, ask for their phone number if not already known.');
     }
 
+    if (companyInfo?.google_calendar_connected) {
+      parts.push('- IMPORTANT: Only suggest times that are confirmed available. Do not offer times that are already blocked.');
+    }
+
     parts.push('- Do NOT confirm an appointment is booked. Say the team will follow up to confirm the exact time.');
     parts.push('');
   }

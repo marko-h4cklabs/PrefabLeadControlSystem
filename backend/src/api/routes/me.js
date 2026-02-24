@@ -12,6 +12,7 @@ router.get('/', async (req, res) => {
   try {
     const company = await companyRepository.findById(req.user.companyId);
     const operating_mode = company?.operating_mode ?? null;
+    const google_calendar_connected = company?.google_calendar_connected === true;
     res.json({
       id: req.user.id,
       email: req.user.email,
@@ -19,6 +20,7 @@ router.get('/', async (req, res) => {
       company_id: req.user.companyId,
       is_admin: Boolean(req.user.is_admin),
       operating_mode,
+      google_calendar_connected,
     });
   } catch (err) {
     res.status(500).json({

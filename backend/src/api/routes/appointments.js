@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { appointmentRepository, leadRepository, notificationRepository } = require('../../../db/repositories');
+const { pool } = require('../../../db');
+const { appointmentRepository, leadRepository, notificationRepository, companyRepository } = require('../../../db/repositories');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { getAvailability } = require('../../../services/availabilityService');
 const reminderWorker = require('../../../services/appointmentReminderWorker');
+const googleCalendarService = require('../../services/googleCalendarService');
 const {
   createAppointmentSchema,
   updateAppointmentSchema,
@@ -83,6 +85,12 @@ async function createAppointmentHandler(req, res, overrideLeadId) {
     if ((status || appointment.status) === 'scheduled') {
       const warmingService = require('../../services/warmingService');
       warmingService.enrollLead(lead_id, companyId, 'call_booked').catch((err) => console.error('[appointments] warming enroll error:', err.message));
+    }
+
+    if (companyId) {
+      googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
+        console.error('[appointments] Google sync:', err.message)
+      );
     }
 
     res.status(201).json(appointment);
@@ -216,6 +224,29 @@ router.patch('/:id', async (req, res) => {
       warmingService.enrollLead(existing.leadId, companyId, 'no_show_detected').catch((err) => console.error('[appointments] warming no-show enroll error:', err.message));
     }
 
+    const companyRow = (await pool.query(
+      'SELECT id, google_calendar_connected, google_calendar_id, google_access_token, google_refresh_token, google_token_expiry FROM companies WHERE id = $1',
+      [companyId]
+    )).rows[0];
+    if (companyRow?.google_calendar_connected && existing.google_event_id) {
+      if (parsed.data.status === 'cancelled') {
+        try {
+          await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
+          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+        } catch (err) {
+          console.error('[googleCalendar] Delete failed:', err.message);
+        }
+      } else if (parsed.data.start_at != null || parsed.data.end_at != null) {
+        try {
+          const lead = await leadRepository.findById(companyId, existing.leadId);
+          await googleCalendarService.updateCalendarEvent(companyRow, { ...updated, google_event_id: existing.google_event_id }, lead);
+          console.log('[googleCalendar] Event updated:', existing.google_event_id);
+        } catch (err) {
+          console.error('[googleCalendar] Update failed:', err.message);
+        }
+      }
+    }
+
     res.json(updated);
   } catch (err) {
     logDbError('update', err, { id: req.params.id });
@@ -240,6 +271,22 @@ router.post('/:id/reschedule', async (req, res) => {
 
     const updated = await appointmentRepository.update(companyId, req.params.id, patch);
     if (!updated) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    if (existing.google_event_id) {
+      const companyRow = (await pool.query(
+        'SELECT id, google_calendar_connected, google_calendar_id, google_access_token, google_refresh_token, google_token_expiry FROM companies WHERE id = $1',
+        [companyId]
+      )).rows[0];
+      if (companyRow?.google_calendar_connected) {
+        try {
+          const lead = await leadRepository.findById(companyId, existing.leadId);
+          await googleCalendarService.updateCalendarEvent(companyRow, { ...updated, google_event_id: existing.google_event_id }, lead);
+          console.log('[googleCalendar] Event updated (reschedule):', existing.google_event_id);
+        } catch (err) {
+          console.error('[googleCalendar] Update failed:', err.message);
+        }
+      }
+    }
 
     logLeadActivity({
       companyId, leadId: existing.leadId, eventType: 'appointment_rescheduled',
@@ -277,6 +324,21 @@ router.post('/:id/status', async (req, res) => {
     const updated = await appointmentRepository.update(companyId, req.params.id, patch);
     if (!updated) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
 
+    if (parsed.data.status === 'cancelled' && existing.google_event_id) {
+      const companyRow = (await pool.query(
+        'SELECT id, google_calendar_connected, google_calendar_id, google_access_token, google_refresh_token, google_token_expiry FROM companies WHERE id = $1',
+        [companyId]
+      )).rows[0];
+      if (companyRow?.google_calendar_connected) {
+        try {
+          await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
+          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+        } catch (err) {
+          console.error('[googleCalendar] Delete failed:', err.message);
+        }
+      }
+    }
+
     const eventMap = { cancelled: 'appointment_cancelled', completed: 'appointment_completed', no_show: 'appointment_no_show', scheduled: 'appointment_rescheduled' };
     logLeadActivity({
       companyId, leadId: existing.leadId, eventType: eventMap[parsed.data.status] || 'appointment_updated',
@@ -312,6 +374,21 @@ router.post('/:id/cancel', async (req, res) => {
 
     const cancelled = await appointmentRepository.cancel(companyId, req.params.id, parsed.data.note);
     if (!cancelled) return errorJson(res, 404, 'NOT_FOUND', 'Appointment not found');
+
+    if (existing.google_event_id) {
+      const companyRow = (await pool.query(
+        'SELECT id, google_calendar_connected, google_calendar_id, google_access_token, google_refresh_token, google_token_expiry FROM companies WHERE id = $1',
+        [companyId]
+      )).rows[0];
+      if (companyRow?.google_calendar_connected) {
+        try {
+          await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
+          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+        } catch (err) {
+          console.error('[googleCalendar] Delete failed:', err.message);
+        }
+      }
+    }
 
     logLeadActivity({
       companyId, leadId: existing.leadId, eventType: 'appointment_cancelled',

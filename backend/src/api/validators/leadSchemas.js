@@ -39,6 +39,8 @@ const listLeadsQuerySchema = z.object({
     .refine((v) => !v || v.length <= 80, 'query must be at most 80 characters')
     .transform((v) => (v === '' ? undefined : v)),
   source: z.enum(['inbox', 'simulation']).optional().default('inbox'),
+  sort: z.enum(['intent_score', 'created_at', 'updated_at']).optional(),
+  order: z.enum(['asc', 'desc']).optional().default('desc'),
 });
 
 const createLeadBodySchema = z

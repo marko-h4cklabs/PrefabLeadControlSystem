@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { schedulingRequestRepository, leadRepository, appointmentRepository, notificationRepository } = require('../../../db/repositories');
+const googleCalendarService = require('../../services/googleCalendarService');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const {
   createSchedulingRequestSchema,
@@ -205,6 +206,10 @@ router.post('/:id/convert-to-appointment', async (req, res) => {
       status: 'converted',
       converted_appointment_id: appointment.id,
     });
+
+    googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
+      console.error('[scheduling-requests] Google sync:', err.message)
+    );
 
     const updatedRequest = await schedulingRequestRepository.findById(companyId, req.params.id);
 

@@ -5,6 +5,7 @@ const SELECT_COLS = `
   a.start_at, a.end_at, a.timezone, a.notes, a.source,
   a.reminder_minutes_before, a.created_by_user_id,
   a.created_at, a.updated_at,
+  a.google_event_id, a.google_meet_link, a.synced_to_google, a.sync_error,
   l.name AS lead_name, l.channel AS lead_channel,
   COALESCE(cls.name, l.status) AS lead_status
 `;
@@ -49,6 +50,10 @@ function toDto(row) {
     createdAt: row.created_at,
     updated_at: row.updated_at,
     updatedAt: row.updated_at,
+    google_event_id: row.google_event_id ?? null,
+    google_meet_link: row.google_meet_link ?? null,
+    synced_to_google: row.synced_to_google === true,
+    sync_error: row.sync_error ?? null,
   };
 }
 

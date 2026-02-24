@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getAvailability, isSlotAvailable } = require('../../../services/availabilityService');
 const { normalizeSchedulingSettings } = require('../../../services/schedulingNormalizer');
+const googleCalendarService = require('../../services/googleCalendarService');
 const { appointmentRepository, leadRepository, notificationRepository, schedulingSettingsRepository, chatConversationRepository, chatMessagesRepository } = require('../../../db/repositories');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { sendAppointmentConfirmationEmail } = require('../../../services/appointmentEmailService');
@@ -197,6 +198,10 @@ async function handleBookSlot(req, res) {
       body: `${leadName} — ${startDate.toLocaleDateString('en-GB')} at ${startDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
       url: `/inbox/${n.leadId}`,
     }).catch(() => {});
+
+    googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
+      console.error('[scheduling/book-slot] Google sync:', err.message)
+    );
 
     sendAppointmentConfirmationEmail({
       to: null, leadName, appointmentTitle: derivedTitle,

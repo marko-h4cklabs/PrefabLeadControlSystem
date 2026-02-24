@@ -23,6 +23,9 @@ function toPlainLead(row, statusRow = null) {
     pipeline_stage: row.pipeline_stage ?? null,
     deal_value: row.deal_value != null ? Number(row.deal_value) : null,
     closed_at: row.closed_at ?? null,
+    intent_score: row.intent_score != null ? Number(row.intent_score) : null,
+    budget_detected: row.budget_detected ?? null,
+    is_hot_lead: row.is_hot_lead === true,
   };
   if (statusRow) {
     lead.status_obj = { id: statusRow.id, name: statusRow.name };
@@ -82,7 +85,7 @@ function escapeIlikePattern(s) {
 }
 
 async function findAll(companyId, options = {}) {
-  const { status, status_id, query, source, limit = 50, offset = 0 } = options;
+  const { status, status_id, query, source, limit = 50, offset = 0, sort, order = 'desc' } = options;
   let sql = `SELECT l.*, cls.id AS status_id_join, cls.name AS status_name
     FROM leads l
     LEFT JOIN company_lead_statuses cls ON l.status_id = cls.id AND cls.company_id = l.company_id
@@ -112,7 +115,14 @@ async function findAll(companyId, options = {}) {
     paramIndex++;
   }
 
-  sql += ' ORDER BY l.created_at DESC';
+  const orderDir = (order === 'asc' ? 'ASC' : 'DESC').toUpperCase();
+  if (sort === 'intent_score') {
+    sql += ` ORDER BY l.intent_score ${orderDir} NULLS LAST, l.created_at DESC`;
+  } else if (sort === 'updated_at') {
+    sql += ` ORDER BY l.updated_at ${orderDir} NULLS LAST, l.created_at DESC`;
+  } else {
+    sql += ' ORDER BY l.created_at DESC';
+  }
   sql += ` LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
   params.push(limit, offset);
 

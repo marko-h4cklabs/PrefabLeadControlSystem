@@ -24,6 +24,8 @@ const conversationsRouter = require('./api/routes/conversations');
 const hotLeadsRouter = require('./api/routes/hotLeads');
 const warmingRouter = require('./api/routes/warming');
 const dealsRouter = require('./api/routes/deals');
+const pipelineRouter = require('./api/routes/pipeline');
+const calendarRouter = require('./api/routes/calendar');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const isAdmin = require('./middleware/isAdmin');
@@ -137,6 +139,8 @@ app.use('/api/conversations', authMiddleware, tenantMiddleware, apiLimiter, conv
 app.use('/api/hot-leads', authMiddleware, tenantMiddleware, apiLimiter, hotLeadsRouter);
 app.use('/api/warming', authMiddleware, tenantMiddleware, apiLimiter, warmingRouter);
 app.use('/api/deals', authMiddleware, tenantMiddleware, apiLimiter, dealsRouter);
+app.use('/api/pipeline', authMiddleware, tenantMiddleware, apiLimiter, pipelineRouter);
+app.use('/api/calendar', authMiddleware, tenantMiddleware, apiLimiter, calendarRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {

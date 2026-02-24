@@ -168,13 +168,16 @@ router.get('/me', authMiddleware, async (req, res) => {
   try {
     const company = await companyRepository.findById(req.user.companyId);
     const operating_mode = company?.operating_mode ?? null;
+    const google_calendar_connected = company?.google_calendar_connected === true;
     res.json({
       id: req.user.id,
       email: req.user.email,
       role: req.user.role,
       companyId: req.user.companyId,
+      company_name: company?.name ?? null,
       is_admin: Boolean(req.user.is_admin),
       operating_mode,
+      google_calendar_connected,
     });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });

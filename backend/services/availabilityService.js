@@ -1,6 +1,7 @@
 const { pool } = require('../db/index');
 const { schedulingSettingsRepository } = require('../db/repositories');
 const { normalizeSchedulingSettings, workingHoursToDayMap } = require('./schedulingNormalizer');
+const googleCalendarService = require('../src/services/googleCalendarService');
 
 const DAYS_ORDER = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 
@@ -134,7 +135,28 @@ async function getAvailability(companyId, opts = {}) {
 
   const windowStart = localToUTC(startDate, '00:00', cfg.timezone);
   const windowEnd = localToUTC(addDays(endDate, 1), '00:00', cfg.timezone);
-  const appointments = await getScheduledAppointments(companyId, windowStart, windowEnd, slotDurationMs);
+  let appointments = await getScheduledAppointments(companyId, windowStart, windowEnd, slotDurationMs);
+
+  const companyRow = (await pool.query(
+    'SELECT id, google_calendar_connected, google_calendar_id, google_access_token, google_refresh_token, google_token_expiry FROM companies WHERE id = $1',
+    [companyId]
+  )).rows[0];
+  if (companyRow?.google_calendar_connected) {
+    try {
+      let d = startDate;
+      while (d <= endDate) {
+        const busy = await googleCalendarService.getBusySlots(companyRow, d);
+        for (const b of busy || []) {
+          const startMs = new Date(b.start).getTime();
+          const endMs = new Date(b.end).getTime();
+          appointments.push({ start: startMs, end: endMs });
+        }
+        d = addDays(d, 1);
+      }
+    } catch (err) {
+      console.warn('[availability] Google busy slots failed:', err.message);
+    }
+  }
 
   const nowMs = Date.now();
   const earliestMs = nowMs + minNoticeMs;

@@ -650,6 +650,8 @@ router.post('/chat', async (req, res) => {
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirmMsg);
             const warmingService = require('../../services/warmingService');
             warmingService.enrollLead(reqLeadId, companyId, 'call_booked').catch((err) => console.error('[chat-booking] warming enroll error:', err.message));
+            const googleCalendarService = require('../../services/googleCalendarService');
+            googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) => console.error('[chat-booking] Google sync:', err.message));
             console.info('[chat-booking] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
             return respond(confirmMsg, { ui_action: 'booking_success', booking: buildBookingPayload('confirmed', { appointment, appointmentId: appointment.id }) });
           }

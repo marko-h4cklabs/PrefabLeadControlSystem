@@ -5,6 +5,7 @@ const { webhookAuthMiddleware } = require('../middleware/webhookAuth');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { errorJson } = require('../middleware/errors');
+const googleCalendarRouter = require('./googleCalendar');
 
 const ALLOWED_CHANNELS = new Set(['instagram', 'messenger', 'whatsapp', 'telegram', 'email']);
 
@@ -61,5 +62,7 @@ router.post('/:channel/webhook', webhookAuthMiddleware, async (req, res) => {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
+
+router.use('/google', googleCalendarRouter);
 
 module.exports = router;

@@ -13,6 +13,8 @@ function toPlainCompany(row) {
     operating_mode: row.operating_mode ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    google_calendar_connected: row.google_calendar_connected === true,
+    google_calendar_id: row.google_calendar_id ?? 'primary',
   };
 }
 
