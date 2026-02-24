@@ -9,6 +9,8 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
     throw new Error('ManyChat API key is required');
   }
 
+  console.log(`[manychat] Sending message to subscriber: ${subscriberId} using key prefix: ${apiKey?.substring(0, 10)}`);
+
   const response = await fetch('https://api.manychat.com/fb/sending/sendContent', {
     method: 'POST',
     headers: {
