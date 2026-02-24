@@ -261,13 +261,22 @@ router.get('/:leadId/intelligence', async (req, res) => {
       [leadId, companyId]
     );
     const r = row.rows[0];
+    const rawSummary = r?.conversation_summary ?? null;
+    const conversation_summary = (() => {
+      if (rawSummary == null || rawSummary === '') return [];
+      if (Array.isArray(rawSummary)) return rawSummary;
+      return String(rawSummary)
+        .split(/\n/)
+        .map((s) => s.replace(/^[\s•\-*]+\s*/, '').trim())
+        .filter(Boolean);
+    })();
     res.json({
       intent_score: r?.intent_score ?? 0,
       intent_tags: r?.intent_tags ?? [],
       budget_detected: r?.budget_detected ?? null,
       urgency_level: r?.urgency_level ?? 'unknown',
       is_hot_lead: Boolean(r?.is_hot_lead),
-      conversation_summary: r?.conversation_summary ?? null,
+      conversation_summary,
       summary_updated_at: r?.summary_updated_at ?? null,
     });
   } catch (err) {
