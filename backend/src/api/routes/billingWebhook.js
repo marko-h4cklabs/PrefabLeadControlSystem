@@ -8,6 +8,10 @@ const stripeService = require('../../services/stripeService');
 const router = express.Router();
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
+  const stripe = stripeService.getStripe();
+  if (!stripe) {
+    return res.status(503).json({ error: 'Stripe not configured' });
+  }
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -16,7 +20,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
   let event;
   try {
-    event = stripeService.stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
   } catch (err) {
     console.error('[billing/webhook] Signature verification failed:', err.message);
     return res.status(400).json({ error: 'Invalid signature' });
