@@ -28,38 +28,54 @@ const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
 /**
  * Extract message content and type from ManyChat webhook payload.
  * Handles text, audio/voice, image, and other types.
+ *
+ * IMPORTANT:
+ * - Text messages ALWAYS take priority when a text field is present.
+ * - Audio is only detected when the payload structure contains actual audio data,
+ *   never based on keywords like "voice message" inside plain text.
  */
 function extractMessageContent(payload) {
-  const message = payload.message ?? {};
-  if (message.text) {
-    return { type: 'text', content: message.text };
+  const msg = payload.message || payload || {};
+
+  // TEXT message — check this FIRST, it takes priority.
+  // If there is a text field with actual text content, it's always a text message.
+  if (msg.text && typeof msg.text === 'string' && msg.text.trim().length > 0) {
+    return { type: 'text', content: msg.text.trim() };
   }
-  if (
-    message.type === 'audio' ||
-    message.type === 'voice' ||
-    (Array.isArray(message.attachments) &&
-      message.attachments.some((a) => a.type === 'audio' || a.type === 'voice')) ||
-    message.audio ||
-    payload.type === 'audio'
-  ) {
+
+  // Only now check for audio — must have actual audio payload, not just text mentioning voice.
+  const isAudio =
+    msg.type === 'audio' ||
+    msg.type === 'voice' ||
+    !!msg.audio_url ||
+    !!(msg.audio && msg.audio.url) ||
+    (Array.isArray(msg.attachments) &&
+      msg.attachments.some((a) => a.type === 'audio' || a.type === 'voice'));
+
+  if (isAudio) {
     const audioUrl =
-      message.audio?.url ||
-      (Array.isArray(message.attachments)
-        ? message.attachments.find((a) => a.type === 'audio' || a.type === 'voice')?.payload?.url
+      msg.audio_url ||
+      (msg.audio && msg.audio.url) ||
+      (Array.isArray(msg.attachments)
+        ? msg.attachments.find((a) => a.type === 'audio' || a.type === 'voice')?.payload?.url
         : null) ||
-      message.url ||
       null;
     return { type: 'audio', content: null, audioUrl };
   }
+
+  // Image
   if (
-    message.type === 'image' ||
-    (Array.isArray(message.attachments) && message.attachments.some((a) => a.type === 'image'))
+    msg.type === 'image' ||
+    (Array.isArray(msg.attachments) && msg.attachments.some((a) => a.type === 'image'))
   ) {
     return { type: 'image', content: null };
   }
-  if (message.type && message.type !== 'text') {
-    return { type: message.type, content: null };
+
+  // Sticker, reaction, like, thumbs up — pass through type
+  if (msg.type && msg.type !== 'text') {
+    return { type: msg.type, content: null };
   }
+
   return { type: 'unknown', content: null };
 }
 
@@ -228,7 +244,7 @@ async function processManyChatPayload(payload, overrideCompany) {
     });
     if (!transcription || !transcription.trim()) {
       const gracefulReply =
-        "Hey! I got your voice message but I can't play audio right now. Could you type that out for me? 🙏";
+        "Hey, I can't play audio messages on my end — can you type that out for me?";
       if (manychatApiKey) {
         await sendInstagramMessage(subscriberId, gracefulReply, manychatApiKey);
       }

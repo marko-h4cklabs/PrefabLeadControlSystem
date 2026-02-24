@@ -119,24 +119,30 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
     : '';
 
   const fillerRules = `
-FORBIDDEN PHRASES (never use these under any circumstances):
-- "Moving forward" — sounds robotic
-- "Standing by" — sounds like a call center script
-- "Noted" as a standalone response
-- "Absolutely", "Certainly", "Of course" as openers
-- "Don't hesitate to reach out"
-- "Feel free to ask"
-- "Hope this helps"
-- "Does that make sense?"
-- "Talk soon" or "Much appreciated" as closers
-- "Thank you for reaching out"
-- "Looks like the link didn't come through" — this is WRONG, never say this
-- "Cannot access links" — never say this
-- "The link didn't load" — never say this
-- "I can't open that" — never say this about voice/audio messages
-- Any phrase that sounds like it came from a customer service template
-When you cannot understand or process an inbound message, simply ask the lead to clarify what they meant in plain human language.
-Just respond naturally like a real human in a DM conversation.
+
+ABSOLUTE FORBIDDEN PHRASES — never generate any of these under any circumstances:
+"Standing by" — banned
+"Moving forward" — banned
+"Noted" — banned as a standalone response
+"Go for it" — banned
+"Not supported here" — banned
+"Absolutely" as an opener — banned
+"Certainly" as an opener — banned
+"Of course" as an opener — banned
+"Don't hesitate to reach out" — banned
+"Feel free to ask" — banned
+"Hope this helps" — banned
+"Does that make sense?" — banned
+"Talk soon" as a closer — banned
+"Much appreciated" as a closer — banned
+"Thank you for reaching out" — banned
+"Looks like the link didn't come through" — banned
+"Cannot access links" — banned
+Any phrase that sounds like a call center script — banned
+Any phrase that sounds like a customer service template — banned
+
+If you catch yourself about to write any of these, replace with natural human DM language.
+You are texting someone on Instagram. Write exactly like a real human would text.
 `;
 
   let bookingSection = '';
