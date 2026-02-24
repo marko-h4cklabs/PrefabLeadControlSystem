@@ -30,20 +30,19 @@ router.get('/callback', async (req, res) => {
 // Protected routes below
 router.use(authMiddleware, tenantMiddleware);
 
-// GET /api/integrations/google/auth — returns auth URL for frontend redirect
+// GET /api/integrations/google/auth — returns auth URL for frontend redirect (always JSON)
 router.get('/auth', async (req, res) => {
   res.set('Content-Type', 'application/json');
   try {
     const companyId = req.tenantId;
-    if (!companyId) return errorJson(res, 401, 'UNAUTHORIZED', 'Authentication required');
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-      return errorJson(res, 503, 'SERVICE_UNAVAILABLE', 'Google Calendar is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.');
+    if (!companyId) {
+      return res.status(401).json({ error: 'Authentication required' });
     }
-    const authUrl = googleCalendarService.getAuthUrl(companyId);
-    return res.json({ auth_url: authUrl });
+    const auth_url = googleCalendarService.getAuthUrl(companyId);
+    return res.json({ auth_url });
   } catch (err) {
-    console.error('[google/auth]', err.message);
-    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get auth URL');
+    console.error('[googleCalendar] Auth URL generation failed:', err.message);
+    return res.status(500).json({ error: 'Failed to generate auth URL' });
   }
 });
 
