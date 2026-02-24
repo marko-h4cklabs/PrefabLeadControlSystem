@@ -94,6 +94,8 @@
 
 1. **Update email:** Input + Save. On success → toast; optionally refresh `/api/me`.
 2. **Change password:** Current password, new password, confirm new password. Validate match before submit. On success → toast.
+   - **DOM / a11y:** Wrap all three password inputs in a `<form>` (e.g. `<form onSubmit={handleSubmit}>`) so the browser doesn’t warn “Password field is not contained in a form”.
+   - **Autocomplete:** Use `autocomplete="current-password"` on the current password input, and `autocomplete="new-password"` on both the “New password” and “Confirm new password” inputs.
 3. Show success/error toasts for all operations.
 
 ### Error handling
@@ -101,6 +103,29 @@
 - `400`: Validation (e.g. invalid email, password too short).
 - `401`: Wrong current password.
 - `409`: Email already in use.
+
+---
+
+## C1) Google Calendar and API base URL
+
+**Google auth error “Unexpected token '<', \"<!doctype \"... is not valid JSON”:**  
+The frontend is calling the API with a **relative** URL (e.g. `fetch('/api/integrations/google/auth')`). When the app is served from the frontend origin (e.g. Lovable preview or your production frontend URL), that request goes to the **frontend** server, which returns `index.html` (HTML) for unknown paths. The code then tries to parse that HTML as JSON and fails.
+
+**Fix:** Use the **backend API base URL** for all API calls, including Google Calendar:
+
+- Use an env variable like `VITE_API_URL` or `REACT_APP_API_URL` set to your backend root (e.g. `https://your-backend.railway.app`).
+- Call `GET ${API_BASE_URL}/api/integrations/google/auth` (with `Authorization: Bearer <token>`), then use the returned `auth_url` to redirect the user.
+- Never use a bare relative path like `/api/...` for API requests unless you have a dev proxy that forwards `/api` to the backend.
+
+**Google Calendar endpoints (all require auth):**
+
+| Method | Endpoint | Response |
+|--------|----------|----------|
+| GET | `/api/integrations/google/auth` | `{ auth_url: "https://accounts.google.com/..." }` |
+| GET | `/api/integrations/google/status` | `{ connected, calendar_id, upcoming_events_count }` |
+| GET | `/api/integrations/google/upcoming` | `{ items: [...] }` |
+| GET | `/api/integrations/google/busy?date=YYYY-MM-DD` | `{ busy: [{ start, end }, ...] }` |
+| DELETE | `/api/integrations/google/disconnect` | `{ disconnected: true }` |
 
 ---
 

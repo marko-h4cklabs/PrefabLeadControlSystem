@@ -32,14 +32,18 @@ router.use(authMiddleware, tenantMiddleware);
 
 // GET /api/integrations/google/auth — returns auth URL for frontend redirect
 router.get('/auth', async (req, res) => {
+  res.set('Content-Type', 'application/json');
   try {
     const companyId = req.tenantId;
     if (!companyId) return errorJson(res, 401, 'UNAUTHORIZED', 'Authentication required');
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return errorJson(res, 503, 'SERVICE_UNAVAILABLE', 'Google Calendar is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.');
+    }
     const authUrl = googleCalendarService.getAuthUrl(companyId);
     return res.json({ auth_url: authUrl });
   } catch (err) {
     console.error('[google/auth]', err.message);
-    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get auth URL');
+    return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get auth URL');
   }
 });
 
