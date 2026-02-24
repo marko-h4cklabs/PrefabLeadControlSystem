@@ -22,10 +22,14 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
       data: {
         version: 'v2',
         content: {
-          messages: [{ type: 'text', text }],
+          messages: [
+            {
+              type: 'text',
+              text: text,
+            },
+          ],
         },
       },
-      message_tag: 'ACCOUNT_UPDATE',
     }),
   });
 
