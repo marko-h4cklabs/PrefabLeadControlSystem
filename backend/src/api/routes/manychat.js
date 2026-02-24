@@ -2,11 +2,10 @@
  * ManyChat Webhook Receiver
  *
  * Receives incoming Instagram messages from ManyChat.
- * Verifies x-manychat-signature (HMAC SHA256 of raw body).
+ * Verifies x-manychat-signature (plain string comparison).
  * Returns 200 immediately; processes AI reply asynchronously.
  */
 
-const crypto = require('crypto');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -21,15 +20,6 @@ const aiReplyService = require('../../../services/aiReplyService');
 const { sendInstagramMessage } = require('../../services/manychatService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
-
-/**
- * Verify ManyChat webhook signature (HMAC SHA256 of raw body).
- */
-function verifyManyChatSignature(rawBody, signature, secret) {
-  if (!secret || !rawBody || !signature) return false;
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  return signature === expected || signature === `sha256=${expected}`;
-}
 
 /**
  * POST /api/webhooks/manychat
@@ -47,15 +37,9 @@ router.post('/', rawJsonParser, async (req, res) => {
       return res.status(400).json({ error: 'Missing or invalid body' });
     }
 
+    const expectedSecret = process.env.MANYCHAT_WEBHOOK_SECRET;
     const signature = req.headers['x-manychat-signature'];
-    const secret = process.env.MANYCHAT_WEBHOOK_SECRET;
-
-    if (!secret) {
-      console.error('[manychat/webhook] MANYCHAT_WEBHOOK_SECRET not configured');
-      return res.status(500).json({ error: 'Server misconfiguration' });
-    }
-
-    if (!verifyManyChatSignature(rawBody, signature, secret)) {
+    if (!signature || signature !== expectedSecret) {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
