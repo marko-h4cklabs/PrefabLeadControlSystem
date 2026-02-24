@@ -1,0 +1,2 @@
+ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS booking_url TEXT DEFAULT NULL;

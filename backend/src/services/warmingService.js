@@ -144,18 +144,23 @@ async function processWarmingStep(enrollmentId, stepId) {
   if (!lead) return;
   if (lead.status === 'qualified' || lead.status === 'disqualified') return;
 
-  const companyRow = await pool.query(
-    `SELECT name, booking_url FROM companies WHERE id = $1`,
-    [enr.company_id]
-  );
-  const company = companyRow.rows[0] || {};
-  const bookingLink = company.booking_url || '';
-
-  const message = interpolate(st.message_template, {
+  let company = {};
+  try {
+    const companyRow = await pool.query(
+      `SELECT name, booking_url FROM companies WHERE id = $1`,
+      [enr.company_id]
+    );
+    company = companyRow.rows[0] || {};
+  } catch (_) {
+    /* booking_url column may not exist yet; use empty booking_link */
+  }
+  const bookingUrl = company.booking_url != null ? String(company.booking_url) : '';
+  let message = interpolate(st.message_template, {
     name: lead.name || lead.external_id || 'there',
     company_name: company.name || 'us',
-    booking_link: bookingLink,
+    booking_link: bookingUrl,
   });
+  message = message.replace(/\{booking_link\}/gi, bookingUrl).trim();
 
   let manychatResponse = null;
   try {

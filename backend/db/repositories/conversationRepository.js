@@ -36,8 +36,17 @@ async function createIfNotExists(leadId, companyId = null) {
     settingsSnapshot = behavior ? {
       tone: behavior.tone ?? 'professional',
       response_length: behavior.response_length ?? 'medium',
+      emojis_enabled: behavior.emojis_enabled ?? false,
       persona_style: behavior.persona_style ?? 'busy',
       forbidden_topics: Array.isArray(behavior.forbidden_topics) ? behavior.forbidden_topics : [],
+      agent_name: behavior.agent_name ?? 'Jarvis',
+      agent_backstory: behavior.agent_backstory ?? null,
+      opener_style: behavior.opener_style ?? 'casual',
+      conversation_goal: behavior.conversation_goal ?? 'collect_quote',
+      handoff_trigger: behavior.handoff_trigger ?? 'after_quote',
+      follow_up_style: behavior.follow_up_style ?? 'soft',
+      human_fallback_message: behavior.human_fallback_message ?? null,
+      bot_deny_response: behavior.bot_deny_response ?? null,
     } : null;
   }
 
