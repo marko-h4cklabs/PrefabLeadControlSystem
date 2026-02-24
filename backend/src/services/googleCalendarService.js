@@ -119,11 +119,12 @@ async function deleteCalendarEvent(company, googleEventId) {
   });
 }
 
-async function getUpcomingEvents(company, days = 7) {
+async function getUpcomingEvents(company, days = 30) {
   const auth = await getAuthenticatedClient(company);
   const calendar = google.calendar({ version: 'v3', auth });
   const now = new Date();
   const future = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  console.log('[googleCalendar] Fetching events from', now.toISOString(), 'to', future.toISOString());
   const response = await calendar.events.list({
     calendarId: company.google_calendar_id || 'primary',
     timeMin: now.toISOString(),
