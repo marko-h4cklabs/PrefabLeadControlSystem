@@ -17,6 +17,7 @@ const {
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
+const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
 const { sendInstagramMessage } = require('../../services/manychatService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
@@ -85,7 +86,7 @@ async function processManyChatPayload(payload) {
   }
 
   const companyResult = await pool.query(
-    'SELECT id, manychat_api_key FROM companies WHERE manychat_page_id = $1',
+    'SELECT id, manychat_api_key, operating_mode FROM companies WHERE manychat_page_id = $1',
     [pageId]
   );
   const companyRow = companyResult.rows[0];
@@ -96,6 +97,9 @@ async function processManyChatPayload(payload) {
 
   const companyId = companyRow.id;
   const manychatApiKey = companyRow.manychat_api_key ?? null;
+  const operating_mode = companyRow.operating_mode && ['autopilot', 'copilot'].includes(companyRow.operating_mode)
+    ? companyRow.operating_mode
+    : null;
 
   let lead = await leadRepository.findByCompanyChannelExternalId(companyId, 'instagram', subscriberId, 'inbox');
   const isNewLead = !lead;
@@ -139,38 +143,54 @@ async function processManyChatPayload(payload) {
     metadata: { messageId, timestamp },
   }).catch(() => {});
 
+  const conversationAfter = await conversationRepository.getByLeadId(lead.id);
+  const messagesForIntelligence = conversationAfter?.messages ?? [];
+  analyzeInboundMessage(lead.id, conversationAfter?.id, companyId, messagesForIntelligence).catch((err) => {
+    console.error('[manychat/webhook] lead intelligence error:', err.message);
+  });
+
   const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
   const hasChatbot = Array.isArray(quoteFields) && quoteFields.length > 0;
 
   if (hasChatbot) {
+    const mode = operating_mode ?? 'autopilot';
+    if (operating_mode === null) {
+      console.warn('[manychat/webhook] operating_mode not set, defaulting to autopilot');
+    }
     try {
-      const result = await aiReplyService.generateAiReply(companyId, lead.id);
-      await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
+      if (mode === 'copilot') {
+        const replySuggestionsService = require('../../../services/replySuggestionsService');
+        const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+        await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
+      } else {
+        const result = await aiReplyService.generateAiReply(companyId, lead.id);
+        await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
 
-      const merged = result.parsed_fields ?? result.field_updates ?? {};
-      const currentConv = await conversationRepository.getByLeadId(lead.id);
-      const currentParsed = currentConv?.parsed_fields ?? {};
-      if (JSON.stringify(merged) !== JSON.stringify(currentParsed) && Object.keys(merged).length > 0) {
-        await conversationRepository.updateParsedFields(lead.id, merged);
+        const merged = result.parsed_fields ?? result.field_updates ?? {};
+        const currentConv = await conversationRepository.getByLeadId(lead.id);
+        const currentParsed = currentConv?.parsed_fields ?? {};
+        if (JSON.stringify(merged) !== JSON.stringify(currentParsed) && Object.keys(merged).length > 0) {
+          await conversationRepository.updateParsedFields(lead.id, merged);
+        }
+
+        if (manychatApiKey && result.assistant_message) {
+          await sendInstagramMessage(subscriberId, result.assistant_message, manychatApiKey);
+        } else if (!manychatApiKey) {
+          console.warn('[manychat/webhook] manychat_api_key not set for company', companyId);
+        }
+
+        logLeadActivity({
+          companyId,
+          leadId: lead.id,
+          eventType: 'ai_reply_sent',
+          actorType: 'ai',
+          source: 'instagram',
+          channel: 'instagram',
+          metadata: {},
+        }).catch(() => {});
       }
-
-      if (manychatApiKey && result.assistant_message) {
-        await sendInstagramMessage(subscriberId, result.assistant_message, manychatApiKey);
-      } else if (!manychatApiKey) {
-        console.warn('[manychat/webhook] manychat_api_key not set for company', companyId);
-      }
-
-      logLeadActivity({
-        companyId,
-        leadId: lead.id,
-        eventType: 'ai_reply_sent',
-        actorType: 'ai',
-        source: 'instagram',
-        channel: 'instagram',
-        metadata: {},
-      }).catch(() => {});
     } catch (err) {
-      console.error('[manychat/webhook] AI reply failed:', err);
+      console.error('[manychat/webhook] AI reply/suggestions failed:', err);
     }
   }
 }

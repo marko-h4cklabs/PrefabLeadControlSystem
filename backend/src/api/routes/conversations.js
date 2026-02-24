@@ -1,10 +1,11 @@
 /**
- * Conversations API - voice messages and related endpoints.
+ * Conversations API - voice messages, reply suggestions (copilot), and related endpoints.
  */
 
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
+const { pool } = require('../../../db');
 const {
   leadRepository,
   conversationRepository,
@@ -15,6 +16,7 @@ const {
 const whisperService = require('../../../services/whisperService');
 const elevenLabsService = require('../../../services/elevenLabsService');
 const aiReplyService = require('../../../services/aiReplyService');
+const replySuggestionsService = require('../../../services/replySuggestionsService');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { errorJson } = require('../middleware/errors');
 
@@ -147,5 +149,63 @@ router.post(
     }
   }
 );
+
+/**
+ * POST /api/conversations/:conversationId/suggestions
+ * Generate 3 reply suggestions (copilot mode). Returns suggestions array.
+ */
+router.post('/:conversationId/suggestions', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const conversationId = req.params.conversationId;
+    if (!conversationId || !UUID_REGEX.test(conversationId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid conversation ID required');
+    }
+    const convRow = await pool.query(
+      'SELECT c.id, c.lead_id, c.messages FROM conversations c JOIN leads l ON l.id = c.lead_id WHERE c.id = $1 AND l.company_id = $2',
+      [conversationId, companyId]
+    );
+    const conv = convRow.rows[0];
+    if (!conv) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
+    }
+    const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+    const suggestions = await replySuggestionsService.generateSuggestions(
+      conv.lead_id,
+      conversationId,
+      companyId,
+      conv.messages ?? [],
+      behavior
+    );
+    res.json({ suggestions });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/conversations/:conversationId/suggestions/:suggestionId/send
+ * Body: { suggestion_index: 0|1|2 }. Sends that suggestion via ManyChat and marks it used.
+ */
+router.post('/:conversationId/suggestions/:suggestionId/send', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { suggestionId } = req.params;
+    const suggestionIndex = req.body?.suggestion_index;
+    if (suggestionId && !UUID_REGEX.test(suggestionId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid suggestion ID required');
+    }
+    if (typeof suggestionIndex !== 'number' || suggestionIndex < 0 || suggestionIndex > 2) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'suggestion_index must be 0, 1, or 2');
+    }
+    const result = await replySuggestionsService.sendSuggestion(suggestionId, suggestionIndex, companyId);
+    if (!result) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Suggestion not found or already used');
+    }
+    res.json(result);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
 
 module.exports = router;

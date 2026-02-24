@@ -481,6 +481,40 @@ router.get('/workspaces/:companyId', async (req, res) => {
   }
 });
 
+// GET /api/admin/hot-leads — unresolved hot lead alerts, optional ?company_id=
+router.get('/hot-leads', async (req, res) => {
+  try {
+    const companyId = req.query.company_id;
+    let sql = `
+      SELECT a.id, a.lead_id, a.company_id, a.trigger_reason, a.intent_score, a.created_at,
+             l.name AS lead_name, l.channel AS lead_channel
+      FROM hot_lead_alerts a
+      JOIN leads l ON l.id = a.lead_id
+      WHERE a.dismissed_at IS NULL
+    `;
+    const params = [];
+    if (companyId && UUID_REGEX.test(companyId)) {
+      sql += ' AND a.company_id = $1';
+      params.push(companyId);
+    }
+    sql += ' ORDER BY a.created_at DESC';
+    const result = await pool.query(sql, params);
+    const data = (result.rows || []).map((r) => ({
+      id: r.id,
+      lead_id: r.lead_id,
+      company_id: r.company_id,
+      trigger_reason: r.trigger_reason,
+      intent_score: r.intent_score,
+      created_at: r.created_at,
+      lead_name: r.lead_name,
+      lead_channel: r.lead_channel,
+    }));
+    res.json({ data });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 // GET /api/admin/queue/stats
 router.get('/queue/stats', async (req, res) => {
   try {

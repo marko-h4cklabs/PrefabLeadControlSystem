@@ -10,6 +10,7 @@ function toPlainCompany(row) {
     chatbot_style: row.chatbot_style ?? {},
     scoring_config: row.scoring_config ?? {},
     channels_enabled: row.channels_enabled ?? [],
+    operating_mode: row.operating_mode ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

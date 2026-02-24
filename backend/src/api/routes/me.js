@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
-const { userRepository } = require('../../../db/repositories');
+const { userRepository, companyRepository } = require('../../../db/repositories');
 const { authMiddleware } = require('../middleware/auth');
 
 const router = express.Router();
@@ -8,14 +8,23 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 router.use(authMiddleware);
 
-router.get('/', (req, res) => {
-  res.json({
-    id: req.user.id,
-    email: req.user.email,
-    name: req.user.name ?? null,
-    company_id: req.user.companyId,
-    is_admin: Boolean(req.user.is_admin),
-  });
+router.get('/', async (req, res) => {
+  try {
+    const company = await companyRepository.findById(req.user.companyId);
+    const operating_mode = company?.operating_mode ?? null;
+    res.json({
+      id: req.user.id,
+      email: req.user.email,
+      name: req.user.name ?? null,
+      company_id: req.user.companyId,
+      is_admin: Boolean(req.user.is_admin),
+      operating_mode,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: { code: 'INTERNAL_ERROR', message: 'Internal server error' },
+    });
+  }
 });
 
 router.put('/email', async (req, res) => {

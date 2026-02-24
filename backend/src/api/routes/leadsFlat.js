@@ -29,6 +29,7 @@ const upload = multer({
 const { errorJson } = require('../middleware/errors');
 const { computeFieldsState } = require('../../chat/fieldsState');
 const { appendPictureToParsed, picturesToCollected, attachmentsToPicturesCollected } = require('../../chat/picturesHelpers');
+const { pool } = require('../../../db');
 const {
   listLeadsQuerySchema,
   createLeadBodySchema,
@@ -241,6 +242,66 @@ router.get('/:leadId/tasks', ensureLeadForCrm, async (req, res) => {
     res.json({ items: Array.isArray(items) ? items.map(toCrmTaskItem) : [], total: typeof total === 'number' ? total : 0 });
   } catch (err) {
     if (err.code === '42P01') return res.json({ items: [], total: 0 });
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/:leadId/intelligence', async (req, res) => {
+  try {
+    const leadId = req.params.leadId;
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
+    }
+    const row = await pool.query(
+      `SELECT intent_score, intent_tags, budget_detected, urgency_level, is_hot_lead,
+              conversation_summary, summary_updated_at
+       FROM leads WHERE id = $1 AND company_id = $2`,
+      [leadId, companyId]
+    );
+    const r = row.rows[0];
+    res.json({
+      intent_score: r?.intent_score ?? 0,
+      intent_tags: r?.intent_tags ?? [],
+      budget_detected: r?.budget_detected ?? null,
+      urgency_level: r?.urgency_level ?? 'unknown',
+      is_hot_lead: Boolean(r?.is_hot_lead),
+      conversation_summary: r?.conversation_summary ?? null,
+      summary_updated_at: r?.summary_updated_at ?? null,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/:leadId/suggestions/latest', async (req, res) => {
+  try {
+    const leadId = req.params.leadId;
+    const companyId = req.tenantId;
+    const lead = await leadRepository.findById(companyId, leadId);
+    if (!lead) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
+    }
+    const row = await pool.query(
+      `SELECT id, conversation_id, suggestions, created_at
+       FROM reply_suggestions
+       WHERE lead_id = $1 AND company_id = $2 AND used_suggestion_index IS NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [leadId, companyId]
+    );
+    const rec = row.rows[0];
+    if (!rec) {
+      return res.json({ suggestion_id: null, suggestions: null });
+    }
+    const suggestions = Array.isArray(rec.suggestions) ? rec.suggestions : (typeof rec.suggestions === 'string' ? JSON.parse(rec.suggestions || '[]') : []);
+    res.json({
+      suggestion_id: rec.id,
+      conversation_id: rec.conversation_id,
+      suggestions,
+      created_at: rec.created_at,
+    });
+  } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });

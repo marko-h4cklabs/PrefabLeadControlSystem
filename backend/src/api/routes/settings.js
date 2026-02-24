@@ -124,6 +124,46 @@ router.get('/scheduling', async (req, res) => {
   }
 });
 
+// ---- Operating mode (autopilot / copilot) ----
+
+const VALID_OPERATING_MODES = ['autopilot', 'copilot'];
+
+router.get('/mode', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      'SELECT operating_mode FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const row = result.rows[0];
+    const operating_mode = row?.operating_mode && VALID_OPERATING_MODES.includes(row.operating_mode)
+      ? row.operating_mode
+      : null;
+    res.json({ operating_mode });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/mode', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { operating_mode } = req.body ?? {};
+    if (!operating_mode || !VALID_OPERATING_MODES.includes(operating_mode)) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'operating_mode must be "autopilot" or "copilot"' },
+      });
+    }
+    await pool.query(
+      'UPDATE companies SET operating_mode = $2 WHERE id = $1',
+      [companyId, operating_mode]
+    );
+    res.json({ operating_mode });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 // ---- ManyChat settings ----
 
 function maskApiKey(apiKey) {
