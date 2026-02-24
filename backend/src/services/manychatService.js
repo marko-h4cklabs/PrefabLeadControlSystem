@@ -30,6 +30,7 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
           ],
         },
       },
+      message_tag: 'HUMAN_AGENT',
     }),
   });
 
