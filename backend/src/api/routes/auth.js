@@ -1,88 +1,112 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { pool } = require('../../../db');
-const { userRepository, companyRepository } = require('../../../db/repositories');
+const { userRepository, companyRepository, chatbotBehaviorRepository } = require('../../../db/repositories');
 
 const router = express.Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+async function registerCompanyAndUser(body) {
+  const companyName = (body.company_name || body.companyName || '').trim();
+  const fullName = (body.full_name || body.fullName || '').trim();
+  const email = (body.email || '').trim().toLowerCase();
+  const password = body.password;
+
+  if (!companyName || companyName.length < 2 || companyName.length > 120) {
+    throw Object.assign(new Error('company_name is required (2–120 characters)'), { statusCode: 400 });
+  }
+  if (!email || !EMAIL_REGEX.test(email)) {
+    throw Object.assign(new Error('Valid email is required'), { statusCode: 400 });
+  }
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    throw Object.assign(new Error('password must be at least 8 characters'), { statusCode: 400 });
+  }
+
+  const existing = await userRepository.findByEmailOnly(email);
+  if (existing) {
+    throw Object.assign(new Error('Email already in use'), { statusCode: 409 });
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const webhookToken = crypto.randomBytes(32).toString('hex');
+  const client = await pool.connect();
+  let company;
+  let user;
+  try {
+    await client.query('BEGIN');
+    const companyRes = await client.query(
+      `INSERT INTO companies (
+        name, contact_email, contact_phone, chatbot_style, scoring_config, channels_enabled,
+        subscription_status, subscription_plan, trial_ends_at, monthly_message_count, webhook_token
+      ) VALUES ($1, $2, NULL, '{}', '{}', '[]', 'trial', 'trial', NOW() + INTERVAL '14 days', 0, $3)
+      RETURNING id, name, webhook_token`,
+      [companyName, email, webhookToken]
+    );
+    company = companyRes.rows[0];
+    const userRes = await client.query(
+      `INSERT INTO users (company_id, email, password_hash, role)
+       VALUES ($1, $2, $3, 'admin')
+       RETURNING id, email, role`,
+      [company.id, email, passwordHash]
+    );
+    user = userRes.rows[0];
+    await client.query('COMMIT');
+  } catch (txErr) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw txErr;
+  } finally {
+    client.release();
+  }
+
+  await chatbotBehaviorRepository.upsert(company.id, {
+    persona_style: 'professional',
+    response_length: 'medium',
+    emojis_enabled: true,
+    agent_name: 'Alex',
+    conversation_goal: 'Book a sales call',
+    opener_style: 'greeting',
+  });
+
+  const warmingService = require('../../services/warmingService');
+  warmingService.ensureDefaultSequences(company.id).catch(() => {});
+
+  return { company, user };
+}
+
 router.post('/signup', async (req, res) => {
   try {
-    const { companyName, email, password } = req.body;
-
-    if (!companyName || typeof companyName !== 'string') {
+    const body = req.body || {};
+    const companyName = (body.companyName || body.company_name || '').trim();
+    if (!companyName) {
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'companyName is required' },
       });
     }
-    const cn = companyName.trim();
-    if (cn.length < 2 || cn.length > 120) {
+    if (!body.email || !EMAIL_REGEX.test(String(body.email).trim())) {
       return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'companyName must be 2–120 characters' },
+        error: { code: 'VALIDATION_ERROR', message: 'Valid email is required' },
       });
     }
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'email is required' },
-      });
-    }
-    if (!EMAIL_REGEX.test(email.trim())) {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'Invalid email format' },
-      });
-    }
-    if (!password || typeof password !== 'string' || password.length < 8) {
+    if (!body.password || String(body.password).length < 8) {
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'password must be at least 8 characters' },
       });
     }
-
     if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
       return res.status(500).json({
         error: { code: 'INTERNAL_ERROR', message: 'JWT_SECRET is not configured' },
       });
     }
 
-    const emailLower = email.trim().toLowerCase();
-    const existing = await userRepository.findByEmailOnly(emailLower);
-    if (existing) {
-      return res.status(409).json({
-        error: { code: 'CONFLICT', message: 'Email already in use' },
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const client = await pool.connect();
-    let company;
-    let user;
-    try {
-      await client.query('BEGIN');
-      const companyRes = await client.query(
-        `INSERT INTO companies (name, contact_email, contact_phone, chatbot_style, scoring_config, channels_enabled)
-         VALUES ($1, $2, NULL, '{}', '{}', '[]')
-         RETURNING id, name`,
-        [cn, emailLower]
-      );
-      company = companyRes.rows[0];
-      const userRes = await client.query(
-        `INSERT INTO users (company_id, email, password_hash, role)
-         VALUES ($1, $2, $3, 'admin')
-         RETURNING id, email, role`,
-        [company.id, emailLower, passwordHash]
-      );
-      user = userRes.rows[0];
-      await client.query('COMMIT');
-    } catch (txErr) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw txErr;
-    } finally {
-      client.release();
-    }
-
-    const warmingService = require('../../services/warmingService');
-    warmingService.ensureDefaultSequences(company.id).catch(() => {});
+    const { company, user } = await registerCompanyAndUser({
+      company_name: companyName,
+      email: body.email,
+      password: body.password,
+      full_name: body.full_name || body.fullName,
+    });
 
     const token = jwt.sign(
       { id: user.id, companyId: company.id, role: user.role },
@@ -93,18 +117,60 @@ router.post('/signup', async (req, res) => {
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, role: user.role },
-      company: { id: company.id, name: company.name },
+      company: { id: company.id, name: company.name, webhook_token: company.webhook_token },
     });
   } catch (err) {
+    if (err.statusCode === 409) {
+      return res.status(409).json({ error: { code: 'CONFLICT', message: err.message } });
+    }
+    if (err.statusCode === 400) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
+    }
     if (err.code === '23505') {
-      return res.status(409).json({
-        error: { code: 'CONFLICT', message: 'Email already in use' },
-      });
+      return res.status(409).json({ error: { code: 'CONFLICT', message: 'Email already in use' } });
     }
     if (err.code === '23514') {
-      return res.status(400).json({
-        error: { code: 'VALIDATION_ERROR', message: 'Invalid data' },
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid data' } });
+    }
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+  }
+});
+
+router.post('/register', async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
+      return res.status(500).json({
+        error: { code: 'INTERNAL_ERROR', message: 'JWT_SECRET is not configured' },
       });
+    }
+    const { company, user } = await registerCompanyAndUser({
+      company_name: body.company_name || body.companyName,
+      full_name: body.full_name || body.fullName,
+      email: body.email,
+      password: body.password,
+    });
+
+    const token = jwt.sign(
+      { id: user.id, companyId: company.id, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, role: user.role },
+      company: { id: company.id, name: company.name, webhook_token: company.webhook_token },
+    });
+  } catch (err) {
+    if (err.statusCode === 409) {
+      return res.status(409).json({ error: { code: 'CONFLICT', message: err.message } });
+    }
+    if (err.statusCode === 400) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
+    }
+    if (err.code === '23505') {
+      return res.status(409).json({ error: { code: 'CONFLICT', message: 'Email already in use' } });
     }
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
   }

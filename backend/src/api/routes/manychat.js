@@ -84,7 +84,12 @@ router.post('/', rawJsonParser, async (req, res) => {
   }
 });
 
-async function processManyChatPayload(payload) {
+/**
+ * Process inbound ManyChat payload. When overrideCompany is provided, use it; otherwise resolve company by page_id.
+ * @param {object} payload - ManyChat webhook payload
+ * @param {object} [overrideCompany] - { id, manychat_api_key, operating_mode } to skip page_id lookup
+ */
+async function processManyChatPayload(payload, overrideCompany) {
   const startedAt = Date.now();
   let companyId = null;
   let success = false;
@@ -101,23 +106,26 @@ async function processManyChatPayload(payload) {
 
   try {
   if (!messageText || !messageText.trim()) { return; }
-  if (!pageId) {
-    console.warn('[manychat/webhook] Missing page_id');
-    return;
-  }
   if (!subscriberId) {
     console.warn('[manychat/webhook] Missing subscriber.id');
     return;
   }
 
-  const companyResult = await pool.query(
-    'SELECT id, manychat_api_key, operating_mode FROM companies WHERE manychat_page_id = $1',
-    [pageId]
-  );
-  const companyRow = companyResult.rows[0];
+  let companyRow = overrideCompany;
   if (!companyRow) {
-    console.warn('[manychat/webhook] Unregistered ManyChat page_id:', pageId);
-    return;
+    if (!pageId) {
+      console.warn('[manychat/webhook] Missing page_id and no override company');
+      return;
+    }
+    const companyResult = await pool.query(
+      'SELECT id, manychat_api_key, operating_mode FROM companies WHERE manychat_page_id = $1',
+      [pageId]
+    );
+    companyRow = companyResult.rows[0];
+    if (!companyRow) {
+      console.warn('[manychat/webhook] Unregistered ManyChat page_id:', pageId);
+      return;
+    }
   }
 
   companyId = companyRow.id;
@@ -254,3 +262,4 @@ async function processManyChatPayload(payload) {
 }
 
 module.exports = router;
+module.exports.processManyChatPayload = processManyChatPayload;

@@ -1,5 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const router = express.Router();
 const { pool } = require('../../../db');
 const {
@@ -9,6 +11,7 @@ const {
   userRepository,
 } = require('../../../db/repositories');
 const queueService = require('../../../services/queueService');
+const chatbotBehaviorRepository = require('../../../db/repositories/chatbotBehaviorRepository');
 const { errorJson } = require('../middleware/errors');
 
 // GET /api/admin/system-health — detailed health (admin only)
@@ -136,6 +139,155 @@ router.get('/companies', async (req, res) => {
       manychat_connected: Boolean(r.manychat_connected),
     }));
     res.json({ data });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/companies/create — create company + owner (for enterprise onboarding)
+router.post('/companies/create', async (req, res) => {
+  try {
+    const { company_name, owner_email, owner_password, plan = 'enterprise', trial_days = 0 } = req.body || {};
+    if (!company_name || typeof company_name !== 'string' || !company_name.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'company_name is required');
+    }
+    if (!owner_email || typeof owner_email !== 'string' || !owner_email.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'owner_email is required');
+    }
+    if (!owner_password || String(owner_password).length < 8) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'owner_password must be at least 8 characters');
+    }
+    const emailLower = owner_email.trim().toLowerCase();
+    const existing = await userRepository.findByEmailOnly(emailLower);
+    if (existing) {
+      return errorJson(res, 409, 'CONFLICT', 'Email already in use');
+    }
+    const webhookToken = crypto.randomBytes(32).toString('hex');
+    const passwordHash = await bcrypt.hash(owner_password, 10);
+    const trialEnds = trial_days > 0 ? `NOW() + INTERVAL '${Math.min(365, trial_days)} days'` : 'NOW()';
+    const client = await pool.connect();
+    let company;
+    let user;
+    try {
+      await client.query('BEGIN');
+      const companyRes = await client.query(
+        `INSERT INTO companies (
+          name, contact_email, subscription_status, subscription_plan, trial_ends_at,
+          monthly_message_count, webhook_token
+        ) VALUES ($1, $2, $3, $4, ${trialEnds}, 0, $5)
+        RETURNING id, name, webhook_token`,
+        [company_name.trim(), emailLower, trial_days > 0 ? 'trial' : 'active', plan, webhookToken]
+      );
+      company = companyRes.rows[0];
+      const userRes = await client.query(
+        `INSERT INTO users (company_id, email, password_hash, role)
+         VALUES ($1, $2, $3, 'admin')
+         RETURNING id, email, role`,
+        [company.id, emailLower, passwordHash]
+      );
+      user = userRes.rows[0];
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
+    await chatbotBehaviorRepository.upsert(company.id, {
+      persona_style: 'professional',
+      response_length: 'medium',
+      emojis_enabled: true,
+      agent_name: 'Alex',
+      conversation_goal: 'Book a sales call',
+      opener_style: 'greeting',
+    });
+    const warmingService = require('../../../services/warmingService');
+    warmingService.ensureDefaultSequences(company.id).catch(() => {});
+    res.status(201).json({
+      company: { id: company.id, name: company.name, webhook_token: company.webhook_token },
+      user: { id: user.id, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return errorJson(res, 409, 'CONFLICT', 'Email already in use');
+    }
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/companies/:id/extend-trial — body { days: 7 }
+router.post('/companies/:id/extend-trial', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    const days = Math.min(365, Math.max(0, parseInt(req.body?.days, 10) || 0));
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID required');
+    }
+    const r = await pool.query(
+      `UPDATE companies SET trial_ends_at = COALESCE(trial_ends_at, NOW()) + ($2 * INTERVAL '1 day') WHERE id = $1 RETURNING id, trial_ends_at`,
+      [companyId, days]
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    res.json({ success: true, trial_ends_at: r.rows[0].trial_ends_at });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/companies/:id/set-plan — body { plan: 'pro' | 'enterprise' | 'trial' }
+router.post('/companies/:id/set-plan', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    const plan = ['pro', 'enterprise', 'trial'].includes(req.body?.plan) ? req.body.plan : null;
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID required');
+    }
+    if (!plan) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'plan must be pro, enterprise, or trial');
+    }
+    const r = await pool.query(
+      'UPDATE companies SET subscription_plan = $2, subscription_status = $3 WHERE id = $1 RETURNING id, subscription_plan',
+      [companyId, plan, plan === 'trial' ? 'trial' : 'active']
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    res.json({ success: true, plan: r.rows[0].subscription_plan });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// GET /api/admin/companies/:id/webhook-url
+router.get('/companies/:id/webhook-url', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID required');
+    }
+    const r = await pool.query('SELECT webhook_token FROM companies WHERE id = $1', [companyId]);
+    const row = r.rows[0];
+    if (!row || !row.webhook_token) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Company or webhook token not found');
+    }
+    const baseUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'https://prefableadcontrolsystem-production.up.railway.app';
+    const webhookUrl = `${baseUrl.replace(/\/+$/, '')}/api/webhook/manychat/${row.webhook_token}`;
+    res.json({ webhook_url: webhookUrl, webhook_token: row.webhook_token });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// POST /api/admin/companies/:id/reset-onboarding
+router.post('/companies/:id/reset-onboarding', async (req, res) => {
+  try {
+    const companyId = req.params.id;
+    if (!companyId || !UUID_REGEX.test(companyId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid company ID required');
+    }
+    await pool.query(
+      'UPDATE companies SET onboarding_completed = false, onboarding_step = 1 WHERE id = $1',
+      [companyId]
+    );
+    res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

@@ -174,11 +174,13 @@ function maskApiKey(apiKey) {
   return '*'.repeat(s.length - 6) + s.slice(-6);
 }
 
+const manychatService = require('../../services/manychatService');
+
 router.get('/manychat', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const result = await pool.query(
-      'SELECT manychat_api_key, manychat_page_id FROM companies WHERE id = $1',
+      'SELECT manychat_api_key, manychat_page_id, manychat_connected FROM companies WHERE id = $1',
       [companyId]
     );
     const row = result.rows[0];
@@ -189,6 +191,7 @@ router.get('/manychat', async (req, res) => {
     res.json({
       manychat_api_key: maskApiKey(rawKey),
       manychat_page_id: row.manychat_page_id ?? null,
+      manychat_connected: row.manychat_connected === true,
       has_api_key: !!(rawKey && String(rawKey).trim()),
     });
   } catch (err) {
@@ -200,26 +203,62 @@ router.put('/manychat', requireRole('owner', 'admin'), async (req, res) => {
   try {
     const companyId = req.tenantId;
     const body = req.body ?? {};
-    const updates = [];
-    const params = [companyId];
-    let idx = 2;
+    const apiKey = body.manychat_api_key != null ? String(body.manychat_api_key).trim() : null;
+    const pageId = body.manychat_page_id != null ? String(body.manychat_page_id).trim() : null;
 
-    if ('manychat_api_key' in body) {
-      updates.push(`manychat_api_key = $${idx++}`);
-      params.push(body.manychat_api_key ?? null);
+    if (!apiKey) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'manychat_api_key is required' } });
     }
-    if ('manychat_page_id' in body) {
-      updates.push(`manychat_page_id = $${idx++}`);
-      params.push(body.manychat_page_id ?? null);
+
+    let pageName = null;
+    let resolvedPageId = pageId;
+    try {
+      const pageInfo = await manychatService.getPageInfo(apiKey);
+      if (pageInfo?.data?.name) pageName = pageInfo.data.name;
+      if (pageInfo?.data?.id) resolvedPageId = String(pageInfo.data.id);
+    } catch (apiErr) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Invalid ManyChat API key or connection failed', details: apiErr.message },
+      });
     }
-    if (updates.length === 0) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'No fields to update' } });
-    }
+
     await pool.query(
-      `UPDATE companies SET ${updates.join(', ')} WHERE id = $1`,
-      params
+      `UPDATE companies SET manychat_api_key = $2, manychat_page_id = $3, manychat_connected = true WHERE id = $1`,
+      [companyId, apiKey, resolvedPageId || null]
     );
-    res.json({ success: true });
+    res.json({ success: true, page_name: pageName ?? null, page_id: resolvedPageId ?? null });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.delete('/manychat', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    await pool.query(
+      'UPDATE companies SET manychat_api_key = NULL, manychat_page_id = NULL, manychat_connected = false WHERE id = $1',
+      [companyId]
+    );
+    res.json({ success: true, disconnected: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/webhook-url', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      'SELECT webhook_token FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const row = result.rows[0];
+    if (!row || !row.webhook_token) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Webhook token not set' } });
+    }
+    const baseUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'https://prefableadcontrolsystem-production.up.railway.app';
+    const webhookUrl = `${baseUrl.replace(/\/+$/, '')}/api/webhook/manychat/${row.webhook_token}`;
+    res.json({ webhook_url: webhookUrl, webhook_token: row.webhook_token });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

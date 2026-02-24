@@ -30,6 +30,8 @@ const billingRouter = require('./api/routes/billing');
 const teamRouter = require('./api/routes/team');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
+const { requireCompany } = require('./middleware/requireCompany');
+const { checkSubscription } = require('./middleware/checkSubscription');
 const isAdmin = require('./middleware/isAdmin');
 
 const app = express();
@@ -81,6 +83,17 @@ app.use(cors(corsOptions));
 // ManyChat webhook must receive raw body for HMAC verification - mount BEFORE express.json()
 const manychatRouter = require('./api/routes/manychat');
 app.use('/api/webhooks/manychat', express.raw({ type: 'application/json' }), manychatRouter);
+
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+const manychatWebhookByTokenRouter = require('./api/routes/manychatWebhookByToken');
+app.use('/api/webhook/manychat', webhookLimiter, express.raw({ type: 'application/json' }), manychatWebhookByTokenRouter);
+
 // Stripe webhook needs raw body for signature verification
 const billingWebhookRouter = require('./api/routes/billingWebhook');
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billingWebhookRouter);
@@ -94,9 +107,11 @@ const authLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
-  max: 100,
-  message: { error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  message: { error: { code: 'RATE_LIMIT', message: 'Too many requests, please slow down' } },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 app.get('/health', (req, res) => {
@@ -126,29 +141,32 @@ app.get('/public/attachments/:id/:token', async (req, res) => {
 app.use('/api/auth', authLimiter, authRouter);
 app.use('/api/me', apiLimiter, meRouter);
 
-app.use('/api/companies', authMiddleware, tenantMiddleware, apiLimiter, companiesRouter);
-app.use('/api/leads', authMiddleware, tenantMiddleware, apiLimiter, leadsFlatRouter);
+const protectedStack = [authMiddleware, tenantMiddleware, requireCompany, checkSubscription, apiLimiter];
+app.use('/api/onboarding', authMiddleware, tenantMiddleware, requireCompany, apiLimiter, require('./api/routes/onboarding'));
+
+app.use('/api/companies', ...protectedStack, companiesRouter);
+app.use('/api/leads', ...protectedStack, leadsFlatRouter);
 app.use('/api/integrations', apiLimiter, integrationsRouter);
 app.use('/api/admin', isAdmin, tenantMiddleware, apiLimiter, adminRouter);
-app.use('/api/chatbot', authMiddleware, tenantMiddleware, apiLimiter, chatbotRouter);
-app.use('/api/notifications', authMiddleware, tenantMiddleware, apiLimiter, notificationsRouter);
-app.use('/api/settings', authMiddleware, tenantMiddleware, apiLimiter, settingsRouter);
-app.use('/api/crm', authMiddleware, tenantMiddleware, apiLimiter, crmRouter);
-app.use('/api/analytics', authMiddleware, tenantMiddleware, apiLimiter, analyticsRouter);
-app.use('/api/appointments', authMiddleware, tenantMiddleware, apiLimiter, appointmentsRouter);
-app.use('/api/scheduling-requests', authMiddleware, tenantMiddleware, apiLimiter, schedulingRequestsRouter);
-app.use('/api/scheduling', authMiddleware, tenantMiddleware, apiLimiter, schedulingRouter);
-app.use('/api/chatbot/scheduling', authMiddleware, tenantMiddleware, apiLimiter, chatbotSchedulingRouter);
-app.use('/api/conversations', authMiddleware, tenantMiddleware, apiLimiter, conversationsRouter);
-app.use('/api/hot-leads', authMiddleware, tenantMiddleware, apiLimiter, hotLeadsRouter);
-app.use('/api/warming', authMiddleware, tenantMiddleware, apiLimiter, warmingRouter);
-app.use('/api/deals', authMiddleware, tenantMiddleware, apiLimiter, dealsRouter);
-app.use('/api/pipeline', authMiddleware, tenantMiddleware, apiLimiter, pipelineRouter);
-app.use('/api/calendar', authMiddleware, tenantMiddleware, apiLimiter, calendarRouter);
-app.use('/api/billing', authMiddleware, tenantMiddleware, apiLimiter, billingRouter);
-app.use('/api/team', authMiddleware, tenantMiddleware, apiLimiter, teamRouter);
+app.use('/api/chatbot', ...protectedStack, chatbotRouter);
+app.use('/api/notifications', ...protectedStack, notificationsRouter);
+app.use('/api/settings', ...protectedStack, settingsRouter);
+app.use('/api/crm', ...protectedStack, crmRouter);
+app.use('/api/analytics', ...protectedStack, analyticsRouter);
+app.use('/api/appointments', ...protectedStack, appointmentsRouter);
+app.use('/api/scheduling-requests', ...protectedStack, schedulingRequestsRouter);
+app.use('/api/scheduling', ...protectedStack, schedulingRouter);
+app.use('/api/chatbot/scheduling', ...protectedStack, chatbotSchedulingRouter);
+app.use('/api/conversations', ...protectedStack, conversationsRouter);
+app.use('/api/hot-leads', ...protectedStack, hotLeadsRouter);
+app.use('/api/warming', ...protectedStack, warmingRouter);
+app.use('/api/deals', ...protectedStack, dealsRouter);
+app.use('/api/pipeline', ...protectedStack, pipelineRouter);
+app.use('/api/calendar', ...protectedStack, calendarRouter);
+app.use('/api/billing', ...protectedStack, billingRouter);
+app.use('/api/team', ...protectedStack, teamRouter);
 const autoresponderRouter = require('./api/routes/autoresponder');
-app.use('/api/autoresponder', authMiddleware, tenantMiddleware, apiLimiter, autoresponderRouter);
+app.use('/api/autoresponder', ...protectedStack, autoresponderRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
