@@ -60,6 +60,15 @@ const PRESET_DESCRIPTIONS = {
   completion_level: 'Structural phase or fully finished turnkey',
 };
 
+function sanitizeVariableName(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .substring(0, 50);
+}
+
 function toPresetDto(row, name) {
   const n = name ?? row?.name;
   let config = {};
@@ -77,6 +86,7 @@ function toPresetDto(row, name) {
   const typeVal = row?.type ?? getPresetType(n);
   const unitsVal = row?.units ?? getPresetUnits(n) ?? (config?.defaultUnit ?? config?.unit ?? null);
   return {
+    id: row?.id ?? null,
     name: n,
     label: PRESET_LABELS[n] ?? n,
     description: PRESET_DESCRIPTIONS[n] ?? '',
@@ -86,6 +96,9 @@ function toPresetDto(row, name) {
     config: config ?? {},
     priority: row?.priority ?? getPresetPriority(n),
     required: row?.required !== false,
+    is_custom: false,
+    variable_name: row?.variable_name ?? sanitizeVariableName(n),
+    field_type: typeVal,
   };
 }
 
@@ -220,6 +233,96 @@ async function list(companyId) {
   return listAllPresets(companyId);
 }
 
+async function listCustomFields(companyId) {
+  const result = await pool.query(
+    `SELECT id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label
+     FROM chatbot_quote_fields
+     WHERE company_id = $1 AND is_custom = true
+     ORDER BY priority ASC, name ASC`,
+    [companyId]
+  );
+  return (result.rows || []).map((row) => {
+    let config = {};
+    if (row.config != null) {
+      if (typeof row.config === 'object' && !Array.isArray(row.config)) config = row.config;
+      else if (typeof row.config === 'string') {
+        try {
+          config = JSON.parse(row.config) || {};
+        } catch {
+          config = {};
+        }
+      }
+    }
+    const typeVal = row.field_type || row.type || 'text';
+    return {
+      id: row.id,
+      name: row.variable_name || row.name,
+      label: row.label || row.name || row.variable_name || '',
+      description: '',
+      type: typeVal,
+      units: row.units ?? null,
+      is_enabled: row.is_enabled === true,
+      config,
+      priority: row.priority ?? 500,
+      required: row.required !== false,
+      is_custom: true,
+      variable_name: row.variable_name || row.name,
+      field_type: typeVal,
+    };
+  });
+}
+
+async function listWithCustom(companyId) {
+  const presets = await listAllPresets(companyId);
+  let custom = [];
+  try {
+    custom = await listCustomFields(companyId);
+  } catch (_) {
+    // Migration 052 not applied yet; return presets only
+  }
+  const combined = [...presets, ...custom].sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
+  return combined;
+}
+
+async function createCustom(companyId, { label, field_type = 'text' }) {
+  const variable_name = sanitizeVariableName(label) || 'custom_field';
+  const countResult = await pool.query(
+    'SELECT COUNT(*)::int AS n FROM chatbot_quote_fields WHERE company_id = $1',
+    [companyId]
+  );
+  const priority = (countResult.rows[0]?.n ?? 0) + 1;
+  const result = await pool.query(
+    `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, is_custom, variable_name, field_type, label)
+     VALUES ($1, $2, $3, NULL, $4, true, true, '{}'::jsonb, true, $5, $6, $7)
+     RETURNING id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label`,
+    [companyId, variable_name, field_type, priority, variable_name, field_type, (label || '').trim()]
+  );
+  const row = result.rows[0];
+  return {
+    id: row.id,
+    name: row.variable_name || row.name,
+    label: row.label || row.name,
+    type: row.field_type || row.type,
+    is_custom: true,
+    variable_name: row.variable_name,
+    field_type: row.field_type || row.type,
+    priority: row.priority,
+    is_enabled: row.is_enabled === true,
+    required: row.required !== false,
+    config: row.config || {},
+    units: row.units,
+    description: '',
+  };
+}
+
+async function deleteCustomById(companyId, id) {
+  const result = await pool.query(
+    'DELETE FROM chatbot_quote_fields WHERE id = $1 AND company_id = $2 AND is_custom = true RETURNING id',
+    [id, companyId]
+  );
+  return result.rowCount > 0;
+}
+
 function getEnabledFields(fields) {
   return (fields ?? []).filter((f) => f?.is_enabled === true);
 }
@@ -243,12 +346,16 @@ async function bulkUpsertQuotePresets(companyId, presets) {
 module.exports = {
   list,
   listAllPresets,
+  listCustomFields,
+  listWithCustom,
   updatePresets,
   listQuotePresets,
   upsertQuotePreset,
   bulkUpsertQuotePresets,
   getEnabledFields,
   getFields,
+  createCustom,
+  deleteCustomById,
   PRESET_NAMES,
   getPresetType,
   getDefaultConfig,

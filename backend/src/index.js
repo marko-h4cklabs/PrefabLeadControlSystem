@@ -28,6 +28,7 @@ const pipelineRouter = require('./api/routes/pipeline');
 const calendarRouter = require('./api/routes/calendar');
 const billingRouter = require('./api/routes/billing');
 const teamRouter = require('./api/routes/team');
+const voiceRouter = require('./api/routes/voice');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const { requireCompany } = require('./middleware/requireCompany');
@@ -165,6 +166,7 @@ app.use('/api/pipeline', ...protectedStack, pipelineRouter);
 app.use('/api/calendar', ...protectedStack, calendarRouter);
 app.use('/api/billing', ...protectedStack, billingRouter);
 app.use('/api/team', ...protectedStack, teamRouter);
+app.use('/api/voice', ...protectedStack, voiceRouter);
 const autoresponderRouter = require('./api/routes/autoresponder');
 app.use('/api/autoresponder', ...protectedStack, autoresponderRouter);
 

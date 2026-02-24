@@ -8,6 +8,29 @@ const { schedulingSettingsSchema } = require('../validators/schedulingSettingsSc
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// GET /api/settings — company settings overview (operating_mode, manychat, onboarding)
+router.get('/', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      'SELECT operating_mode, manychat_connected, manychat_page_id, onboarding_completed FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Company not found' } });
+    }
+    res.json({
+      operating_mode: row.operating_mode || 'autopilot',
+      manychat_connected: row.manychat_connected === true,
+      manychat_page_id: row.manychat_page_id ?? null,
+      onboarding_completed: row.onboarding_completed === true,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 function isValidEmail(s) {
   return typeof s === 'string' && s.trim().length > 0 && EMAIL_REGEX.test(s.trim());
 }

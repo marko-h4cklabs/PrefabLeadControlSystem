@@ -94,6 +94,133 @@ const templateRouter = require('./chatbotTemplates');
 router.use('/personas', personaRouter);
 router.use('/templates', templateRouter);
 
+router.get('/identity', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const [behavior, companyRecord, companyInfo] = await Promise.all([
+      chatbotBehaviorRepository.get(companyId),
+      companyRepository.findById(companyId),
+      chatbotCompanyInfoRepository.get(companyId),
+    ]);
+    res.json({
+      agent_name: behavior?.agent_name ?? '',
+      agent_backstory: behavior?.agent_backstory ?? '',
+      business_name: companyRecord?.name ?? '',
+      business_description: companyInfo?.business_description ?? '',
+      additional_context: companyInfo?.additional_notes ?? '',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/identity', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { agent_name, agent_backstory, business_name, business_description, additional_context } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(companyId, { agent_name: agent_name ?? undefined, agent_backstory: agent_backstory ?? undefined });
+    if (business_name !== undefined || business_description !== undefined || additional_context !== undefined) {
+      if (business_name !== undefined) {
+        await pool.query('UPDATE companies SET name = COALESCE($1, name) WHERE id = $2', [business_name || null, companyId]);
+      }
+      await chatbotCompanyInfoRepository.upsert(companyId, {
+        business_description: business_description !== undefined ? business_description : undefined,
+        additional_notes: additional_context !== undefined ? additional_context : undefined,
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/guardrails', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    res.json({
+      bot_deny_response: behavior?.bot_deny_response ?? '',
+      prohibited_topics: behavior?.prohibited_topics ?? '',
+      handoff_trigger: behavior?.handoff_trigger ?? '',
+      human_fallback_message: behavior?.human_fallback_message ?? '',
+      max_messages_before_handoff: behavior?.max_messages_before_handoff ?? 20,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/guardrails', async (req, res) => {
+  try {
+    const { bot_deny_response, prohibited_topics, handoff_trigger, human_fallback_message, max_messages_before_handoff } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      bot_deny_response: bot_deny_response ?? undefined,
+      prohibited_topics: prohibited_topics ?? undefined,
+      handoff_trigger: handoff_trigger ?? undefined,
+      human_fallback_message: human_fallback_message ?? undefined,
+      max_messages_before_handoff: max_messages_before_handoff ?? undefined,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/strategy', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    res.json({
+      primary_goal: behavior?.conversation_goal ?? '',
+      follow_up_style: behavior?.follow_up_style ?? 'gentle',
+      closing_style: behavior?.closing_style ?? 'soft',
+      competitor_mentions: behavior?.competitor_mentions ?? 'deflect',
+      price_reveal: behavior?.price_reveal ?? 'ask_first',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/strategy', async (req, res) => {
+  try {
+    const { primary_goal, follow_up_style, closing_style, competitor_mentions, price_reveal } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      conversation_goal: primary_goal ?? undefined,
+      follow_up_style: follow_up_style ?? undefined,
+      closing_style: closing_style ?? undefined,
+      competitor_mentions: competitor_mentions ?? undefined,
+      price_reveal: price_reveal ?? undefined,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.get('/social-proof', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId);
+    res.json({
+      enabled: behavior?.social_proof_enabled ?? false,
+      examples: behavior?.social_proof_examples ?? '',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/social-proof', async (req, res) => {
+  try {
+    const { enabled, examples } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      social_proof_enabled: enabled ?? undefined,
+      social_proof_examples: examples ?? undefined,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/company-info', async (req, res) => {
   try {
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
@@ -219,8 +346,36 @@ router.put('/behavior', async (req, res) => {
 
 router.get('/quote-fields', async (req, res) => {
   try {
-    const presets = await chatbotQuoteFieldsRepository.listAllPresets(req.tenantId);
-    res.json({ presets: presets ?? [], fields: presets ?? [] });
+    const fields = await chatbotQuoteFieldsRepository.listWithCustom(req.tenantId);
+    res.json({ presets: fields ?? [], fields: fields ?? [] });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/quote-fields/custom', async (req, res) => {
+  try {
+    const { label, field_type = 'text' } = req.body ?? {};
+    if (!label || !String(label).trim()) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Label is required' } });
+    }
+    const created = await chatbotQuoteFieldsRepository.createCustom(req.tenantId, {
+      label: String(label).trim(),
+      field_type: String(field_type || 'text').trim(),
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.delete('/quote-fields/:id', async (req, res) => {
+  try {
+    const deleted = await chatbotQuoteFieldsRepository.deleteCustomById(req.tenantId, req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Custom field not found' } });
+    }
+    res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -267,11 +422,6 @@ router.put('/quote-fields', async (req, res) => {
   }
 });
 
-router.post('/quote-fields', (req, res) => {
-  res.status(403).json({
-    error: { code: 'FORBIDDEN', message: 'Custom field creation is disabled. Use preset settings only.' },
-  });
-});
 
 router.get('/quote-presets', async (req, res) => {
   try {

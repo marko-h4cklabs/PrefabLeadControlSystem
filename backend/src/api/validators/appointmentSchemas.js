@@ -1,7 +1,8 @@
 const { z } = require('zod');
 
 const APPOINTMENT_TYPES = ['call', 'site_visit', 'meeting', 'follow_up'];
-const APPOINTMENT_STATUSES = ['scheduled', 'completed', 'cancelled', 'no_show'];
+const APPOINTMENT_STATUSES = ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'];
+const APPOINTMENT_STATUSES_NORMALIZED = ['scheduled', 'completed', 'cancelled', 'no_show'];
 const APPOINTMENT_SOURCES = ['manual', 'chatbot', 'google_sync'];
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -88,8 +89,8 @@ const createAppointmentSchema = z.preprocess(
       z.enum(APPOINTMENT_TYPES).optional().default('call')
     ),
     status: z.preprocess(
-      (v) => enumOrUndef(v, APPOINTMENT_STATUSES) ?? undefined,
-      z.enum(APPOINTMENT_STATUSES).optional().default('scheduled')
+      (v) => { const s = trimOrUndef(v); if (!s) return undefined; const low = s.toLowerCase(); if (low === 'confirmed') return 'scheduled'; return APPOINTMENT_STATUSES_NORMALIZED.includes(low) ? low : undefined; },
+      z.enum(APPOINTMENT_STATUSES_NORMALIZED).optional().default('scheduled')
     ),
     start_at: z.string().refine((v) => !isNaN(Date.parse(v)), 'start_at must be valid ISO datetime'),
     end_at: z.string().refine((v) => !isNaN(Date.parse(v)), 'end_at must be valid ISO datetime'),
@@ -118,8 +119,8 @@ const updateAppointmentSchema = z.preprocess(
       z.enum(APPOINTMENT_TYPES).optional()
     ),
     status: z.preprocess(
-      (v) => enumOrUndef(v, APPOINTMENT_STATUSES),
-      z.enum(APPOINTMENT_STATUSES).optional()
+      (v) => { const s = trimOrUndef(v); if (!s) return undefined; const low = s.toLowerCase(); if (low === 'confirmed') return 'scheduled'; return APPOINTMENT_STATUSES_NORMALIZED.includes(low) ? low : undefined; },
+      z.enum(APPOINTMENT_STATUSES_NORMALIZED).optional()
     ),
     start_at: z.string().refine((v) => !isNaN(Date.parse(v)), 'start_at must be valid ISO datetime').optional(),
     end_at: z.string().refine((v) => !isNaN(Date.parse(v)), 'end_at must be valid ISO datetime').optional(),
@@ -154,8 +155,8 @@ const rescheduleSchema = z.preprocess(
 
 const statusSchema = z.preprocess(normalizeKeys, z.object({
   status: z.preprocess(
-    (v) => { const s = trimOrUndef(v); return s ? s.toLowerCase() : s; },
-    z.enum(APPOINTMENT_STATUSES)
+    (v) => { const s = trimOrUndef(v); if (!s) return s; const low = s.toLowerCase(); return low === 'confirmed' ? 'scheduled' : low; },
+    z.enum(APPOINTMENT_STATUSES_NORMALIZED)
   ),
   notes: z.string().trim().max(5000).optional().nullable().transform((v) => v || null),
 }));
@@ -163,7 +164,10 @@ const statusSchema = z.preprocess(normalizeKeys, z.object({
 const listAppointmentsSchema = z.preprocess(normalizeKeys, z.object({
   from: z.preprocess(dateOrUndef, z.string().refine((v) => !isNaN(Date.parse(v)), 'from must be a valid date').optional()),
   to: z.preprocess(dateOrUndef, z.string().refine((v) => !isNaN(Date.parse(v)), 'to must be a valid date').optional()),
-  status: z.preprocess((v) => enumOrUndef(v, APPOINTMENT_STATUSES), z.enum(APPOINTMENT_STATUSES).optional()),
+  status: z.preprocess(
+    (v) => { const s = trimOrUndef(v); if (!s || s === 'all') return undefined; const low = String(v).trim().toLowerCase(); if (low === 'confirmed') return 'scheduled'; return APPOINTMENT_STATUSES_NORMALIZED.includes(low) ? low : undefined; },
+    z.enum(APPOINTMENT_STATUSES_NORMALIZED).optional()
+  ),
   appointment_type: z.preprocess((v) => enumOrUndef(v, APPOINTMENT_TYPES), z.enum(APPOINTMENT_TYPES).optional()),
   source: z.preprocess((v) => enumOrUndef(v, APPOINTMENT_SOURCES), z.enum(APPOINTMENT_SOURCES).optional()),
   lead_id: z.preprocess(trimOrUndef, z.string().regex(uuidRegex, 'lead_id must be a valid UUID').optional()),

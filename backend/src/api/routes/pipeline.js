@@ -3,6 +3,51 @@ const router = express.Router();
 const { pool } = require('../../../db');
 const { errorJson } = require('../middleware/errors');
 
+const PIPELINE_STAGES = ['new_inquiry', 'contacted', 'qualified', 'proposal_sent', 'negotiation', 'closed_won', 'closed_lost'];
+
+// GET /api/pipeline — leads grouped by pipeline_stage
+router.get('/', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    if (!companyId) return errorJson(res, 401, 'UNAUTHORIZED', 'Authentication required');
+
+    const result = await pool.query(
+      `SELECT
+        pipeline_stage,
+        json_agg(
+          json_build_object(
+            'id', id,
+            'name', name,
+            'instagram_username', external_id,
+            'intent_score', intent_score,
+            'budget_detected', budget_detected,
+            'is_hot_lead', COALESCE(is_hot_lead, false),
+            'created_at', created_at,
+            'pipeline_stage', pipeline_stage
+          ) ORDER BY created_at DESC
+        ) AS leads
+       FROM leads
+       WHERE company_id = $1
+       GROUP BY pipeline_stage`,
+      [companyId]
+    );
+
+    const stages = {};
+    PIPELINE_STAGES.forEach((s) => { stages[s] = []; });
+    (result.rows || []).forEach((row) => {
+      const stage = row.pipeline_stage || 'new_inquiry';
+      if (stages[stage] !== undefined) {
+        stages[stage] = row.leads || [];
+      }
+    });
+
+    res.json({ stages });
+  } catch (err) {
+    console.error('[pipeline]', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load pipeline');
+  }
+});
+
 // GET /api/pipeline/stats — stage counts for dashboard (New, Qualified, Booked, Won)
 router.get('/stats', async (req, res) => {
   try {

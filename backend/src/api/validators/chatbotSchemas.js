@@ -18,36 +18,64 @@ const companyInfoBodySchema = z
     return out;
   });
 
-const behaviorBodySchema = z.object({
-  tone: z.enum(['professional', 'friendly', 'casual', 'direct', 'empathetic', 'humorous', 'busy']).optional(),
-  response_length: z.enum(['short', 'medium', 'long']).optional(),
-  emojis_enabled: z.boolean().optional(),
-  persona_style: z.enum(['busy', 'explanational']).optional(),
-  forbidden_topics: z.array(z.string().trim().max(64)).max(50).optional(),
-  agent_name: z.string().trim().max(100).optional(),
-  agent_backstory: z.string().trim().max(2000).nullable().optional(),
-  opener_style: z.enum(['casual', 'professional', 'direct', 'formal', 'question', 'statement', 'greeting']).optional(),
-  conversation_goal: z.string().trim().max(500).optional(),
-  handoff_trigger: z.enum(['after_quote', 'after_booking', 'never', 'on_request']).optional(),
-  follow_up_style: z.enum(['soft', 'direct', 'value_add', 'value_first', 'gentle', 'persistent']).optional(),
-  human_fallback_message: z.string().trim().max(500).optional(),
-  bot_deny_response: z.string().trim().max(500).optional(),
-  prohibited_topics: z.string().trim().max(2000).nullable().optional(),
-  competitor_mentions: z.enum(['deflect', 'acknowledge', 'ignore']).optional(),
-  price_reveal: z.enum(['reveal', 'ask_first', 'book_first']).optional(),
-  closing_style: z.enum(['soft', 'direct', 'assumptive']).optional(),
-  language_code: z.string().trim().max(10).optional(),
-  response_delay_seconds: z.number().int().min(0).max(60).optional(),
-  max_messages_before_handoff: z.number().int().min(1).max(100).optional(),
-  urgency_style: z.string().trim().max(20).optional(),
-  social_proof_enabled: z.boolean().optional(),
-  social_proof_examples: z.string().trim().max(3000).nullable().optional(),
-}).transform((d) => {
-  const topics = d.forbidden_topics
-    ? d.forbidden_topics.map((t) => t.trim()).filter(Boolean).slice(0, 50)
-    : undefined;
-  return { ...d, forbidden_topics: topics };
-});
+const TONE_VALUES = ['professional', 'friendly', 'casual', 'direct', 'empathetic', 'humorous', 'busy'];
+const RESPONSE_LENGTH_VALUES = ['short', 'medium', 'long'];
+const PERSONA_VALUES = ['busy', 'explanational', 'casual', 'formal', 'question', 'statement'];
+const OPENER_VALUES = ['casual', 'professional', 'direct', 'formal', 'question', 'statement', 'greeting'];
+const HANDOFF_VALUES = ['after_quote', 'after_booking', 'never', 'on_request'];
+const FOLLOW_UP_VALUES = ['soft', 'direct', 'value_add', 'value_first', 'gentle', 'persistent'];
+const COMPETITOR_VALUES = ['deflect', 'acknowledge', 'ignore'];
+const PRICE_VALUES = ['reveal', 'ask_first', 'book_first'];
+const CLOSING_VALUES = ['soft', 'direct', 'assumptive'];
+
+function toOptionalEnum(allowed) {
+  return z
+    .unknown()
+    .optional()
+    .transform((v) => {
+      const s = v != null ? String(v).trim() : '';
+      if (!s) return undefined;
+      const lower = s.toLowerCase();
+      return allowed.includes(s) ? s : allowed.includes(lower) ? lower : undefined;
+    });
+}
+
+const behaviorBodySchema = z
+  .object({
+    tone: toOptionalEnum(TONE_VALUES),
+    response_length: toOptionalEnum(RESPONSE_LENGTH_VALUES),
+    emojis_enabled: z.boolean().optional(),
+    persona_style: toOptionalEnum(PERSONA_VALUES),
+    forbidden_topics: z.array(z.string().trim().max(64)).max(50).optional(),
+    agent_name: z.string().trim().max(100).optional(),
+    agent_backstory: z.string().trim().max(2000).nullable().optional(),
+    opener_style: toOptionalEnum(OPENER_VALUES),
+    conversation_goal: z.string().trim().max(500).optional(),
+    handoff_trigger: toOptionalEnum(HANDOFF_VALUES),
+    follow_up_style: toOptionalEnum(FOLLOW_UP_VALUES),
+    human_fallback_message: z.string().trim().max(500).optional(),
+    bot_deny_response: z.string().trim().max(500).optional(),
+    prohibited_topics: z.string().trim().max(2000).nullable().optional(),
+    competitor_mentions: toOptionalEnum(COMPETITOR_VALUES),
+    price_reveal: toOptionalEnum(PRICE_VALUES),
+    closing_style: toOptionalEnum(CLOSING_VALUES),
+    language_code: z.string().trim().max(10).optional(),
+    response_delay_seconds: z.number().int().min(0).max(60).optional(),
+    max_messages_before_handoff: z.number().int().min(1).max(100).optional(),
+    urgency_style: z.string().trim().max(20).optional(),
+    social_proof_enabled: z.boolean().optional(),
+    social_proof_examples: z.string().trim().max(3000).nullable().optional(),
+  })
+  .transform((d) => {
+    const topics = d.forbidden_topics
+      ? d.forbidden_topics.map((t) => t.trim()).filter(Boolean).slice(0, 50)
+      : undefined;
+    const out = { ...d, forbidden_topics: topics };
+    Object.keys(out).forEach((k) => {
+      if (out[k] === undefined) delete out[k];
+    });
+    return out;
+  });
 
 const PRESET_NAMES = [
   'budget', 'location', 'time_window', 'email_address', 'phone_number', 'full_name',
