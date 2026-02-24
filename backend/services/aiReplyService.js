@@ -280,6 +280,19 @@ async function generateAiReply(companyId, leadId) {
     }
     systemPrompt += '\n\nRespond with ONLY a JSON object: {"assistant_message": "your reply text", "field_updates": {}}. No other text.';
 
+    try {
+      console.log(
+        '[aiReplyService] System prompt for company',
+        companyId,
+        'lead',
+        leadId,
+        ':\n',
+        systemPrompt
+      );
+    } catch (e) {
+      console.warn('[aiReplyService] Failed to log system prompt:', e.message);
+    }
+
     const claudeMessages = buildClaudeMessages(conversation.messages, userText);
     const rawOutput = await callClaude(systemPrompt, claudeMessages);
     const parsed = parseClaudeOutput(rawOutput);

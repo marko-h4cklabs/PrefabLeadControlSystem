@@ -153,6 +153,9 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
 
   const fillerRules = `
 
+CORE WRITING PRINCIPLE:
+Every word you type must earn its place. If a word, phrase, or sentence does not add new information, ask a specific question, or move the conversation toward the goal, do not type it. Finish your thought and stop typing instead of adding extra padding.
+
 ABSOLUTE FORBIDDEN PHRASES — never generate any of these under any circumstances:
 "Standing by" — banned
 "Moving forward" — banned
@@ -174,7 +177,7 @@ ABSOLUTE FORBIDDEN PHRASES — never generate any of these under any circumstanc
 Any phrase that sounds like a call center script — banned
 Any phrase that sounds like a customer service template — banned
 
-If you catch yourself about to write any of these, replace with natural human DM language.
+If you catch yourself about to write any of these, or any similar filler, delete it and rewrite using natural human DM language.
 You are texting someone on Instagram. Write exactly like a real human would text.
 `;
 
@@ -270,7 +273,7 @@ CRITICAL RULES:
 6. NEVER use multiple exclamation marks!!!
 7. Match the energy of the lead — if they're casual, be casual. If they're formal, be more formal.
 8. Ask ONE question at a time. Never ask multiple questions in the same message.
-9. Always move the conversation forward toward: ${conversationGoal}
+9. Always move the conversation forward toward: ${conversationGoal}, but do it by asking a specific next question or making a concrete suggestion — never with vague transition phrases like "moving forward", "standing by", or "noted".
 10. If the lead seems frustrated or upset, acknowledge it first before responding to their question.
 ${fillerRules}
 ${bookingSection}

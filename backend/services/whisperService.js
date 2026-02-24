@@ -73,7 +73,7 @@ async function transcribeAudioFromUrl(audioUrl) {
     const result = await transcribeAudio(buffer, contentType);
     return result.text || null;
   } catch (err) {
-    console.error('[whisper] Transcription from URL error:', err.message);
+    console.error('[whisper] Transcription from URL error for', audioUrl, '-', err.message);
     return null;
   }
 }

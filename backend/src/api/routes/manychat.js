@@ -30,37 +30,35 @@ const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
  * Handles text, audio/voice, image, and other types.
  *
  * IMPORTANT:
- * - Text messages ALWAYS take priority when a text field is present.
- * - Audio is only detected when the payload structure contains actual audio data,
- *   never based on keywords like "voice message" inside plain text.
+ * - Audio/voice messages are detected from structured payload fields (type, attachments, audio_url).
+ * - We prefer real audio payloads over plain text like "sent a voice message".
  */
 function extractMessageContent(payload) {
   const msg = payload.message || payload || {};
 
-  // TEXT message — check this FIRST, it takes priority.
-  // If there is a text field with actual text content, it's always a text message.
-  if (msg.text && typeof msg.text === 'string' && msg.text.trim().length > 0) {
-    return { type: 'text', content: msg.text.trim() };
-  }
+  // First, detect real audio/voice based on structured fields (type, audio_url, attachments).
+  const attachmentAudio = Array.isArray(msg.attachments)
+    ? msg.attachments.find((a) => a && (a.type === 'audio' || a.type === 'voice'))
+    : null;
 
-  // Only now check for audio — must have actual audio payload, not just text mentioning voice.
+  const audioUrl =
+    msg.audio_url ||
+    (msg.audio && msg.audio.url) ||
+    (attachmentAudio && attachmentAudio.payload && attachmentAudio.payload.url) ||
+    null;
+
   const isAudio =
     msg.type === 'audio' ||
     msg.type === 'voice' ||
-    !!msg.audio_url ||
-    !!(msg.audio && msg.audio.url) ||
-    (Array.isArray(msg.attachments) &&
-      msg.attachments.some((a) => a.type === 'audio' || a.type === 'voice'));
+    !!audioUrl;
 
   if (isAudio) {
-    const audioUrl =
-      msg.audio_url ||
-      (msg.audio && msg.audio.url) ||
-      (Array.isArray(msg.attachments)
-        ? msg.attachments.find((a) => a.type === 'audio' || a.type === 'voice')?.payload?.url
-        : null) ||
-      null;
     return { type: 'audio', content: null, audioUrl };
+  }
+
+  // TEXT message — if there is a text field with actual text content and no audio payload.
+  if (msg.text && typeof msg.text === 'string' && msg.text.trim().length > 0) {
+    return { type: 'text', content: msg.text.trim() };
   }
 
   // Image
@@ -107,6 +105,14 @@ router.post('/', rawJsonParser, async (req, res) => {
       : typeof req.body === 'string'
         ? Buffer.from(req.body, 'utf8')
         : null;
+
+    if (rawBody) {
+      try {
+        console.log('[manychat/webhook] Raw body:', rawBody.toString('utf8'));
+      } catch (e) {
+        console.warn('[manychat/webhook] Failed to log raw body:', e.message);
+      }
+    }
 
     if (!rawBody || rawBody.length === 0) {
       return res.status(400).json({ error: 'Missing or invalid body' });
@@ -159,6 +165,11 @@ async function processManyChatPayload(payload, overrideCompany) {
   let messagePreview = null;
 
   try {
+  console.log('[manychat/webhook] Extracted message:', {
+    type: extracted?.type,
+    hasContent: !!extracted?.content,
+    audioUrl: extracted?.audioUrl || null,
+  });
   if (!subscriberId) {
     console.warn('[manychat/webhook] Missing subscriber.id');
     return;
@@ -231,8 +242,13 @@ async function processManyChatPayload(payload, overrideCompany) {
     if (process.env.OPENAI_API_KEY && extracted.audioUrl) {
       try {
         const { transcribeAudioFromUrl } = require('../../../services/whisperService');
+        console.log('[manychat/webhook] Detected audio/voice message, url:', extracted.audioUrl);
         transcription = await transcribeAudioFromUrl(extracted.audioUrl);
         if (transcription) transcription = String(transcription).trim();
+        console.log(
+          '[manychat/webhook] Whisper transcription result:',
+          transcription ? transcription.slice(0, 500) : null
+        );
       } catch (err) {
         console.warn('[manychat/webhook] Whisper transcription failed:', err.message);
       }
