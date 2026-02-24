@@ -27,7 +27,7 @@ function getLanguageName(code) {
   return languages[code] || code;
 }
 
-async function buildSystemPrompt(company, behavior, quoteFields, activePersona) {
+async function buildSystemPrompt(company, behavior, quoteFields, activePersona, socialProofImages = []) {
   const personaBase = activePersona?.system_prompt || null;
 
   const agentName = behavior?.agent_name || activePersona?.agent_name || 'Alex';
@@ -106,10 +106,13 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona) 
       'Use assumptive closing language — assume they want to move forward and guide them there.',
   }[behavior?.closing_style || 'soft'] || '';
 
-  const socialProofText =
+  let socialProofText =
     behavior?.social_proof_enabled && behavior?.social_proof_examples
       ? `\nSOCIAL PROOF (use naturally when relevant):\n${behavior.social_proof_examples}`
       : '';
+  if (behavior?.social_proof_enabled && Array.isArray(socialProofImages) && socialProofImages.length > 0) {
+    socialProofText += `\nWhen a lead asks for proof, results, or examples, you can mention: "I can send you some photos/examples if you'd like!" — this triggers an image to be sent automatically.`;
+  }
 
   const prohibitedText = behavior?.prohibited_topics
     ? `\nNEVER discuss or engage with these topics: ${behavior.prohibited_topics}`

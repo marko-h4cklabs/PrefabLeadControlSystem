@@ -49,6 +49,11 @@ const {
 } = require('../validators/chatbotSchemas');
 const { errorJson } = require('../middleware/errors');
 const { pool } = require('../../../db');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 function validationError(res, parsed) {
   return res.status(400).json({
@@ -221,6 +226,62 @@ router.put('/social-proof', async (req, res) => {
   }
 });
 
+router.get('/social-proof-images', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      'SELECT id, url, caption, send_when_asked FROM social_proof_images WHERE company_id = $1 ORDER BY created_at ASC',
+      [companyId]
+    );
+    res.json({ images: result.rows || [] });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/social-proof-images', upload.single('image'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { caption, url: bodyUrl } = req.body || {};
+
+    let url = bodyUrl;
+
+    if (req.file) {
+      const dir = path.join(__dirname, '../../../public/uploads/social-proof');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const filename = `${companyId}_${Date.now()}_${(req.file.originalname || 'image').replace(/[^a-zA-Z0-9.]/g, '_')}`;
+      fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+      const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'http://localhost:3000';
+      url = `${backendUrl.replace(/\/+$/, '')}/uploads/social-proof/${filename}`;
+    }
+
+    if (!url || !String(url).trim()) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Image file or URL required' } });
+    }
+
+    const result = await pool.query(
+      'INSERT INTO social_proof_images (id, company_id, url, caption) VALUES (gen_random_uuid(), $1, $2, $3) RETURNING id, url, caption, send_when_asked, created_at',
+      [companyId, String(url).trim(), (caption || '').trim()]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.delete('/social-proof-images/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    await pool.query('DELETE FROM social_proof_images WHERE id = $1 AND company_id = $2', [
+      req.params.id,
+      companyId,
+    ]);
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.get('/company-info', async (req, res) => {
   try {
     const info = await chatbotCompanyInfoRepository.get(req.tenantId);
@@ -263,7 +324,7 @@ router.get('/behavior', async (req, res) => {
 router.get('/behavior/preview', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const [companyRecord, companyInfo, behavior, quoteFields, personaRow] = await Promise.all([
+    const [companyRecord, companyInfo, behavior, quoteFields, personaRow, socialProofImagesRows] = await Promise.all([
       companyRepository.findById(companyId),
       chatbotCompanyInfoRepository.get(companyId),
       chatbotBehaviorRepository.get(companyId),
@@ -272,13 +333,14 @@ router.get('/behavior/preview', async (req, res) => {
         'SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1',
         [companyId]
       ).then((r) => r.rows[0] ?? null),
+      pool.query('SELECT id, url, caption, send_when_asked FROM social_proof_images WHERE company_id = $1 ORDER BY created_at ASC', [companyId]).then((r) => r.rows || []),
     ]);
     const company = {
       name: companyRecord?.name || 'our company',
       business_description: companyInfo?.business_description ?? '',
       additional_notes: companyInfo?.additional_notes ?? '',
     };
-    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow);
+    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow, socialProofImagesRows || []);
     res.json({ prompt });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -292,7 +354,7 @@ router.post('/behavior/test', async (req, res) => {
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'message (string) is required' } });
     }
-    const [companyRecord, companyInfo, behavior, quoteFields, personaRow] = await Promise.all([
+    const [companyRecord, companyInfo, behavior, quoteFields, personaRow, socialProofImagesRows] = await Promise.all([
       companyRepository.findById(companyId),
       chatbotCompanyInfoRepository.get(companyId),
       chatbotBehaviorRepository.get(companyId),
@@ -301,13 +363,14 @@ router.post('/behavior/test', async (req, res) => {
         'SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1',
         [companyId]
       ).then((r) => r.rows[0] ?? null),
+      pool.query('SELECT id, url, caption, send_when_asked FROM social_proof_images WHERE company_id = $1 ORDER BY created_at ASC', [companyId]).then((r) => r.rows || []),
     ]);
     const company = {
       name: companyRecord?.name || 'our company',
       business_description: companyInfo?.business_description ?? '',
       additional_notes: companyInfo?.additional_notes ?? '',
     };
-    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow);
+    const prompt = await buildSystemPrompt(company, behavior, quoteFields, personaRow, socialProofImagesRows || []);
     const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
     const { content, provider } = await claudeWithRetry({
       model,

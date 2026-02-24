@@ -122,6 +122,8 @@ app.get('/health', (req, res) => {
 const healthRouter = require('./api/routes/health');
 app.use('/api/health', healthRouter);
 
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
+
 const { chatAttachmentRepository } = require('../db/repositories');
 app.get('/public/attachments/:id/:token', async (req, res) => {
   try {

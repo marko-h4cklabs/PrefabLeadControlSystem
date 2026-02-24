@@ -46,4 +46,39 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
   return response.data;
 }
 
-module.exports = { sendInstagramMessage, getPageInfo };
+async function sendManyChatImage(lead, imageUrl, caption, company) {
+  try {
+    const apiKey = company?.manychat_api_key;
+    if (!apiKey) return;
+    const subscriberId = lead?.external_id;
+    if (!subscriberId) return;
+    const messages = [{ type: 'image', url: imageUrl }];
+    if (caption && String(caption).trim()) {
+      messages.push({ type: 'text', text: String(caption).trim() });
+    }
+    await axios.post(
+      'https://api.manychat.com/fb/sending/sendContent',
+      {
+        subscriber_id: subscriberId,
+        data: {
+          version: 'v2',
+          content: {
+            type: 'instagram',
+            messages,
+          },
+        },
+        message_tag: 'ACCOUNT_UPDATE',
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (err) {
+    console.error('[manychat] sendManyChatImage error:', err.message);
+  }
+}
+
+module.exports = { sendInstagramMessage, getPageInfo, sendManyChatImage };

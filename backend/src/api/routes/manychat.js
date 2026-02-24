@@ -18,7 +18,7 @@ const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
 const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
-const { sendInstagramMessage } = require('../../services/manychatService');
+const { sendInstagramMessage, sendManyChatImage } = require('../../services/manychatService');
 const { createNotification } = require('../../services/notificationService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
@@ -320,6 +320,26 @@ async function processManyChatPayload(payload, overrideCompany) {
           incrementMessageCountAndWarn(companyId).catch((err) =>
             console.warn('[manychat/webhook] message count increment:', err.message)
           );
+
+          const finalReply = (result.assistant_message || '').toLowerCase();
+          const wantsToSendImages =
+            finalReply.includes('send you some') ||
+            finalReply.includes('show you') ||
+            finalReply.includes('photos') ||
+            finalReply.includes('examples');
+          if (wantsToSendImages) {
+            const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+            if (behavior.social_proof_enabled) {
+              const imagesResult = await pool.query(
+                'SELECT url, caption FROM social_proof_images WHERE company_id = $1 AND send_when_asked = true LIMIT 3',
+                [companyId]
+              );
+              const images = imagesResult.rows || [];
+              for (const img of images) {
+                await sendManyChatImage(lead, img.url, img.caption, companyRow);
+              }
+            }
+          }
         } else if (!manychatApiKey) {
           console.warn('[manychat/webhook] manychat_api_key not set for company', companyId);
         }

@@ -208,14 +208,17 @@ async function generateAiReply(companyId, leadId) {
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-  const [behavior, companyInfo, companyRecord, personaRow, lead, leadIntelligence] = await Promise.all([
-    chatbotBehaviorRepository.get(companyId),
-    chatbotCompanyInfoRepository.get(companyId),
-    companyRepository.findById(companyId),
-    pool.query('SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
-    leadRepository.findById(companyId, leadId),
-    pool.query('SELECT intent_score, budget_detected, urgency_level, intent_tags, conversation_summary, pipeline_stage FROM leads WHERE id = $1 AND company_id = $2', [leadId, companyId]).then((r) => r.rows[0] ?? null),
-  ]);
+  const [behavior, companyInfo, companyRecord, personaRow, lead, leadIntelligence, socialProofImagesRows] =
+    await Promise.all([
+      chatbotBehaviorRepository.get(companyId),
+      chatbotCompanyInfoRepository.get(companyId),
+      companyRepository.findById(companyId),
+      pool.query('SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
+      leadRepository.findById(companyId, leadId),
+      pool.query('SELECT intent_score, budget_detected, urgency_level, intent_tags, conversation_summary, pipeline_stage FROM leads WHERE id = $1 AND company_id = $2', [leadId, companyId]).then((r) => r.rows[0] ?? null),
+      pool.query('SELECT id, url, caption, send_when_asked FROM social_proof_images WHERE company_id = $1 ORDER BY created_at ASC', [companyId]).then((r) => r.rows || []),
+    ]);
+  const socialProofImages = socialProofImagesRows || [];
   const activePersona = personaRow;
   const company = {
     name: companyRecord?.name || 'our company',
@@ -268,7 +271,7 @@ async function generateAiReply(companyId, leadId) {
   if (requiredInfos.length > 0 && !userText.trim()) {
     assistantMessage = buildFieldQuestion(topMissing.name, behavior, topMissing.units);
   } else {
-    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona);
+    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages);
     const leadContext = await buildLeadContext(leadForContext);
     systemPrompt += leadContext;
     const objection = detectObjection(userText);
