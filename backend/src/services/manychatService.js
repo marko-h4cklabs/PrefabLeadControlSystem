@@ -2,22 +2,12 @@
  * ManyChat API - send Instagram messages via ManyChat.
  */
 
-const fetch = require('node-fetch');
+const axios = require('axios');
 
 async function sendInstagramMessage(subscriberId, text, apiKey) {
-  if (!apiKey || !String(apiKey).trim()) {
-    throw new Error('ManyChat API key is required');
-  }
-
-  console.log(`[manychat] Sending message to subscriber: ${subscriberId} using key prefix: ${apiKey?.substring(0, 10)}`);
-
-  const response = await fetch('https://api.manychat.com/fb/sending/sendContent', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  const response = await axios.post(
+    'https://api.manychat.com/instagram/sending/sendContent',
+    {
       subscriber_id: subscriberId,
       data: {
         version: 'v2',
@@ -25,21 +15,20 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
           messages: [
             {
               type: 'text',
-              text: text,
-            },
-          ],
-        },
-      },
-      message_tag: 'HUMAN_AGENT',
-    }),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.text();
-    throw new Error(`ManyChat API failed: ${response.status} ${errBody}`);
-  }
-
-  return response.json();
+              text: text
+            }
+          ]
+        }
+      }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+  return response.data;
 }
 
 module.exports = { sendInstagramMessage };
