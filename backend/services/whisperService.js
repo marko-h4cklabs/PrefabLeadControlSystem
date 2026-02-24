@@ -1,9 +1,11 @@
 /**
  * OpenAI Whisper API - transcribe audio to text.
+ * Supports direct buffer or download from URL (e.g. Instagram/ManyChat voice message URLs).
  */
 
 const FormData = require('form-data');
 const fetch = require('node-fetch');
+const axios = require('axios');
 
 async function transcribeAudio(audioBuffer, mimeType) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -43,6 +45,39 @@ async function transcribeAudio(audioBuffer, mimeType) {
   };
 }
 
+/**
+ * Download audio from URL (e.g. Instagram voice message) and transcribe.
+ * @param {string} audioUrl - Public URL of the audio file
+ * @returns {Promise<string|null>} Transcribed text or null on failure
+ */
+async function transcribeAudioFromUrl(audioUrl) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not configured');
+  }
+  if (!audioUrl || typeof audioUrl !== 'string') {
+    throw new Error('No audio URL provided');
+  }
+
+  try {
+    const response = await axios.get(audioUrl, {
+      responseType: 'arraybuffer',
+      timeout: 15000,
+      maxContentLength: 25 * 1024 * 1024, // 25MB
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; PrefabLeadControl/1.0)',
+      },
+    });
+
+    const buffer = Buffer.from(response.data);
+    const contentType = (response.headers['content-type'] || '').split(';')[0].trim() || 'audio/mpeg';
+    const result = await transcribeAudio(buffer, contentType);
+    return result.text || null;
+  } catch (err) {
+    console.error('[whisper] Transcription from URL error:', err.message);
+    return null;
+  }
+}
+
 function mimeTypeToExt(mimeType) {
   const map = {
     'audio/webm': 'webm',
@@ -54,4 +89,4 @@ function mimeTypeToExt(mimeType) {
   return map[mimeType] || 'webm';
 }
 
-module.exports = { transcribeAudio };
+module.exports = { transcribeAudio, transcribeAudioFromUrl };

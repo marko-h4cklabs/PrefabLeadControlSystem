@@ -25,6 +25,44 @@ const rawJsonParser = express.raw({ type: 'application/json' });
 
 const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
 
+/**
+ * Extract message content and type from ManyChat webhook payload.
+ * Handles text, audio/voice, image, and other types.
+ */
+function extractMessageContent(payload) {
+  const message = payload.message ?? {};
+  if (message.text) {
+    return { type: 'text', content: message.text };
+  }
+  if (
+    message.type === 'audio' ||
+    message.type === 'voice' ||
+    (Array.isArray(message.attachments) &&
+      message.attachments.some((a) => a.type === 'audio' || a.type === 'voice')) ||
+    message.audio ||
+    payload.type === 'audio'
+  ) {
+    const audioUrl =
+      message.audio?.url ||
+      (Array.isArray(message.attachments)
+        ? message.attachments.find((a) => a.type === 'audio' || a.type === 'voice')?.payload?.url
+        : null) ||
+      message.url ||
+      null;
+    return { type: 'audio', content: null, audioUrl };
+  }
+  if (
+    message.type === 'image' ||
+    (Array.isArray(message.attachments) && message.attachments.some((a) => a.type === 'image'))
+  ) {
+    return { type: 'image', content: null };
+  }
+  if (message.type && message.type !== 'text') {
+    return { type: message.type, content: null };
+  }
+  return { type: 'unknown', content: null };
+}
+
 async function incrementMessageCountAndWarn(companyId) {
   const r = await pool.query(
     `UPDATE companies SET monthly_message_count = COALESCE(monthly_message_count, 0) + 1
@@ -98,14 +136,13 @@ async function processManyChatPayload(payload, overrideCompany) {
   const subscriberName = subscriber.name ?? null;
   const channel = (payload.channel ?? 'instagram').toLowerCase();
   const message = payload.message ?? {};
-  const messageText = message.text ?? null;
   const pageId = String(payload.page_id ?? '');
   const messageId = payload.id ?? null;
   const timestamp = payload.timestamp ?? null;
-  const messagePreview = messageText ? String(messageText).slice(0, 500) : null;
+  const extracted = extractMessageContent(payload);
+  let messagePreview = null;
 
   try {
-  if (!messageText || !messageText.trim()) { return; }
   if (!subscriberId) {
     console.warn('[manychat/webhook] Missing subscriber.id');
     return;
@@ -172,8 +209,59 @@ async function processManyChatPayload(payload, overrideCompany) {
     conversation = await conversationRepository.createIfNotExists(lead.id, companyId);
   }
 
-  const content = messageText.trim();
-  await conversationRepository.appendMessage(lead.id, 'user', content);
+  let content = '';
+  if (extracted.type === 'audio' || extracted.type === 'voice') {
+    let transcription = null;
+    if (process.env.OPENAI_API_KEY && extracted.audioUrl) {
+      try {
+        const { transcribeAudioFromUrl } = require('../../../services/whisperService');
+        transcription = await transcribeAudioFromUrl(extracted.audioUrl);
+        if (transcription) transcription = String(transcription).trim();
+      } catch (err) {
+        console.warn('[manychat/webhook] Whisper transcription failed:', err.message);
+      }
+    }
+    await conversationRepository.appendMessage(lead.id, 'user', transcription || '', {
+      type: 'audio',
+      is_voice: true,
+      audio_url: extracted.audioUrl || null,
+    });
+    if (!transcription || !transcription.trim()) {
+      const gracefulReply =
+        "Hey! I got your voice message but I can't play audio right now. Could you type that out for me? 🙏";
+      if (manychatApiKey) {
+        await sendInstagramMessage(subscriberId, gracefulReply, manychatApiKey);
+      }
+      await conversationRepository.appendMessage(lead.id, 'assistant', gracefulReply);
+      messagePreview = '[voice - no transcription]';
+      success = true;
+      return;
+    }
+    content = transcription;
+    messagePreview = content.slice(0, 500);
+  } else if (extracted.type === 'image') {
+    const imageReply =
+      'I can see you sent an image but I can only read text messages. What did you want to share?';
+    if (manychatApiKey) {
+      await sendInstagramMessage(subscriberId, imageReply, manychatApiKey);
+    }
+    await conversationRepository.appendMessage(lead.id, 'assistant', imageReply);
+    messagePreview = '[image]';
+    success = true;
+    return;
+  } else if (extracted.type === 'unknown' || extracted.content === null) {
+    console.log('[manychat/webhook] Non-text message type ignored:', extracted.type);
+    messagePreview = extracted.type ? `[${extracted.type}]` : null;
+    success = true;
+    return;
+  } else {
+    content = (extracted.content && String(extracted.content).trim()) || '';
+    messagePreview = content ? content.slice(0, 500) : null;
+  }
+
+  if (extracted.type === 'text') {
+    await conversationRepository.appendMessage(lead.id, 'user', content);
+  }
 
   const conversationForCount = await conversationRepository.getByLeadId(lead.id);
   const userMessageCount = (conversationForCount?.messages || []).filter((m) => m.role === 'user').length;

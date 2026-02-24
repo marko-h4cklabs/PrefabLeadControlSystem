@@ -67,11 +67,12 @@ async function getByLeadId(leadId) {
   return toPlainConversation(result.rows[0]);
 }
 
-async function appendMessage(leadId, role, content) {
+async function appendMessage(leadId, role, content, meta = {}) {
   const message = {
     role,
-    content,
+    content: content ?? '',
     timestamp: new Date().toISOString(),
+    ...meta,
   };
   const result = await pool.query(
     `UPDATE conversations
