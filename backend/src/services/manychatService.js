@@ -6,12 +6,13 @@ const axios = require('axios');
 
 async function sendInstagramMessage(subscriberId, text, apiKey) {
   const response = await axios.post(
-    'https://api.manychat.com/instagram/sending/sendContent',
+    'https://api.manychat.com/fb/sending/sendContent',
     {
       subscriber_id: subscriberId,
       data: {
         version: 'v2',
         content: {
+          type: 'instagram',
           messages: [
             {
               type: 'text',
