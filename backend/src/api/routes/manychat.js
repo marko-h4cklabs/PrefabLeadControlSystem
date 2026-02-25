@@ -366,37 +366,15 @@ async function processManyChatPayload(payload, overrideCompany) {
         }
 
         if (manychatApiKey && result.assistant_message) {
-          await sendInstagramMessage(subscriberId, result.assistant_message, manychatApiKey);
-          incrementMessageCountAndWarn(companyId).catch((err) =>
-            console.warn('[manychat/webhook] message count increment:', err.message)
-          );
-
-          const finalReply = (result.assistant_message || '').toLowerCase();
-          const wantsToSendImages =
-            finalReply.includes('send you some') ||
-            finalReply.includes('show you') ||
-            finalReply.includes('photos') ||
-            finalReply.includes('examples');
-          if (wantsToSendImages) {
-            const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
-            if (behavior.social_proof_enabled) {
-              const imagesResult = await pool.query(
-                'SELECT url, caption FROM social_proof_images WHERE company_id = $1 AND send_when_asked = true LIMIT 3',
-                [companyId]
-              );
-              const images = imagesResult.rows || [];
-              for (const img of images) {
-                await sendManyChatImage(lead, img.url, img.caption, companyRow);
-              }
-            }
-          }
-
-          // Voice reply: generate TTS audio (WAV) and send via ManyChat flow
+          // Determine if voice reply should be sent instead of text
           const shouldSendVoice =
             companyRow.voice_enabled &&
             companyRow.voice_selected_id &&
             (companyRow.voice_mode === 'always' || (companyRow.voice_mode === 'match' && isAudioMessage));
 
+          let voiceSent = false;
+
+          // If voice reply is needed, try voice FIRST (don't send text yet)
           if (shouldSendVoice) {
             try {
               const { textToSpeechWav } = require('../../utils/elevenLabsClient');
@@ -426,34 +404,63 @@ async function processManyChatPayload(payload, overrideCompany) {
 
               const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
               const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-reply.wav`;
-              console.log('[manychat/voice] Audio URL:', audioPublicUrl);
 
-              // Step 3: Try sending via ManyChat sendContent (type:audio with .wav)
+              // Step 3: Send voice via ManyChat
               console.log('[manychat/voice] Step 3: Sending WAV via ManyChat sendContent...');
               try {
                 const mcResult = await sendManyChatFile(subscriberId, audioPublicUrl, manychatApiKey);
-                console.log('[manychat/voice] Step 3 OK: ManyChat sendContent succeeded:', JSON.stringify(mcResult));
+                console.log('[manychat/voice] Step 3 OK: Voice sent via sendContent');
+                voiceSent = true;
               } catch (mcErr) {
-                const mcBody = mcErr.response?.data;
-                console.warn('[manychat/voice] Step 3 FAILED (sendContent):', mcErr.response?.status, JSON.stringify(mcBody));
+                console.warn('[manychat/voice] Step 3 FAILED (sendContent):', mcErr.response?.status);
 
-                // Fallback: trigger ManyChat flow if configured
+                // Fallback: trigger ManyChat flow
                 const { sendFlow } = require('../../services/manychatService');
                 const voiceReplyStore = require('../../services/voiceReplyStore');
                 const flowNs = process.env.MANYCHAT_VOICE_REPLY_FLOW_NS;
                 if (flowNs) {
                   voiceReplyStore.set(subscriberId, audioPublicUrl);
-                  console.log('[manychat/voice] Step 3b: Falling back to ManyChat flow:', flowNs);
                   const flowResult = await sendFlow(subscriberId, flowNs, manychatApiKey);
-                  console.log('[manychat/voice] Step 3b OK: Flow triggered:', JSON.stringify(flowResult));
-                } else {
-                  console.warn('[manychat/voice] No fallback available. Audio URL for manual test:', audioPublicUrl);
+                  console.log('[manychat/voice] Step 3b OK: Voice sent via flow');
+                  voiceSent = true;
                 }
               }
             } catch (voiceErr) {
               const respData = voiceErr.response?.data;
               const respBody = respData instanceof Buffer ? respData.toString('utf8') : JSON.stringify(respData);
               console.error('[manychat/voice] FAILED. Status:', voiceErr.response?.status, 'Body:', respBody, 'Message:', voiceErr.message);
+            }
+          }
+
+          // Send text reply only if voice was NOT sent (or voice wasn't needed)
+          if (!voiceSent) {
+            await sendInstagramMessage(subscriberId, result.assistant_message, manychatApiKey);
+          }
+
+          incrementMessageCountAndWarn(companyId).catch((err) =>
+            console.warn('[manychat/webhook] message count increment:', err.message)
+          );
+
+          // Social proof images (only with text replies, not voice)
+          if (!voiceSent) {
+            const finalReply = (result.assistant_message || '').toLowerCase();
+            const wantsToSendImages =
+              finalReply.includes('send you some') ||
+              finalReply.includes('show you') ||
+              finalReply.includes('photos') ||
+              finalReply.includes('examples');
+            if (wantsToSendImages) {
+              const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+              if (behavior.social_proof_enabled) {
+                const imagesResult = await pool.query(
+                  'SELECT url, caption FROM social_proof_images WHERE company_id = $1 AND send_when_asked = true LIMIT 3',
+                  [companyId]
+                );
+                const images = imagesResult.rows || [];
+                for (const img of images) {
+                  await sendManyChatImage(lead, img.url, img.caption, companyRow);
+                }
+              }
             }
           }
         } else if (!manychatApiKey) {
