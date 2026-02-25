@@ -4,7 +4,7 @@
  */
 const axios = require('axios');
 
-const BASE_URL = process.env.TARGET_URL || 'https://prefableadcontrolsystem-production.up.railway.app';
+const BASE_URL = process.env.TARGET_URL || 'https://api.eightpath.dev';
 const WEBHOOK_TOKEN = process.env.WEBHOOK_TOKEN || 'test';
 const CONCURRENT_COMPANIES = 10;
 const MESSAGES_PER_COMPANY = 5;

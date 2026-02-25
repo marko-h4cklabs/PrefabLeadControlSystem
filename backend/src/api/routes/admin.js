@@ -268,7 +268,7 @@ router.get('/companies/:id/webhook-url', async (req, res) => {
     if (!row || !row.webhook_token) {
       return errorJson(res, 404, 'NOT_FOUND', 'Company or webhook token not found');
     }
-    const baseUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'https://prefableadcontrolsystem-production.up.railway.app';
+    const baseUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'https://api.eightpath.dev';
     const webhookUrl = `${baseUrl.replace(/\/+$/, '')}/api/webhook/manychat/${row.webhook_token}`;
     res.json({ webhook_url: webhookUrl, webhook_token: row.webhook_token });
   } catch (err) {

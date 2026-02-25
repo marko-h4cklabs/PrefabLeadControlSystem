@@ -31,10 +31,10 @@ function generateVerifyToken() {
 }
 
 async function sendVerificationEmail(toEmail, userName, token) {
-  const fromEmail = process.env.EMAIL_FROM || 'noreply@prefableadcontrolsystem.com';
-  const appName = process.env.APP_NAME || 'Prefab Lead Control System';
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
+  const appName = process.env.APP_NAME || 'EightPath';
   const backendUrl =
-    process.env.BACKEND_URL || 'https://prefableadcontrolsystem-production.up.railway.app';
+    process.env.BACKEND_URL || 'https://api.eightpath.dev';
   const verifyUrl = `${backendUrl}/api/auth/verify-email?token=${token}`;
 
   const transporter = getTransporter();
@@ -61,10 +61,10 @@ async function sendVerificationEmail(toEmail, userName, token) {
 }
 
 async function sendPasswordResetEmail(toEmail, token) {
-  const fromEmail = process.env.EMAIL_FROM || 'noreply@prefableadcontrolsystem.com';
-  const appName = process.env.APP_NAME || 'Prefab Lead Control System';
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
+  const appName = process.env.APP_NAME || 'EightPath';
   const frontendUrl =
-    process.env.FRONTEND_URL || 'https://prefab-lead-hub-c6cbca89.vercel.app';
+    process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
   const transporter = getTransporter();

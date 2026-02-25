@@ -1,5 +1,5 @@
 config:
-  target: "https://prefableadcontrolsystem-production.up.railway.app"
+  target: "https://api.eightpath.dev"
   phases:
     - name: "Warm up"
       duration: 30

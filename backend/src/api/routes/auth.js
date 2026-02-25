@@ -358,7 +358,7 @@ router.get('/verify-email', async (req, res) => {
     );
 
     const frontendUrl =
-      process.env.FRONTEND_URL || 'https://prefab-lead-hub-c6cbca89.vercel.app';
+      process.env.FRONTEND_URL || 'https://app.eightpath.dev';
     return res.redirect(`${frontendUrl}/onboarding?verified=true`);
   } catch (err) {
     return res.send(verifyPage('error', 'Something went wrong. Please try again.'));
@@ -460,7 +460,7 @@ router.post('/verify-phone', authMiddleware, async (req, res) => {
 router.get('/google', (req, res) => {
   if (!isGoogleConfigured()) {
     const frontendUrl =
-      process.env.FRONTEND_URL || 'https://prefab-lead-hub-c6cbca89.vercel.app';
+      process.env.FRONTEND_URL || 'https://app.eightpath.dev';
     return res.redirect(`${frontendUrl}/login?error=google_not_configured`);
   }
   const params = new URLSearchParams({
@@ -476,7 +476,7 @@ router.get('/google', (req, res) => {
 // GET /api/auth/google/callback
 router.get('/google/callback', async (req, res) => {
   const frontendUrl =
-    process.env.FRONTEND_URL || 'https://prefab-lead-hub-c6cbca89.vercel.app';
+    process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   try {
     const { code } = req.query;
     if (!code) return res.redirect(`${frontendUrl}/login?error=google_denied`);
@@ -567,7 +567,7 @@ router.get('/google/callback', async (req, res) => {
 // Simple HTML page for email verification result
 function verifyPage(status, message) {
   const frontendUrl =
-    process.env.FRONTEND_URL || 'https://prefab-lead-hub-c6cbca89.vercel.app';
+    process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   return `<!DOCTYPE html><html><head><title>Email Verification</title><style>
     body{font-family:Arial,sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;}
     .card{background:#111;border:1px solid #222;border-radius:12px;padding:40px;max-width:400px;text-align:center;}

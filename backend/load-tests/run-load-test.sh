@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 mkdir -p load-tests/results
 
 echo "Starting load test..."
-echo "Target: ${TARGET_URL:-https://prefableadcontrolsystem-production.up.railway.app}"
+echo "Target: ${TARGET_URL:-https://api.eightpath.dev}"
 
 export TEST_TOKEN="${TEST_TOKEN:-your_test_jwt_token_here}"
 export TEST_PAGE_ID="${TEST_PAGE_ID:-your_manychat_page_id_here}"
