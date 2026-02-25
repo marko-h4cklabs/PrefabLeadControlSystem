@@ -173,6 +173,11 @@ async function processManyChatPayload(payload, overrideCompany) {
   let messagePreview = null;
 
   try {
+  // IGSID discovery: log all subscriber fields and payload keys to find the Instagram-scoped user ID
+  console.log('[manychat/igsid-discovery] payload keys:', Object.keys(payload));
+  console.log('[manychat/igsid-discovery] subscriber fields:', JSON.stringify(subscriber));
+  console.log('[manychat/igsid-discovery] page_id:', pageId, 'channel:', channel);
+
   console.log('[manychat/webhook] Extracted message:', {
     type: extracted?.type,
     hasContent: !!extracted?.content,
@@ -192,7 +197,8 @@ async function processManyChatPayload(payload, overrideCompany) {
     const companyResult = await pool.query(
       `SELECT id, manychat_api_key, operating_mode,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
-              voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost
+              voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
+              meta_page_access_token, instagram_account_id
        FROM companies WHERE manychat_page_id = $1`,
       [pageId]
     );
@@ -385,7 +391,8 @@ async function processManyChatPayload(payload, overrideCompany) {
             }
           }
 
-          // Voice reply: generate TTS audio and send as file via ManyChat
+          // Voice reply: generate TTS audio and send via Meta's direct API
+          // (ManyChat doesn't support audio/file/video for Instagram — error 3046)
           const shouldSendVoice =
             companyRow.voice_enabled &&
             companyRow.voice_selected_id &&
@@ -395,8 +402,10 @@ async function processManyChatPayload(payload, overrideCompany) {
             try {
               const { textToSpeech } = require('../../utils/elevenLabsClient');
               const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
+              const { getSubscriberInfo, sendInstagramAudio } = require('../../services/instagramDirectService');
 
-              console.log('[manychat/voice] Step 1: Calling ElevenLabs TTS, voiceId:', companyRow.voice_selected_id, 'model:', companyRow.voice_model || 'eleven_turbo_v2_5', 'textLen:', result.assistant_message?.length);
+              // Step 1: Generate TTS audio via ElevenLabs
+              console.log('[manychat/voice] Step 1: ElevenLabs TTS, voiceId:', companyRow.voice_selected_id);
               const ttsResult = await textToSpeech(companyRow.voice_selected_id, result.assistant_message, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
                 stability: parseFloat(companyRow.voice_stability) || 0.5,
@@ -404,10 +413,10 @@ async function processManyChatPayload(payload, overrideCompany) {
                 style: parseFloat(companyRow.voice_style) || 0,
                 speaker_boost: companyRow.voice_speaker_boost !== false,
               });
-              console.log('[manychat/voice] Step 1 OK: TTS returned', ttsResult.audio_base64?.length, 'base64 chars');
+              console.log('[manychat/voice] Step 1 OK: TTS audio generated');
 
+              // Step 2: Store attachment in DB
               const audioBuffer = Buffer.from(ttsResult.audio_base64, 'base64');
-              console.log('[manychat/voice] Step 2: Storing attachment, size:', audioBuffer.length, 'bytes');
               const attachment = await chatAttachmentRepository.create(companyId, lead.id, {
                 mimeType: 'audio/mpeg',
                 fileName: 'voice-reply.mp3',
@@ -418,15 +427,41 @@ async function processManyChatPayload(payload, overrideCompany) {
               console.log('[manychat/voice] Step 2 OK: attachment id:', attachment.id);
 
               const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
-              const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}`;
+              const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-reply.mp3`;
 
-              console.log('[manychat/voice] Step 3: Sending file via ManyChat, url:', audioPublicUrl);
-              await sendManyChatFile(subscriberId, audioPublicUrl, manychatApiKey);
-              console.log('[manychat/voice] Step 3 OK: Voice reply sent successfully');
+              // Step 3: Send via Meta's direct Instagram API (bypasses ManyChat)
+              const pageToken = companyRow.meta_page_access_token || process.env.INSTAGRAM_PAGE_TOKEN;
+              if (pageToken) {
+                // Get subscriber info from ManyChat to discover IGSID
+                console.log('[manychat/voice] Step 3: Resolving IGSID for subscriber:', subscriberId);
+                let igsid = null;
+                try {
+                  const subInfo = await getSubscriberInfo(subscriberId, manychatApiKey);
+                  console.log('[manychat/voice] ManyChat subscriber info keys:', subInfo ? Object.keys(subInfo) : 'null');
+                  console.log('[manychat/voice] ManyChat subscriber info:', JSON.stringify(subInfo).slice(0, 800));
+                  // Try known field names for IGSID
+                  igsid = subInfo?.ig_id || subInfo?.igsid || subInfo?.instagram_id || subInfo?.platform_id || null;
+                } catch (subErr) {
+                  console.warn('[manychat/voice] Subscriber info lookup failed:', subErr.message);
+                }
+
+                if (igsid) {
+                  console.log('[manychat/voice] IGSID found:', igsid, '— sending audio via Meta API');
+                  const metaResult = await sendInstagramAudio(igsid, audioPublicUrl, pageToken);
+                  console.log('[manychat/voice] Step 3 OK: Audio sent via Meta API:', JSON.stringify(metaResult));
+                } else {
+                  // Fallback: try ManyChat subscriber_id as IGSID (some setups use platform IDs)
+                  console.warn('[manychat/voice] No IGSID found in subscriber info. Trying subscriber_id as fallback:', subscriberId);
+                  const metaResult = await sendInstagramAudio(subscriberId, audioPublicUrl, pageToken);
+                  console.log('[manychat/voice] Step 3 OK (fallback): Audio sent via Meta API:', JSON.stringify(metaResult));
+                }
+              } else {
+                console.warn('[manychat/voice] No page token. Set INSTAGRAM_PAGE_TOKEN env var or meta_page_access_token in DB. Audio generated but cannot send.');
+              }
             } catch (voiceErr) {
               const respData = voiceErr.response?.data;
               const respBody = respData instanceof Buffer ? respData.toString('utf8') : JSON.stringify(respData);
-              console.error('[manychat/voice] FAILED at step above. Status:', voiceErr.response?.status, 'Body:', respBody, 'Message:', voiceErr.message);
+              console.error('[manychat/voice] FAILED. Status:', voiceErr.response?.status, 'Body:', respBody, 'Message:', voiceErr.message);
             }
           }
         } else if (!manychatApiKey) {
