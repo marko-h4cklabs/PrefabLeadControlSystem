@@ -107,6 +107,28 @@ async function updateParsedFields(leadId, parsedFields) {
   return toPlainConversation(result.rows[0]);
 }
 
+async function mergeBookingState(leadId, phase, bookingPatch) {
+  const existing = await pool.query(
+    'SELECT parsed_fields FROM conversations WHERE lead_id = $1',
+    [leadId]
+  );
+  const current = existing.rows[0]?.parsed_fields ?? {};
+  const currentBooking = current.__booking ?? {};
+  const merged = {
+    ...current,
+    __booking_phase: phase,
+    __booking: { ...currentBooking, ...bookingPatch, updatedAt: new Date().toISOString() },
+  };
+  const result = await pool.query(
+    `UPDATE conversations
+     SET parsed_fields = $1::jsonb, last_updated = NOW()
+     WHERE lead_id = $2
+     RETURNING *`,
+    [JSON.stringify(merged), leadId]
+  );
+  return toPlainConversation(result.rows[0]);
+}
+
 async function updateStep(leadId, step) {
   const result = await pool.query(
     `UPDATE conversations
@@ -123,5 +145,6 @@ module.exports = {
   getByLeadId,
   appendMessage,
   updateParsedFields,
+  mergeBookingState,
   updateStep,
 };

@@ -355,8 +355,40 @@ async function processManyChatPayload(payload, overrideCompany) {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
         await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
       } else {
-        // Smart delay: wait before replying, reset if user sends another message
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+
+        // --- BOOKING: check if user is in an active booking flow ---
+        const { handleActiveBookingPhase, evaluatePostReplyBooking } = require('../../../services/manychatBookingHandler');
+        const { isActiveBookingPhase } = require('../../../services/bookingTriggerService');
+        const convForBooking = await conversationRepository.getByLeadId(lead.id);
+        const parsedFields = convForBooking?.parsed_fields ?? {};
+        const bookingPhase = parsedFields.__booking_phase || null;
+        const bookingData = parsedFields.__booking || null;
+
+        if (isActiveBookingPhase(bookingPhase)) {
+          console.log('[booking] Active phase:', bookingPhase, 'for lead:', lead.id);
+          const bookingResult = await handleActiveBookingPhase({
+            leadId: lead.id,
+            companyId,
+            userMessage: content,
+            bookingPhase,
+            bookingData,
+            lead,
+          });
+          if (bookingResult?.handled && bookingResult.replyMessage) {
+            await conversationRepository.appendMessage(lead.id, 'assistant', bookingResult.replyMessage);
+            if (manychatApiKey) {
+              await sendInstagramMessage(subscriberId, bookingResult.replyMessage, manychatApiKey);
+              incrementMessageCountAndWarn(companyId).catch(() => {});
+            }
+            logLeadActivity({ companyId, leadId: lead.id, eventType: 'ai_reply_sent', actorType: 'ai', source: 'instagram', channel: 'instagram', metadata: { bookingPhase } }).catch(() => {});
+            success = true;
+            return;
+          }
+          // Not handled — fall through to normal AI reply
+        }
+
+        // Smart delay: wait before replying, reset if user sends another message
         const delaySeconds = Number(behavior.response_delay_seconds) || 0;
         if (delaySeconds > 0) {
           const messageDelayService = require('../../services/messageDelayService');
@@ -371,29 +403,46 @@ async function processManyChatPayload(payload, overrideCompany) {
 
         const result = await aiReplyService.generateAiReply(companyId, lead.id);
 
-        // Booking intent detection: if user asks to book and company has Calendly, append link
-        if (behavior.booking_trigger_enabled && behavior.calendly_url) {
-          const { looksLikeBookingIntent } = require('../../../services/bookingTriggerService');
-          const userText = extracted?.content || '';
-          if (looksLikeBookingIntent(userText)) {
-            const offerMsg = behavior.booking_offer_message || 'You can book a time that works for you here:';
-            result.assistant_message += `\n\n${offerMsg}\n${behavior.calendly_url}`;
-            console.log('[manychat/webhook] Booking intent detected, appended Calendly link');
-          }
+        // --- BOOKING: evaluate if we should offer booking after AI reply ---
+        const quoteComplete = Array.isArray(result.missing_required_infos) && result.missing_required_infos.length === 0;
+        const refreshedConv = await conversationRepository.getByLeadId(lead.id);
+        const refreshedParsed = refreshedConv?.parsed_fields ?? {};
+        const currentBookingPhase = refreshedParsed.__booking_phase || null;
+        const currentBookingData = refreshedParsed.__booking || null;
+        let bookingOfferAppended = false;
+
+        const bookingOffer = await evaluatePostReplyBooking({
+          leadId: lead.id,
+          companyId,
+          userMessage: content,
+          quoteComplete,
+          bookingPhase: currentBookingPhase,
+          bookingData: currentBookingData,
+        });
+        if (bookingOffer?.offerMessage) {
+          result.assistant_message += bookingOffer.offerMessage;
+          bookingOfferAppended = true;
+          console.log('[booking] Offer appended, phase:', bookingOffer.bookingPhase);
         }
 
         await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
 
         const merged = result.parsed_fields ?? result.field_updates ?? {};
-        const currentConv = await conversationRepository.getByLeadId(lead.id);
-        const currentParsed = currentConv?.parsed_fields ?? {};
-        if (JSON.stringify(merged) !== JSON.stringify(currentParsed) && Object.keys(merged).length > 0) {
-          await conversationRepository.updateParsedFields(lead.id, merged);
+        if (Object.keys(merged).length > 0) {
+          // Preserve booking state keys when updating parsed fields from AI extraction
+          const latestConv = await conversationRepository.getByLeadId(lead.id);
+          const latestParsed = latestConv?.parsed_fields ?? {};
+          const withBooking = { ...merged };
+          if (latestParsed.__booking_phase !== undefined) withBooking.__booking_phase = latestParsed.__booking_phase;
+          if (latestParsed.__booking !== undefined) withBooking.__booking = latestParsed.__booking;
+          await conversationRepository.updateParsedFields(lead.id, withBooking);
         }
 
         if (manychatApiKey && result.assistant_message) {
           // Determine if voice reply should be sent instead of text
+          // Don't use voice if booking offer was appended (slot lists need to be readable)
           const shouldSendVoice =
+            !bookingOfferAppended &&
             companyRow.voice_enabled &&
             companyRow.voice_selected_id &&
             (companyRow.voice_mode === 'always' || (companyRow.voice_mode === 'match' && isAudioMessage));
