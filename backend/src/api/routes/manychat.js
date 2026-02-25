@@ -355,6 +355,20 @@ async function processManyChatPayload(payload, overrideCompany) {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
         await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
       } else {
+        // Smart delay: wait before replying, reset if user sends another message
+        const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+        const delaySeconds = Number(behavior.response_delay_seconds) || 0;
+        if (delaySeconds > 0) {
+          const messageDelayService = require('../../services/messageDelayService');
+          console.log('[manychat/webhook] Smart delay:', delaySeconds, 'sec for lead:', lead.id);
+          const shouldProceed = await messageDelayService.waitOrReset(lead.id, delaySeconds);
+          if (!shouldProceed) {
+            console.log('[manychat/webhook] Smart delay: superseded by newer message, skipping reply for lead:', lead.id);
+            return;
+          }
+          console.log('[manychat/webhook] Smart delay: timer expired, proceeding with reply for lead:', lead.id);
+        }
+
         const result = await aiReplyService.generateAiReply(companyId, lead.id);
         await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
 
