@@ -396,6 +396,7 @@ async function processManyChatPayload(payload, overrideCompany) {
               const { textToSpeech } = require('../../utils/elevenLabsClient');
               const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
 
+              console.log('[manychat/voice] Step 1: Calling ElevenLabs TTS, voiceId:', companyRow.voice_selected_id, 'model:', companyRow.voice_model || 'eleven_turbo_v2_5', 'textLen:', result.assistant_message?.length);
               const ttsResult = await textToSpeech(companyRow.voice_selected_id, result.assistant_message, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
                 stability: parseFloat(companyRow.voice_stability) || 0.5,
@@ -403,8 +404,10 @@ async function processManyChatPayload(payload, overrideCompany) {
                 style: parseFloat(companyRow.voice_style) || 0,
                 speaker_boost: companyRow.voice_speaker_boost !== false,
               });
+              console.log('[manychat/voice] Step 1 OK: TTS returned', ttsResult.audio_base64?.length, 'base64 chars');
 
               const audioBuffer = Buffer.from(ttsResult.audio_base64, 'base64');
+              console.log('[manychat/voice] Step 2: Storing attachment, size:', audioBuffer.length, 'bytes');
               const attachment = await chatAttachmentRepository.create(companyId, lead.id, {
                 mimeType: 'audio/mpeg',
                 fileName: 'voice-reply.mp3',
@@ -412,14 +415,18 @@ async function processManyChatPayload(payload, overrideCompany) {
                 buffer: audioBuffer,
                 conversationId: conversation?.id ?? null,
               });
+              console.log('[manychat/voice] Step 2 OK: attachment id:', attachment.id);
 
               const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
               const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}`;
 
+              console.log('[manychat/voice] Step 3: Sending file via ManyChat, url:', audioPublicUrl);
               await sendManyChatFile(subscriberId, audioPublicUrl, manychatApiKey);
-              console.log('[manychat/webhook] Voice reply sent:', audioPublicUrl);
+              console.log('[manychat/voice] Step 3 OK: Voice reply sent successfully');
             } catch (voiceErr) {
-              console.warn('[manychat/webhook] Voice reply failed, text was already sent:', voiceErr.message);
+              const respData = voiceErr.response?.data;
+              const respBody = respData instanceof Buffer ? respData.toString('utf8') : JSON.stringify(respData);
+              console.error('[manychat/voice] FAILED at step above. Status:', voiceErr.response?.status, 'Body:', respBody, 'Message:', voiceErr.message);
             }
           }
         } else if (!manychatApiKey) {
