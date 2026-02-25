@@ -112,8 +112,9 @@ const authLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,
+  windowMs: 60 * 1000,
+  max: 200,
+  keyGenerator: (req) => req.user?.id || req.ip,
   message: { error: { code: 'RATE_LIMIT', message: 'Too many requests, please slow down' } },
   standardHeaders: true,
   legacyHeaders: false,
