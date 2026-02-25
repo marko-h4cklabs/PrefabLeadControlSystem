@@ -101,6 +101,10 @@ app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billi
 
 app.use(express.json());
 
+// ManyChat External Request endpoint for voice reply (public, no auth)
+const manychatVoiceReplyRouter = require('./api/routes/manychatVoiceReply');
+app.use('/api/manychat/voice-reply-content', manychatVoiceReplyRouter);
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
