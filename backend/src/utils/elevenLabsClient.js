@@ -112,10 +112,12 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
       'xi-api-key': key,
       'Content-Type': 'application/json',
     },
+    params: {
+      output_format: 'pcm_22050',
+    },
     data: {
       text,
       model_id: settings.model || 'eleven_turbo_v2_5',
-      output_format: 'pcm_22050',
       voice_settings: {
         stability: settings.stability ?? 0.5,
         similarity_boost: settings.similarity_boost ?? 0.75,

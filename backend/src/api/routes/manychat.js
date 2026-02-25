@@ -18,7 +18,7 @@ const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const aiReplyService = require('../../../services/aiReplyService');
 const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
-const { sendInstagramMessage, sendManyChatImage } = require('../../services/manychatService');
+const { sendInstagramMessage, sendManyChatImage, sendManyChatFile } = require('../../services/manychatService');
 const { createNotification } = require('../../services/notificationService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
@@ -401,10 +401,8 @@ async function processManyChatPayload(payload, overrideCompany) {
             try {
               const { textToSpeechWav } = require('../../utils/elevenLabsClient');
               const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
-              const voiceReplyStore = require('../../services/voiceReplyStore');
-              const { sendFlow } = require('../../services/manychatService');
 
-              // Step 1: Generate TTS audio via ElevenLabs (WAV format for ManyChat)
+              // Step 1: Generate TTS audio via ElevenLabs (WAV format)
               console.log('[manychat/voice] Step 1: ElevenLabs TTS (WAV), voiceId:', companyRow.voice_selected_id);
               const ttsResult = await textToSpeechWav(companyRow.voice_selected_id, result.assistant_message, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
@@ -413,7 +411,7 @@ async function processManyChatPayload(payload, overrideCompany) {
                 style: parseFloat(companyRow.voice_style) || 0,
                 speaker_boost: companyRow.voice_speaker_boost !== false,
               });
-              console.log('[manychat/voice] Step 1 OK: WAV audio generated');
+              console.log('[manychat/voice] Step 1 OK: WAV audio generated, base64 length:', ttsResult.audio_base64.length);
 
               // Step 2: Store attachment in DB
               const audioBuffer = Buffer.from(ttsResult.audio_base64, 'base64');
@@ -424,23 +422,33 @@ async function processManyChatPayload(payload, overrideCompany) {
                 buffer: audioBuffer,
                 conversationId: conversation?.id ?? null,
               });
-              console.log('[manychat/voice] Step 2 OK: attachment id:', attachment.id, 'size:', audioBuffer.length);
+              console.log('[manychat/voice] Step 2 OK: attachment id:', attachment.id, 'size:', audioBuffer.length, 'bytes');
 
               const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
               const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-reply.wav`;
+              console.log('[manychat/voice] Audio URL:', audioPublicUrl);
 
-              // Step 3: Store pending audio URL and trigger ManyChat voice reply flow
-              voiceReplyStore.set(subscriberId, audioPublicUrl);
-              console.log('[manychat/voice] Step 3: Stored pending audio for subscriber:', subscriberId);
+              // Step 3: Try sending via ManyChat sendContent (type:audio with .wav)
+              console.log('[manychat/voice] Step 3: Sending WAV via ManyChat sendContent...');
+              try {
+                const mcResult = await sendManyChatFile(subscriberId, audioPublicUrl, manychatApiKey);
+                console.log('[manychat/voice] Step 3 OK: ManyChat sendContent succeeded:', JSON.stringify(mcResult));
+              } catch (mcErr) {
+                const mcBody = mcErr.response?.data;
+                console.warn('[manychat/voice] Step 3 FAILED (sendContent):', mcErr.response?.status, JSON.stringify(mcBody));
 
-              const flowNs = process.env.MANYCHAT_VOICE_REPLY_FLOW_NS;
-              if (flowNs) {
-                console.log('[manychat/voice] Step 4: Triggering ManyChat flow:', flowNs);
-                const flowResult = await sendFlow(subscriberId, flowNs, manychatApiKey);
-                console.log('[manychat/voice] Step 4 OK: Flow triggered:', JSON.stringify(flowResult));
-              } else {
-                console.warn('[manychat/voice] No MANYCHAT_VOICE_REPLY_FLOW_NS env var set. Audio stored but flow not triggered.');
-                console.log('[manychat/voice] Audio URL (for manual testing):', audioPublicUrl);
+                // Fallback: trigger ManyChat flow if configured
+                const { sendFlow } = require('../../services/manychatService');
+                const voiceReplyStore = require('../../services/voiceReplyStore');
+                const flowNs = process.env.MANYCHAT_VOICE_REPLY_FLOW_NS;
+                if (flowNs) {
+                  voiceReplyStore.set(subscriberId, audioPublicUrl);
+                  console.log('[manychat/voice] Step 3b: Falling back to ManyChat flow:', flowNs);
+                  const flowResult = await sendFlow(subscriberId, flowNs, manychatApiKey);
+                  console.log('[manychat/voice] Step 3b OK: Flow triggered:', JSON.stringify(flowResult));
+                } else {
+                  console.warn('[manychat/voice] No fallback available. Audio URL for manual test:', audioPublicUrl);
+                }
               }
             } catch (voiceErr) {
               const respData = voiceErr.response?.data;
