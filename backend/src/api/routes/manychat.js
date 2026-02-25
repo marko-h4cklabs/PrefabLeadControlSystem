@@ -370,6 +370,18 @@ async function processManyChatPayload(payload, overrideCompany) {
         }
 
         const result = await aiReplyService.generateAiReply(companyId, lead.id);
+
+        // Booking intent detection: if user asks to book and company has Calendly, append link
+        if (behavior.booking_trigger_enabled && behavior.calendly_url) {
+          const { looksLikeBookingIntent } = require('../../../services/bookingTriggerService');
+          const userText = extracted?.content || '';
+          if (looksLikeBookingIntent(userText)) {
+            const offerMsg = behavior.booking_offer_message || 'You can book a time that works for you here:';
+            result.assistant_message += `\n\n${offerMsg}\n${behavior.calendly_url}`;
+            console.log('[manychat/webhook] Booking intent detected, appended Calendly link');
+          }
+        }
+
         await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
 
         const merged = result.parsed_fields ?? result.field_updates ?? {};
