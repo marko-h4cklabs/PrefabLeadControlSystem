@@ -56,6 +56,14 @@ function extractMessageContent(payload) {
     return { type: 'audio', content: null, audioUrl };
   }
 
+  // Detect Instagram voice messages sent by ManyChat as a plain text CDN URL
+  if (msg.text && typeof msg.text === 'string') {
+    const trimmed = msg.text.trim();
+    if (trimmed.includes('lookaside.fbsbx.com/ig_messaging_cdn')) {
+      return { type: 'audio', content: null, audioUrl: trimmed };
+    }
+  }
+
   // TEXT message — if there is a text field with actual text content and no audio payload.
   if (msg.text && typeof msg.text === 'string' && msg.text.trim().length > 0) {
     return { type: 'text', content: msg.text.trim() };
