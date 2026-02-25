@@ -92,7 +92,7 @@ async function sendManyChatFile(subscriberId, fileUrl, apiKey) {
           type: 'instagram',
           messages: [
             {
-              type: 'file',
+              type: 'audio',
               url: fileUrl,
             },
           ],
