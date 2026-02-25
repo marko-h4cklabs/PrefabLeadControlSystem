@@ -12,9 +12,9 @@ const voiceReplyStore = require('../../services/voiceReplyStore');
 
 router.post('/', express.json(), (req, res) => {
   try {
-    // ManyChat External Request sends subscriber_id in the body
-    const subscriberId = req.body?.subscriber_id || req.query?.subscriber_id;
-    console.log('[voice-reply-content] Request from ManyChat. subscriber_id:', subscriberId, 'body:', JSON.stringify(req.body).slice(0, 500));
+    // ManyChat "Full Contact Data" sends subscriber ID as "id"
+    const subscriberId = req.body?.subscriber_id || req.body?.id || req.query?.subscriber_id;
+    console.log('[voice-reply-content] Request from ManyChat. subscriber_id:', subscriberId, 'body keys:', Object.keys(req.body || {}));
 
     if (!subscriberId) {
       console.warn('[voice-reply-content] No subscriber_id in request');
