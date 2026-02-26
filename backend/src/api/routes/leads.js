@@ -166,8 +166,10 @@ function toLeadPublic(lead) {
 function parsedFieldsToCollected(parsedFields, quoteFields) {
   const quoteByName = Object.fromEntries((quoteFields ?? []).map((f) => [f.name, f]));
   return Object.entries(parsedFields ?? {})
-    .filter(([, v]) => {
+    .filter(([key, v]) => {
+      if (key.startsWith('__')) return false;
       if (v == null) return false;
+      if (typeof v === 'object' && !Array.isArray(v)) return false;
       if (Array.isArray(v)) return v.length > 0;
       return String(v).trim() !== '';
     })
