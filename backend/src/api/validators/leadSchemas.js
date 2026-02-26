@@ -27,7 +27,7 @@ const uuidOptional = z
   .transform((v) => (v && v.trim() ? v : undefined));
 
 const listLeadsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   status: z.enum(VALID_STATUSES).optional(),
   statusId: uuidOptional,
