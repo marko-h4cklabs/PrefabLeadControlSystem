@@ -170,6 +170,8 @@ app.use('/api/team', ...protectedStack, teamRouter);
 app.use('/api/voice', ...protectedStack, voiceRouter);
 const autoresponderRouter = require('./api/routes/autoresponder');
 app.use('/api/autoresponder', ...protectedStack, autoresponderRouter);
+const queueRouter = require('./api/routes/queue');
+app.use('/api/queue', ...protectedStack, queueRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {
