@@ -81,16 +81,13 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
 
   const toneInstructions = {
     professional:
-      'Be professional, polished, and credible. Use clear business language. Avoid slang.',
+      'Formal, polished, structured, neutral business communication.',
     friendly:
-      'Be warm, approachable, and personable. Use conversational language. Feel like a friend.',
-    casual:
-      'Be very relaxed and informal. Use everyday language, contractions, and feel natural.',
-    direct: 'Be concise and straight to the point. No fluff. Every sentence has a purpose.',
-    empathetic:
-      'Be understanding and supportive. Acknowledge feelings before providing information.',
-    humorous: 'Be light-hearted with appropriate humor. Keep it professional but fun.',
-    busy: 'Be brief and efficient. No filler. No unnecessary apologies.',
+      'Warm, conversational, approachable communication that feels human.',
+    confident:
+      'Clear, assertive, authoritative communication that sounds decisive and competent.',
+    relatable:
+      'Natural, down-to-earth, modern communication that feels easy and human without being unprofessional.',
   }[tone] || 'Be natural and conversational.';
 
   const lengthInstructions = {

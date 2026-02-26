@@ -44,7 +44,7 @@ router.get('/availability', async (req, res) => {
   }
 });
 
-const VALID_APPOINTMENT_TYPES = new Set(['call', 'site_visit', 'meeting', 'follow_up', 'consultation', 'video_call']);
+const VALID_APPOINTMENT_TYPES = new Set(['call', 'meeting', 'follow_up', 'consultation', 'video_call']);
 
 /**
  * Pick the first defined value from an object for a list of candidate keys.

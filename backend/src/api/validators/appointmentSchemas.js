@@ -1,6 +1,6 @@
 const { z } = require('zod');
 
-const APPOINTMENT_TYPES = ['call', 'site_visit', 'meeting', 'follow_up'];
+const APPOINTMENT_TYPES = ['call', 'meeting', 'follow_up', 'consultation', 'video_call'];
 const APPOINTMENT_STATUSES = ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show'];
 const APPOINTMENT_STATUSES_NORMALIZED = ['scheduled', 'completed', 'cancelled', 'no_show'];
 const APPOINTMENT_SOURCES = ['manual', 'chatbot', 'google_sync'];

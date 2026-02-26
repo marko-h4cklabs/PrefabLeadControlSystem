@@ -94,12 +94,25 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/deals/stats
+// GET /api/deals/stats?period=day|week|month|year  OR  ?from=&to=
 router.get('/stats', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const from = req.query.from ?? null;
-    const to = req.query.to ?? null;
+    let from = req.query.from ?? null;
+    let to = req.query.to ?? null;
+
+    // Convenience: ?period= calculates from/to automatically
+    if (req.query.period && !from && !to) {
+      const now = new Date();
+      to = now.toISOString().slice(0, 10);
+      switch (req.query.period) {
+        case 'day':   from = to; break;
+        case 'week':  { const d = new Date(now); d.setDate(d.getDate() - 7); from = d.toISOString().slice(0, 10); break; }
+        case 'month': { const d = new Date(now); d.setMonth(d.getMonth() - 1); from = d.toISOString().slice(0, 10); break; }
+        case 'year':  { const d = new Date(now); d.setFullYear(d.getFullYear() - 1); from = d.toISOString().slice(0, 10); break; }
+      }
+    }
+
     const stats = await dealRepository.getStats(companyId, { from, to });
     res.json(stats);
   } catch (err) {

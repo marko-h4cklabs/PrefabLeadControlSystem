@@ -18,7 +18,7 @@ const companyInfoBodySchema = z
     return out;
   });
 
-const TONE_VALUES = ['professional', 'friendly', 'casual', 'direct', 'empathetic', 'humorous', 'busy'];
+const TONE_VALUES = ['professional', 'friendly', 'confident', 'relatable'];
 const RESPONSE_LENGTH_VALUES = ['short', 'medium', 'long'];
 const PERSONA_VALUES = ['busy', 'explanational', 'casual', 'formal', 'question', 'statement'];
 const OPENER_VALUES = ['casual', 'professional', 'direct', 'formal', 'question', 'statement', 'greeting'];

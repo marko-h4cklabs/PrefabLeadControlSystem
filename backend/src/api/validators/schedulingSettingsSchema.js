@@ -1,6 +1,6 @@
 const { z } = require('zod');
 
-const APPOINTMENT_TYPES = ['call', 'site_visit', 'meeting', 'follow_up'];
+const APPOINTMENT_TYPES = ['call', 'meeting', 'follow_up', 'consultation', 'video_call'];
 const BOOKING_MODES = ['off', 'manual_request', 'direct_booking'];
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const TIME_RE = /^\d{2}:\d{2}$/;

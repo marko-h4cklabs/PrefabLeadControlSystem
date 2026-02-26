@@ -515,15 +515,27 @@ router.get('/quote-fields', async (req, res) => {
 router.post('/quote-fields/custom', async (req, res) => {
   try {
     const { label, field_type = 'text' } = req.body ?? {};
-    if (!label || !String(label).trim()) {
+    const trimmedLabel = label ? String(label).trim() : '';
+    if (!trimmedLabel || trimmedLabel.length < 1) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Label is required' } });
     }
+    if (trimmedLabel.length > 255) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Label must be 255 characters or less' } });
+    }
+    const VALID_FIELD_TYPES = ['text', 'number', 'email', 'phone', 'date', 'url', 'textarea', 'select'];
+    const ft = String(field_type || 'text').trim().toLowerCase();
+    if (!VALID_FIELD_TYPES.includes(ft)) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `field_type must be one of: ${VALID_FIELD_TYPES.join(', ')}` } });
+    }
     const created = await chatbotQuoteFieldsRepository.createCustom(req.tenantId, {
-      label: String(label).trim(),
-      field_type: String(field_type || 'text').trim(),
+      label: trimmedLabel,
+      field_type: ft,
     });
     res.status(201).json(created);
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: { code: 'CONFLICT', message: 'A field with this name already exists' } });
+    }
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });

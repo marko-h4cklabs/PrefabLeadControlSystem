@@ -1,6 +1,6 @@
 const { z } = require('zod');
 
-const REQUEST_TYPES = ['call', 'site_visit', 'meeting', 'follow_up'];
+const REQUEST_TYPES = ['call', 'meeting', 'follow_up', 'consultation', 'video_call'];
 const REQUEST_STATUSES = ['open', 'converted', 'closed', 'cancelled'];
 const SOURCES = ['chatbot', 'manual'];
 const AVAILABILITY_MODES = ['manual', 'slot_selected'];

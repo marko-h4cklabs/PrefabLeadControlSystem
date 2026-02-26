@@ -6,7 +6,7 @@
  * offers when scheduling is disabled.
  */
 
-const BOOKING_INTENT_RE = /\b(schedule|book|appointment|call me|when are you free|can we (talk|meet|call)|set up a (call|meeting)|arrange a (call|meeting)|site visit|consultation|pick a time|zakazi|zakazati|dogovor|nazovi|pozovi|možemo li se čuti|termin)\b/i;
+const BOOKING_INTENT_RE = /\b(schedule|book|appointment|call me|when are you free|can we (talk|meet|call)|set up a (call|meeting)|arrange a (call|meeting)|consultation|pick a time|zakazi|zakazati|dogovor|nazovi|pozovi|možemo li se čuti|termin)\b/i;
 const DISMISS_RE = /\b(later|not now|no thanks|don'?t call|no appointment|maybe later|skip|ne treba|ne sada|ne hvala|preskoci)\b/i;
 const RESLOT_RE = /\b(more slots|another time|show tomorrow|different time|other time|next week|earlier|later time|drugi termin|drugi dan)\b/i;
 
