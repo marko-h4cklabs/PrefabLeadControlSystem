@@ -116,11 +116,13 @@ async function runIntentScoring(leadId, companyId, messages) {
   }
 
   const prev = await pool.query(
-    'SELECT is_hot_lead FROM leads WHERE id = $1 AND company_id = $2',
+    'SELECT is_hot_lead, budget_detected FROM leads WHERE id = $1 AND company_id = $2',
     [leadId, companyId]
   );
   const wasHot = prev.rows[0]?.is_hot_lead === true;
   const justBecameHotLead = parsed.is_hot_lead && !wasHot;
+  const hadBudget = !!prev.rows[0]?.budget_detected;
+  const nowHasBudget = !!parsed.budget_detected;
 
   await pool.query(
     `UPDATE leads SET
@@ -163,6 +165,24 @@ async function runIntentScoring(leadId, companyId, messages) {
       } catch (e) {
         console.warn('[leadIntelligence] createNotification hot_lead:', e.message);
       }
+    }
+  }
+
+  // Notify when budget is first detected
+  if (!hadBudget && nowHasBudget) {
+    try {
+      const { createNotification } = require('../src/services/notificationService');
+      const leadRow2 = await pool.query('SELECT name FROM leads WHERE id = $1 AND company_id = $2', [leadId, companyId]);
+      const leadName2 = leadRow2.rows[0]?.name || 'Lead';
+      await createNotification(
+        companyId,
+        'budget_detected',
+        'Budget detected',
+        `${leadName2}: ${parsed.budget_detected}`,
+        leadId
+      );
+    } catch (e) {
+      console.warn('[leadIntelligence] createNotification budget_detected:', e.message);
     }
   }
 

@@ -13,6 +13,7 @@ const {
 } = require('../../../db/repositories');
 const { notifyNewLeadCreated } = require('../../../services/newLeadNotifier');
 const { logLeadActivity } = require('../../../services/activityLogger');
+const { createNotification } = require('../../services/notificationService');
 
 const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -739,10 +740,32 @@ router.patch('/:id', async (req, res) => {
     if (parsed.data.status !== undefined) updateData.status = parsed.data.status;
     if (parsed.data.status_id !== undefined) updateData.status_id = parsed.data.status_id;
     if (parsed.data.assigned_sales !== undefined) updateData.assigned_sales = parsed.data.assigned_sales;
+
+    // Read existing lead before update to detect changes
+    const oldLead = await leadRepository.findById(req.tenantId, req.params.id);
+    if (!oldLead) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    }
+
     const lead = await leadRepository.update(req.tenantId, req.params.id, updateData);
     if (!lead) {
       return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
     }
+
+    // Notify on status_id change
+    if (parsed.data.status_id !== undefined && parsed.data.status_id !== oldLead.status_id) {
+      const leadName = lead.name || lead.channel || 'Lead';
+      const newStatus = await companyLeadStatusesRepository.findByIdAndCompany(parsed.data.status_id, req.tenantId);
+      const statusName = newStatus?.name || 'Unknown';
+      createNotification(
+        req.tenantId,
+        'status_change',
+        'Lead status updated',
+        `${leadName} status changed to ${statusName}`,
+        req.params.id
+      ).catch(() => {});
+    }
+
     res.json(toLeadResponse(lead));
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
