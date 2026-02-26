@@ -360,6 +360,8 @@ async function processManyChatPayload(payload, overrideCompany) {
   const warmingService = require('../../services/warmingService');
   warmingService.cancelEnrollment(lead.id, 'no_show_detected').catch(() => {});
   warmingService.cancelEnrollment(lead.id, 'no_reply_72h').catch(() => {});
+  // Record reply for warming follow-up tracking (sentiment + reply status)
+  warmingService.recordLeadReply(lead.id, content).catch(() => {});
 
   logLeadActivity({
     companyId,

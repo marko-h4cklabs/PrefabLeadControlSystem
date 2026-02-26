@@ -6,8 +6,9 @@
 const IORedis = require('ioredis');
 const { Queue } = require('bullmq');
 const { pool } = require('../../db');
-const { leadRepository, companyRepository } = require('../../db/repositories');
+const { leadRepository, companyRepository, conversationRepository } = require('../../db/repositories');
 const { sendInstagramMessage } = require('./manychatService');
+const { createNotification } = require('./notificationService');
 
 const QUEUE_NAME = 'warming-queue';
 let queue = null;
@@ -121,20 +122,82 @@ async function enrollLeadInSequence(leadId, companyId, sequenceId) {
 }
 
 /**
+ * Generate an AI-powered follow-up message using conversation context.
+ */
+async function generateAiFollowUp(lead, company, conversationMessages, previousFollowUps, aiPrompt) {
+  try {
+    const { claudeWithRetry } = require('../utils/claudeWithRetry');
+    const leadName = lead.name || lead.external_id || 'there';
+    const companyName = company.name || 'our company';
+
+    // Build context from conversation
+    const recentConvo = (conversationMessages || []).slice(-15).map(m => `${m.role}: ${m.content}`).join('\n');
+    const prevFollowUps = (previousFollowUps || []).map(f => `Previous follow-up: ${f.message_sent}`).join('\n');
+
+    const prompt = `You are ${companyName}'s follow-up assistant. Write a natural, human-sounding follow-up DM to ${leadName}.
+
+CONTEXT:
+${recentConvo ? `Recent conversation:\n${recentConvo}` : 'No prior conversation available.'}
+${prevFollowUps ? `\n${prevFollowUps}` : ''}
+
+${aiPrompt ? `INSTRUCTION: ${aiPrompt}` : ''}
+
+RULES:
+- Reference something specific from the conversation (not generic)
+- Don't repeat angles from previous follow-ups
+- Keep it to 1-2 sentences max
+- Sound like a real person texting, not a bot
+- Create curiosity or value, not pressure
+- Never use "just checking in" or "following up"
+
+Output ONLY the message text, nothing else.`;
+
+    const { content } = await claudeWithRetry({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const text = content?.[0]?.text || content?.text || null;
+    return typeof text === 'string' ? text.trim() : null;
+  } catch (err) {
+    console.warn('[warming] AI follow-up generation failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Check branching conditions against lead/conversation state.
+ * Returns true if the step should be executed, false if it should be skipped.
+ */
+function evaluateConditions(conditions, context) {
+  if (!conditions) return true;
+
+  // conditions: { skip_if_replied: true, skip_if_negative: true, only_if_no_reply: true }
+  if (conditions.skip_if_replied && context.leadReplied) return false;
+  if (conditions.only_if_no_reply && context.leadReplied) return false;
+  if (conditions.skip_if_negative && context.lastSentiment === 'negative') return false;
+  if (conditions.only_if_interested && context.lastSentiment !== 'positive') return false;
+
+  return true;
+}
+
+/**
  * Process a single warming step (called by BullMQ worker).
- * Sends message via ManyChat, logs, schedules next step or marks completed.
+ * Supports: static templates, AI-generated messages, branching conditions, escalation.
  */
 async function processWarmingStep(enrollmentId, stepId) {
   const enrollment = await pool.query(
-    `SELECT id, lead_id, sequence_id, company_id, status, current_step
+    `SELECT id, lead_id, sequence_id, company_id, status, current_step, follow_ups_sent, paused, escalated
      FROM warming_enrollments WHERE id = $1`,
     [enrollmentId]
   );
   const enr = enrollment.rows[0];
   if (!enr || enr.status !== 'active') return;
+  if (enr.paused) return; // paused enrollment, skip
 
   const step = await pool.query(
-    `SELECT id, step_order, delay_minutes, message_template FROM warming_steps WHERE id = $1`,
+    `SELECT id, step_order, delay_minutes, message_template, step_type, conditions, ai_context_prompt
+     FROM warming_steps WHERE id = $1`,
     [stepId]
   );
   const st = step.rows[0];
@@ -144,6 +207,25 @@ async function processWarmingStep(enrollmentId, stepId) {
   if (!lead) return;
   if (lead.status === 'qualified' || lead.status === 'disqualified') return;
 
+  // Check if the lead replied since last follow-up (for branching conditions)
+  const lastLogResult = await pool.query(
+    `SELECT sent_at, lead_replied, reply_sentiment FROM warming_message_log
+     WHERE enrollment_id = $1 ORDER BY sent_at DESC LIMIT 1`,
+    [enrollmentId]
+  );
+  const lastLog = lastLogResult.rows[0];
+  const leadReplied = lastLog?.lead_replied === true;
+  const lastSentiment = lastLog?.reply_sentiment || null;
+
+  // Evaluate branching conditions
+  const conditions = st.conditions || null;
+  if (!evaluateConditions(conditions, { leadReplied, lastSentiment })) {
+    console.log(`[warming] Step ${st.step_order} skipped due to conditions for enrollment ${enrollmentId}`);
+    // Skip to next step
+    await scheduleNextStep(enr, st, enrollmentId);
+    return;
+  }
+
   let company = {};
   try {
     const companyRow = await pool.query(
@@ -151,16 +233,37 @@ async function processWarmingStep(enrollmentId, stepId) {
       [enr.company_id]
     );
     company = companyRow.rows[0] || {};
-  } catch (_) {
-    /* booking_url column may not exist yet; use empty booking_link */
-  }
+  } catch (_) {}
   const bookingUrl = company.booking_url != null ? String(company.booking_url) : '';
-  let message = interpolate(st.message_template, {
-    name: lead.name || lead.external_id || 'there',
-    company_name: company.name || 'us',
-    booking_link: bookingUrl,
-  });
-  message = message.replace(/\{booking_link\}/gi, bookingUrl).trim();
+
+  let message;
+
+  // AI-generated follow-up
+  if (st.step_type === 'ai_generated') {
+    const conversation = await conversationRepository.getByLeadId(enr.lead_id);
+    const prevFollowUps = await pool.query(
+      `SELECT message_sent FROM warming_message_log WHERE enrollment_id = $1 ORDER BY sent_at ASC`,
+      [enrollmentId]
+    );
+    message = await generateAiFollowUp(lead, company, conversation?.messages, prevFollowUps.rows, st.ai_context_prompt);
+    // Fallback to template if AI fails
+    if (!message && st.message_template) {
+      message = interpolate(st.message_template, {
+        name: lead.name || lead.external_id || 'there',
+        company_name: company.name || 'us',
+        booking_link: bookingUrl,
+      });
+    }
+    if (!message) message = `Hey ${lead.name || 'there'}, just wanted to check in — anything I can help with?`;
+  } else {
+    // Static template
+    message = interpolate(st.message_template, {
+      name: lead.name || lead.external_id || 'there',
+      company_name: company.name || 'us',
+      booking_link: bookingUrl,
+    });
+    message = message.replace(/\{booking_link\}/gi, bookingUrl).trim();
+  }
 
   let manychatResponse = null;
   try {
@@ -177,16 +280,185 @@ async function processWarmingStep(enrollmentId, stepId) {
     manychatResponse = { error: err.message };
   }
 
+  // Also log as assistant message in conversation so context is preserved
+  await conversationRepository.appendMessage(enr.lead_id, 'assistant', message, { follow_up: true }).catch(() => {});
+
   await pool.query(
     `INSERT INTO warming_message_log (enrollment_id, lead_id, step_id, message_sent, manychat_response)
      VALUES ($1, $2, $3, $4, $5)`,
     [enrollmentId, enr.lead_id, stepId, message, manychatResponse ? JSON.stringify(manychatResponse) : null]
   );
 
+  // Update follow-ups sent count
+  await pool.query(
+    `UPDATE warming_enrollments SET follow_ups_sent = COALESCE(follow_ups_sent, 0) + 1 WHERE id = $1`,
+    [enrollmentId]
+  );
+
+  // Check if we should escalate (max follow-ups reached)
+  const seqResult = await pool.query(
+    `SELECT max_follow_ups, escalation_action, escalation_value FROM warming_sequences WHERE id = $1`,
+    [enr.sequence_id]
+  );
+  const seq = seqResult.rows[0];
+  const followUpsSent = (enr.follow_ups_sent || 0) + 1;
+  if (seq?.max_follow_ups > 0 && followUpsSent >= seq.max_follow_ups && seq.escalation_action) {
+    await handleEscalation(enr, lead, seq);
+  }
+
+  // Update daily analytics
+  await updateDailyAnalytics(enr.company_id, enr.sequence_id);
+
+  await scheduleNextStep(enr, st, enrollmentId);
+}
+
+/**
+ * Handle escalation when max follow-ups reached.
+ */
+async function handleEscalation(enrollment, lead, sequence) {
+  const action = sequence.escalation_action;
+  const value = sequence.escalation_value;
+
+  await pool.query(
+    `UPDATE warming_enrollments SET escalated = true, escalation_action = $1 WHERE id = $2`,
+    [action, enrollment.id]
+  );
+
+  switch (action) {
+    case 'tag_cold':
+      await pool.query('UPDATE leads SET pipeline_stage = $1 WHERE id = $2', ['cold', enrollment.lead_id]).catch(() => {});
+      break;
+    case 'notify_owner':
+      await createNotification(
+        enrollment.company_id,
+        'followup_escalation',
+        'Follow-up escalation',
+        `${lead.name || 'A lead'} hasn't replied after ${sequence.max_follow_ups} follow-ups.`,
+        enrollment.lead_id
+      ).catch(() => {});
+      break;
+    case 'move_stage':
+      if (value) {
+        await pool.query('UPDATE leads SET pipeline_stage = $1 WHERE id = $2', [value, enrollment.lead_id]).catch(() => {});
+      }
+      break;
+    case 'pause':
+      await pool.query(
+        `UPDATE warming_enrollments SET paused = true WHERE id = $1`,
+        [enrollment.id]
+      );
+      break;
+    default:
+      break;
+  }
+
+  console.log(`[warming] Escalation: ${action} for lead ${enrollment.lead_id} after ${sequence.max_follow_ups} follow-ups`);
+}
+
+/**
+ * Analyze when a lead typically responds based on message history.
+ * Returns the optimal hour (0-23) to send messages, or null if not enough data.
+ */
+async function getLeadActiveWindow(leadId) {
+  try {
+    // Look at the hours when this lead has replied/engaged
+    const result = await pool.query(
+      `SELECT EXTRACT(HOUR FROM replied_at) AS reply_hour, COUNT(*) AS cnt
+       FROM warming_message_log
+       WHERE lead_id = $1 AND lead_replied = true AND replied_at IS NOT NULL
+       GROUP BY reply_hour ORDER BY cnt DESC LIMIT 3`,
+      [leadId]
+    );
+    if (result.rows.length > 0) {
+      // Weighted average of top reply hours
+      const totalWeight = result.rows.reduce((s, r) => s + parseInt(r.cnt, 10), 0);
+      const weighted = result.rows.reduce((s, r) => s + parseInt(r.reply_hour, 10) * parseInt(r.cnt, 10), 0);
+      return Math.round(weighted / totalWeight);
+    }
+
+    // Fallback: check general conversation activity
+    const convoResult = await pool.query(
+      `SELECT EXTRACT(HOUR FROM m.created_at) AS msg_hour, COUNT(*) AS cnt
+       FROM messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       WHERE c.lead_id = $1 AND m.role = 'user'
+       GROUP BY msg_hour ORDER BY cnt DESC LIMIT 3`,
+      [leadId]
+    );
+    if (convoResult.rows.length > 0) {
+      const totalWeight = convoResult.rows.reduce((s, r) => s + parseInt(r.cnt, 10), 0);
+      const weighted = convoResult.rows.reduce((s, r) => s + parseInt(r.msg_hour, 10) * parseInt(r.cnt, 10), 0);
+      return Math.round(weighted / totalWeight);
+    }
+    return null;
+  } catch (err) {
+    console.warn('[warming] getLeadActiveWindow error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Get company-wide best send hour as fallback for smart timing.
+ */
+async function getCompanyBestSendHour(companyId) {
+  try {
+    const result = await pool.query(
+      `SELECT EXTRACT(HOUR FROM m.replied_at) AS reply_hour, COUNT(*) AS cnt
+       FROM warming_message_log m
+       JOIN warming_enrollments e ON e.id = m.enrollment_id
+       WHERE e.company_id = $1 AND m.lead_replied = true AND m.replied_at IS NOT NULL
+       GROUP BY reply_hour ORDER BY cnt DESC LIMIT 1`,
+      [companyId]
+    );
+    return result.rows[0] ? parseInt(result.rows[0].reply_hour, 10) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Calculate optimal send time for a message.
+ * Combines base delay with smart timing (lead active window or company default).
+ */
+async function calculateSmartDelay(leadId, companyId, baseDelayMinutes) {
+  const baseDelayMs = Math.max(0, (baseDelayMinutes || 0) * 60 * 1000);
+
+  // Only apply smart timing for delays >= 1 hour (short delays are time-sensitive)
+  if (baseDelayMinutes < 60) return { delayMs: baseDelayMs, smartTimed: false };
+
+  const optimalHour = await getLeadActiveWindow(leadId) || await getCompanyBestSendHour(companyId);
+  if (optimalHour === null) return { delayMs: baseDelayMs, smartTimed: false };
+
+  // Calculate when the message would normally send
+  const normalSendTime = new Date(Date.now() + baseDelayMs);
+  const normalHour = normalSendTime.getUTCHours();
+
+  // Adjust to nearest optimal hour (within the same day or next day)
+  let adjustedTime = new Date(normalSendTime);
+  adjustedTime.setUTCHours(optimalHour, 0, 0, 0);
+
+  // If adjusted time is before the normal send time, push to next day
+  if (adjustedTime <= normalSendTime) {
+    adjustedTime.setUTCDate(adjustedTime.getUTCDate() + 1);
+  }
+
+  // Don't delay more than 12 hours beyond original time
+  const maxDelay = baseDelayMs + 12 * 60 * 60 * 1000;
+  const smartDelayMs = adjustedTime.getTime() - Date.now();
+  const finalDelay = Math.min(smartDelayMs, maxDelay);
+
+  return { delayMs: Math.max(baseDelayMs, finalDelay), smartTimed: true, optimalHour };
+}
+
+/**
+ * Schedule the next warming step, or complete the enrollment.
+ * Uses smart timing when available.
+ */
+async function scheduleNextStep(enrollment, currentStep, enrollmentId) {
   const nextSteps = await pool.query(
     `SELECT id, step_order, delay_minutes FROM warming_steps
      WHERE sequence_id = $1 AND step_order > $2 ORDER BY step_order ASC`,
-    [enr.sequence_id, st.step_order]
+    [enrollment.sequence_id, currentStep.step_order]
   );
 
   if (nextSteps.rows.length > 0) {
@@ -195,15 +467,29 @@ async function processWarmingStep(enrollmentId, stepId) {
       `UPDATE warming_enrollments SET current_step = $2 WHERE id = $1`,
       [enrollmentId, next.step_order]
     );
-    const delayMs = Math.max(0, (next.delay_minutes || 0) * 60 * 1000);
+
+    // Use smart timing
+    const { delayMs, smartTimed } = await calculateSmartDelay(enrollment.lead_id, enrollment.company_id, next.delay_minutes);
+    const nextSendAt = new Date(Date.now() + delayMs);
+
+    // Track next_send_at for dashboard visibility
+    await pool.query(
+      `UPDATE warming_enrollments SET next_send_at = $2 WHERE id = $1`,
+      [enrollmentId, nextSendAt]
+    );
+
     await getQueue().add(
       'warming_step',
       { enrollmentId, stepId: next.id },
       { jobId: `warming-${enrollmentId}-${next.id}`, delay: delayMs }
     );
+
+    if (smartTimed) {
+      console.log(`[warming] Smart timing: enrollment ${enrollmentId} next step at ${nextSendAt.toISOString()}`);
+    }
   } else {
     await pool.query(
-      `UPDATE warming_enrollments SET status = 'completed', completed_at = NOW() WHERE id = $1`,
+      `UPDATE warming_enrollments SET status = 'completed', completed_at = NOW(), next_send_at = NULL WHERE id = $1`,
       [enrollmentId]
     );
   }
@@ -345,6 +631,78 @@ async function ensureDefaultSequences(companyId) {
 }
 
 /**
+ * Record that a lead has replied to a follow-up. Called from manychat webhook
+ * when a message comes in from a lead who has active warming enrollments.
+ * Optionally detects sentiment via lightweight Claude call.
+ */
+async function recordLeadReply(leadId, messageText) {
+  try {
+    // Find the most recent unreplied warming message for this lead
+    const lastMsg = await pool.query(
+      `SELECT m.id, m.enrollment_id FROM warming_message_log m
+       WHERE m.lead_id = $1 AND m.lead_replied = false
+       ORDER BY m.sent_at DESC LIMIT 1`,
+      [leadId]
+    );
+    if (!lastMsg.rows[0]) return null;
+
+    // Quick sentiment detection
+    let sentiment = null;
+    try {
+      const { claudeWithRetry } = require('../utils/claudeWithRetry');
+      const { content } = await claudeWithRetry({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 20,
+        messages: [{ role: 'user', content: `Classify this reply sentiment as "positive", "negative", or "neutral". Reply with ONLY the word.\n\nReply: "${messageText}"` }],
+      });
+      const text = (content?.[0]?.text || content?.text || '').trim().toLowerCase();
+      if (['positive', 'negative', 'neutral'].includes(text)) sentiment = text;
+    } catch (_) {}
+
+    await pool.query(
+      `UPDATE warming_message_log SET lead_replied = true, replied_at = NOW(), reply_sentiment = $2 WHERE id = $1`,
+      [lastMsg.rows[0].id, sentiment]
+    );
+
+    return { messageLogId: lastMsg.rows[0].id, enrollmentId: lastMsg.rows[0].enrollment_id, sentiment };
+  } catch (err) {
+    console.warn('[warming] recordLeadReply error:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Update daily follow-up analytics. Called after processing warming steps.
+ */
+async function updateDailyAnalytics(companyId, sequenceId) {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    await pool.query(
+      `INSERT INTO follow_up_analytics (company_id, sequence_id, period_date, messages_sent, replies_received, positive_replies, negative_replies, escalations)
+       SELECT $1, $2, $3::date,
+         COUNT(*) FILTER (WHERE m.sent_at::date = $3::date),
+         COUNT(*) FILTER (WHERE m.lead_replied = true AND m.replied_at::date = $3::date),
+         COUNT(*) FILTER (WHERE m.reply_sentiment = 'positive' AND m.replied_at::date = $3::date),
+         COUNT(*) FILTER (WHERE m.reply_sentiment = 'negative' AND m.replied_at::date = $3::date),
+         COUNT(DISTINCT e.id) FILTER (WHERE e.escalated = true AND e.status = 'active')
+       FROM warming_message_log m
+       JOIN warming_enrollments e ON e.id = m.enrollment_id
+       WHERE e.company_id = $1 AND e.sequence_id = $2
+       ON CONFLICT (company_id, sequence_id, period_date)
+       DO UPDATE SET
+         messages_sent = EXCLUDED.messages_sent,
+         replies_received = EXCLUDED.replies_received,
+         positive_replies = EXCLUDED.positive_replies,
+         negative_replies = EXCLUDED.negative_replies,
+         escalations = EXCLUDED.escalations`,
+      [companyId, sequenceId, today]
+    );
+  } catch (err) {
+    console.warn('[warming] updateDailyAnalytics error:', err.message);
+  }
+}
+
+/**
  * Hourly cron: enroll leads with upcoming call and no engagement in 72h into no_reply_72h sequence.
  */
 async function runHourlyNoReply72hEnrollment() {
@@ -380,6 +738,9 @@ module.exports = {
   calculateNoShowRisk,
   ensureDefaultSequences,
   runHourlyNoReply72hEnrollment,
+  recordLeadReply,
+  updateDailyAnalytics,
+  getLeadActiveWindow,
   getQueue,
   getConnection,
   QUEUE_NAME,
