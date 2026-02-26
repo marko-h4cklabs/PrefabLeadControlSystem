@@ -25,6 +25,34 @@ const rawJsonParser = express.raw({ type: 'application/json' });
 
 const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
 
+// --- Duplicate message protection ---
+// Track recently processed webhook message IDs to prevent duplicate processing
+const processedMessageIds = new Map();
+// Track per-lead processing locks to prevent concurrent AI reply generation
+const leadProcessingLocks = new Map();
+
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [id, ts] of processedMessageIds) {
+    if (ts < cutoff) processedMessageIds.delete(id);
+  }
+}, 60_000);
+
+function acquireLeadLock(leadId) {
+  const existing = leadProcessingLocks.get(leadId);
+  let release;
+  const lock = new Promise((resolve) => { release = resolve; });
+  const ready = existing ? existing.then(() => {}) : Promise.resolve();
+  leadProcessingLocks.set(leadId, lock);
+  return {
+    ready,
+    release: () => {
+      release();
+      if (leadProcessingLocks.get(leadId) === lock) leadProcessingLocks.delete(leadId);
+    },
+  };
+}
+
 /**
  * Extract message content and type from ManyChat webhook payload.
  * Handles text, audio/voice, image, and other types.
@@ -173,6 +201,13 @@ async function processManyChatPayload(payload, overrideCompany) {
   let messagePreview = null;
 
   try {
+  // --- Duplicate webhook protection: skip if same messageId already processed ---
+  if (messageId && processedMessageIds.has(messageId)) {
+    console.log('[manychat/webhook] Duplicate messageId skipped:', messageId);
+    return;
+  }
+  if (messageId) processedMessageIds.set(messageId, Date.now());
+
   // IGSID discovery: log all subscriber fields and payload keys to find the Instagram-scoped user ID
   console.log('[manychat/igsid-discovery] payload keys:', Object.keys(payload));
   console.log('[manychat/igsid-discovery] subscriber fields:', JSON.stringify(subscriber));
@@ -349,6 +384,9 @@ async function processManyChatPayload(payload, overrideCompany) {
     if (operating_mode === null) {
       console.warn('[manychat/webhook] operating_mode not set, defaulting to autopilot');
     }
+    // Acquire per-lead lock to prevent concurrent AI reply generation (duplicate messages)
+    const leadLock = acquireLeadLock(lead.id);
+    await leadLock.ready;
     try {
       if (mode === 'copilot') {
         const replySuggestionsService = require('../../../services/replySuggestionsService');
@@ -554,6 +592,8 @@ async function processManyChatPayload(payload, overrideCompany) {
       }
     } catch (err) {
       console.error('[manychat/webhook] AI reply/suggestions failed:', err);
+    } finally {
+      leadLock.release();
     }
   }
   success = true;

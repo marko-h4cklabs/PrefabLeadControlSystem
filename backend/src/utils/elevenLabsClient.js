@@ -98,6 +98,49 @@ function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample 
 }
 
 /**
+ * Add silence padding and natural fade-out to PCM audio.
+ *
+ * Fixes:
+ * 1. Prepends ~250ms silence so the first words aren't cut off by the player
+ * 2. Applies a gradual volume fade-out over the last ~1s so the voice
+ *    trails off naturally (like real human speech)
+ * 3. Appends ~400ms silence so the last word isn't clipped
+ */
+function processVoiceAudio(pcmBuffer, sampleRate = 22050) {
+  const bytesPerSample = 2; // 16-bit PCM
+
+  // 1. Silence padding
+  const leadSilenceMs = 250;
+  const trailSilenceMs = 400;
+  const leadBytes = Math.floor(sampleRate * (leadSilenceMs / 1000)) * bytesPerSample;
+  const trailBytes = Math.floor(sampleRate * (trailSilenceMs / 1000)) * bytesPerSample;
+  const leadSilence = Buffer.alloc(leadBytes, 0);
+  const trailSilence = Buffer.alloc(trailBytes, 0);
+
+  // 2. Fade-out on the last ~1 second of actual audio (natural voice trailing)
+  const fadeOutMs = 1000;
+  const fadeOutSamples = Math.floor(sampleRate * (fadeOutMs / 1000));
+  const totalSamples = Math.floor(pcmBuffer.length / bytesPerSample);
+  const fadeStartSample = Math.max(0, totalSamples - fadeOutSamples);
+
+  // Work on a copy so we don't mutate the original
+  const audioData = Buffer.from(pcmBuffer);
+
+  for (let i = fadeStartSample; i < totalSamples; i++) {
+    const progress = (i - fadeStartSample) / (totalSamples - fadeStartSample); // 0 -> 1
+    // Cosine fade: smooth curve from 1.0 down to 0.35 (don't go to zero, just quieter)
+    const multiplier = 0.35 + 0.65 * (0.5 * (1 + Math.cos(Math.PI * progress)));
+    const offset = i * bytesPerSample;
+    if (offset + 1 < audioData.length) {
+      const sample = audioData.readInt16LE(offset);
+      audioData.writeInt16LE(Math.round(sample * multiplier), offset);
+    }
+  }
+
+  return Buffer.concat([leadSilence, audioData, trailSilence]);
+}
+
+/**
  * Generate TTS audio in WAV format (for ManyChat Instagram voice messages).
  * Requests PCM from ElevenLabs and wraps in a WAV header.
  */
@@ -130,7 +173,10 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   });
 
   const pcmBuffer = Buffer.from(response.data);
-  const wavBuffer = pcmToWav(pcmBuffer);
+
+  // Apply silence padding (prevents first/last word cutoff) and natural fade-out
+  const processedPcm = processVoiceAudio(pcmBuffer, 22050);
+  const wavBuffer = pcmToWav(processedPcm);
 
   return {
     audio_base64: wavBuffer.toString('base64'),
