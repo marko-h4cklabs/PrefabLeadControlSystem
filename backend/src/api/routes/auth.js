@@ -482,6 +482,7 @@ router.get('/google', oauthLimiter, (req, res) => {
     response_type: 'code',
     scope: 'openid email profile',
     access_type: 'offline',
+    prompt: 'select_account',
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
@@ -550,15 +551,18 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
       );
       userId = userResult.rows[0].id;
 
-      await pool.query(
-        `INSERT INTO chatbot_behavior (
-           company_id, persona_style, response_length, emojis_enabled, agent_name,
-           conversation_goal, opener_style
-         )
-         VALUES ($1, 'professional', 'medium', true, 'Alex', 'Book a sales call', 'greeting')
-         ON CONFLICT (company_id) DO NOTHING`,
-        [companyId]
-      );
+      try {
+        await chatbotBehaviorRepository.upsert(companyId, {
+          persona_style: 'explanational',
+          response_length: 'medium',
+          emojis_enabled: true,
+          agent_name: 'Alex',
+          conversation_goal: 'Book a sales call',
+          opener_style: 'greeting',
+        });
+      } catch (e) {
+        console.error('[google/callback] chatbot_behavior init failed:', e.message);
+      }
     }
 
     const token = jwt.sign(
