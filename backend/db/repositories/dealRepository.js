@@ -5,6 +5,7 @@ function toDto(row) {
   return {
     id: row.id,
     lead_id: row.lead_id,
+    lead_name: row.lead_name ?? null,
     company_id: row.company_id,
     amount: Number(row.amount),
     currency: row.currency ?? 'EUR',
@@ -43,7 +44,7 @@ async function create(data) {
 
 async function list(companyId, opts = {}) {
   const { from, to, setter_name, limit = 100, offset = 0 } = opts;
-  let sql = `SELECT d.* FROM deals d WHERE d.company_id = $1 AND d.deleted_at IS NULL`;
+  let sql = `SELECT d.*, l.name AS lead_name FROM deals d LEFT JOIN leads l ON l.id = d.lead_id WHERE d.company_id = $1 AND d.deleted_at IS NULL`;
   const params = [companyId];
   let idx = 2;
   if (from) {

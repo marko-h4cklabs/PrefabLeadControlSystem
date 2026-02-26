@@ -448,7 +448,7 @@ router.get('/booking-settings', async (req, res) => {
       pool.query(
         `SELECT id, name, label, is_enabled, is_custom, variable_name, field_type
          FROM chatbot_quote_fields
-         WHERE company_id = $1
+         WHERE company_id = $1 AND is_enabled = true
          ORDER BY priority ASC`,
         [companyId]
       ),

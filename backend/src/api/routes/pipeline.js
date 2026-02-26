@@ -3,7 +3,7 @@ const router = express.Router();
 const { pool } = require('../../../db');
 const { errorJson } = require('../middleware/errors');
 
-const PIPELINE_STAGES = ['new_inquiry', 'contacted', 'qualified', 'proposal_sent', 'negotiation', 'closed_won', 'closed_lost'];
+const PIPELINE_STAGES = ['new_inquiry', 'contacted', 'qualified', 'proposal_sent', 'call_booked', 'call_done', 'closed_won', 'closed_lost'];
 
 // GET /api/pipeline — leads grouped by pipeline_stage
 router.get('/', async (req, res) => {
@@ -18,12 +18,15 @@ router.get('/', async (req, res) => {
           json_build_object(
             'id', id,
             'name', name,
+            'stage', pipeline_stage,
             'instagram_username', external_id,
             'intent_score', intent_score,
             'budget_detected', budget_detected,
+            'deal_value', deal_value,
             'is_hot_lead', COALESCE(is_hot_lead, false),
+            'channel', channel,
             'created_at', created_at,
-            'pipeline_stage', pipeline_stage
+            'updated_at', updated_at
           ) ORDER BY created_at DESC
         ) AS leads
        FROM leads
