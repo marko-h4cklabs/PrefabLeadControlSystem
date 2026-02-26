@@ -772,6 +772,45 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
+// PUT /api/leads/:id/pipeline-stage — move lead to a different pipeline stage
+router.put('/:id/pipeline-stage', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const leadId = req.params.id;
+    const { stage, notes, deal_value, lost_reason } = req.body ?? {};
+    if (!stage || typeof stage !== 'string') {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'stage is required');
+    }
+    const oldLead = await leadRepository.findById(companyId, leadId);
+    if (!oldLead) return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+
+    const updateData = { pipeline_stage: stage };
+    if (deal_value !== undefined) updateData.deal_value = deal_value;
+
+    const lead = await leadRepository.update(companyId, leadId, updateData);
+
+    // Insert pipeline history
+    try {
+      await pool.query(
+        `INSERT INTO pipeline_history (lead_id, company_id, pipeline_stage, deal_value, notes, lost_reason, changed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [leadId, companyId, stage, deal_value ?? null, notes ?? null, lost_reason ?? null]
+      );
+    } catch (_) { /* pipeline_history table might not exist */ }
+
+    // Notify on pipeline stage change
+    if (oldLead.pipeline_stage !== stage) {
+      const leadName = lead.name || lead.channel || 'Lead';
+      const stageLabel = stage.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      createNotification(companyId, 'pipeline_move', `Lead moved to ${stageLabel}`, `${leadName} moved to ${stageLabel}`, leadId).catch(() => {});
+    }
+
+    res.json({ success: true, lead: { id: lead.id, name: lead.name, pipeline_stage: lead.pipeline_stage, deal_value: lead.deal_value } });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 // --- CRM POST/PATCH/DELETE (notes, tasks) ---
 function toCrmActivityItem(row) {
   return {

@@ -457,11 +457,14 @@ router.get('/booking-settings', async (req, res) => {
     res.json({
       booking_trigger_enabled: behavior?.booking_trigger_enabled ?? false,
       booking_trigger_score: behavior?.booking_trigger_score ?? 60,
-      booking_platform: behavior?.booking_platform ?? 'google_calendar',
+      booking_platform: behavior?.booking_platform ?? 'calendly',
       calendly_url: behavior?.calendly_url ?? companyRow?.calendly_url ?? '',
       booking_offer_message: behavior?.booking_offer_message ?? '',
       booking_required_fields: Array.isArray(behavior?.booking_required_fields) ? behavior.booking_required_fields : ['full_name', 'email_address'],
-      available_fields: quoteFieldsResult.rows || [],
+      available_fields: (quoteFieldsResult.rows || []).map((f) => ({
+        ...f,
+        label: f.label || f.name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      })),
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
