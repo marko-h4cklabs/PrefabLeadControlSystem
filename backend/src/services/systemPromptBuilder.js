@@ -208,10 +208,13 @@ Only offer booking ONCE per conversation. If they decline, respect it and contin
 `;
   }
 
-  const languageInstruction =
-    behavior?.language_code && behavior.language_code !== 'en'
-      ? `\nIMPORTANT: Respond in ${getLanguageName(behavior.language_code)} unless the lead writes in a different language, in which case match their language.`
-      : '\nDefault language: English. If the lead writes in another language, respond in their language.';
+  const langCodes = Array.isArray(behavior?.language_codes) && behavior.language_codes.length > 0
+    ? behavior.language_codes
+    : (behavior?.language_code ? [behavior.language_code] : ['en']);
+  const langNames = langCodes.map(getLanguageName);
+  const languageInstruction = langCodes.length === 1 && langCodes[0] === 'en'
+    ? '\nDefault language: English. If the lead writes in another language, respond in their language.'
+    : `\nIMPORTANT: You speak these languages: ${langNames.join(', ')}. Detect the lead's language and respond in it. If the lead's language is not in your list, use ${langNames[0]}. Always match the lead's language when it's one you speak.`;
 
   const enabledFields = (quoteFields || [])
     .filter((f) => f.is_enabled)

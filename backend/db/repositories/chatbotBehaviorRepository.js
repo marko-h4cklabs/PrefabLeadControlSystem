@@ -19,6 +19,7 @@ const DEFAULTS = {
   price_reveal: 'ask_first',
   closing_style: 'soft',
   language_code: 'en',
+  language_codes: ['en'],
   response_delay_seconds: 0,
   max_messages_before_handoff: 20,
   urgency_style: 'genuine',
@@ -51,6 +52,7 @@ const COLUMNS = [
   'price_reveal',
   'closing_style',
   'language_code',
+  'language_codes',
   'response_delay_seconds',
   'max_messages_before_handoff',
   'urgency_style',
@@ -85,6 +87,9 @@ function rowToObject(row) {
     price_reveal: row.price_reveal ?? DEFAULTS.price_reveal,
     closing_style: row.closing_style ?? DEFAULTS.closing_style,
     language_code: row.language_code ?? DEFAULTS.language_code,
+    language_codes: Array.isArray(row.language_codes) && row.language_codes.length > 0
+      ? row.language_codes
+      : (row.language_code ? [row.language_code] : DEFAULTS.language_codes),
     response_delay_seconds: row.response_delay_seconds ?? DEFAULTS.response_delay_seconds,
     max_messages_before_handoff: row.max_messages_before_handoff ?? DEFAULTS.max_messages_before_handoff,
     urgency_style: row.urgency_style ?? DEFAULTS.urgency_style,

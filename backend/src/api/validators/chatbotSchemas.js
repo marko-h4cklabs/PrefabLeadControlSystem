@@ -60,6 +60,7 @@ const behaviorBodySchema = z
     price_reveal: toOptionalEnum(PRICE_VALUES),
     closing_style: toOptionalEnum(CLOSING_VALUES),
     language_code: z.string().trim().max(10).optional(),
+    language_codes: z.array(z.string().trim().min(2).max(10)).min(1).max(10).optional(),
     response_delay_seconds: z.number().int().min(0).max(60).optional(),
     max_messages_before_handoff: z.number().int().min(1).max(100).optional(),
     urgency_style: z.string().trim().max(20).optional(),

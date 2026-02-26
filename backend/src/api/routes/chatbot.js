@@ -13,7 +13,7 @@ const {
 } = require('../../../db/repositories');
 const { buildSystemContext } = require('../../services/chatbotSystemContext');
 const { buildSystemPrompt: buildSystemPromptLegacy, buildFieldQuestion } = require('../../chat/systemPrompt');
-const { buildSystemPrompt, buildLeadContext } = require('../../services/systemPromptBuilder');
+const { buildSystemPrompt, buildLeadContext, getLanguageName } = require('../../services/systemPromptBuilder');
 const { validateAndCleanReply } = require('../../services/replyValidator');
 const { claudeWithRetry } = require('../../utils/claudeWithRetry');
 const { callLLM } = require('../../chat/chatService');
@@ -317,6 +317,30 @@ router.put('/company-info', async (req, res) => {
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
+});
+
+router.get('/languages', (req, res) => {
+  const supported = [
+    { code: 'en', name: 'English' },
+    { code: 'hr', name: 'Croatian' },
+    { code: 'sr', name: 'Serbian' },
+    { code: 'bs', name: 'Bosnian' },
+    { code: 'de', name: 'German' },
+    { code: 'es', name: 'Spanish' },
+    { code: 'fr', name: 'French' },
+    { code: 'it', name: 'Italian' },
+    { code: 'pt', name: 'Portuguese' },
+    { code: 'nl', name: 'Dutch' },
+    { code: 'pl', name: 'Polish' },
+    { code: 'ro', name: 'Romanian' },
+    { code: 'ru', name: 'Russian' },
+    { code: 'tr', name: 'Turkish' },
+    { code: 'ar', name: 'Arabic' },
+    { code: 'zh', name: 'Chinese' },
+    { code: 'ja', name: 'Japanese' },
+    { code: 'ko', name: 'Korean' },
+  ];
+  res.json({ languages: supported });
 });
 
 router.get('/behavior', async (req, res) => {
