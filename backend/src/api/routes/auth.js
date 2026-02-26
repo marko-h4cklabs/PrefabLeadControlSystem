@@ -8,9 +8,22 @@ const { userRepository, companyRepository, chatbotBehaviorRepository } = require
 const { authMiddleware } = require('../middleware/auth');
 const { generateVerifyToken, sendVerificationEmail } = require('../../services/emailService');
 const { generateSmsCode, sendVerificationSms, isTwilioConfigured } = require('../../services/smsService');
+const rateLimit = require('express-rate-limit');
 const { getGoogleUserInfo, isGoogleConfigured } = require('../../services/googleAuthService');
 
 const router = express.Router();
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: { code: 'RATE_LIMIT', message: 'Too many login attempts' } },
+});
+
+const oauthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
+});
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -81,7 +94,7 @@ async function registerCompanyAndUser(body) {
   return { company, user };
 }
 
-router.post('/signup', async (req, res) => {
+router.post('/signup', authLimiter, async (req, res) => {
   try {
     const body = req.body || {};
     const companyName = (body.companyName || body.company_name || '').trim();
@@ -175,7 +188,7 @@ router.post('/signup', async (req, res) => {
   }
 });
 
-router.post('/register', async (req, res) => {
+router.post('/register', authLimiter, async (req, res) => {
   try {
     const body = req.body || {};
     if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
@@ -248,7 +261,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -457,7 +470,7 @@ router.post('/verify-phone', authMiddleware, async (req, res) => {
 
 // Google OAuth
 // GET /api/auth/google — redirect to Google
-router.get('/google', (req, res) => {
+router.get('/google', oauthLimiter, (req, res) => {
   if (!isGoogleConfigured()) {
     const frontendUrl =
       process.env.FRONTEND_URL || 'https://app.eightpath.dev';
@@ -474,7 +487,7 @@ router.get('/google', (req, res) => {
 });
 
 // GET /api/auth/google/callback
-router.get('/google/callback', async (req, res) => {
+router.get('/google/callback', oauthLimiter, async (req, res) => {
   const frontendUrl =
     process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   try {

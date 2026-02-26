@@ -105,12 +105,6 @@ app.use(express.json());
 const manychatVoiceReplyRouter = require('./api/routes/manychatVoiceReply');
 app.use('/api/manychat/voice-reply-content', manychatVoiceReplyRouter);
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: { error: { code: 'RATE_LIMIT', message: 'Too many login attempts' } },
-});
-
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
@@ -146,7 +140,7 @@ app.get('/public/attachments/:id/:token/{:filename}', async (req, res) => {
   }
 });
 
-app.use('/api/auth', authLimiter, authRouter);
+app.use('/api/auth', authRouter);
 app.use('/api/me', apiLimiter, meRouter);
 
 const protectedStack = [authMiddleware, tenantMiddleware, requireCompany, checkSubscription, apiLimiter];
