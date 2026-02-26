@@ -29,6 +29,7 @@ const calendarRouter = require('./api/routes/calendar');
 const billingRouter = require('./api/routes/billing');
 const teamRouter = require('./api/routes/team');
 const voiceRouter = require('./api/routes/voice');
+const handoffRouter = require('./api/routes/handoff');
 const { authMiddleware } = require('./api/middleware/auth');
 const { tenantMiddleware } = require('./api/middleware/tenant');
 const { requireCompany } = require('./middleware/requireCompany');
@@ -168,6 +169,7 @@ app.use('/api/calendar', ...protectedStack, calendarRouter);
 app.use('/api/billing', ...protectedStack, billingRouter);
 app.use('/api/team', ...protectedStack, teamRouter);
 app.use('/api/voice', ...protectedStack, voiceRouter);
+app.use('/api/handoff', ...protectedStack, handoffRouter);
 const autoresponderRouter = require('./api/routes/autoresponder');
 app.use('/api/autoresponder', ...protectedStack, autoresponderRouter);
 const queueRouter = require('./api/routes/queue');
@@ -195,10 +197,13 @@ const followUpWorker = require('../services/followUpWorker');
 const warmingWorker = require('./workers/warmingWorker');
 const warmingService = require('./services/warmingService');
 const revenueSnapshotService = require('./services/revenueSnapshotService');
+const handoffService = require('./services/handoffService');
 
 const WARMING_CRON_MS = 60 * 60 * 1000;
+const HANDOFF_CRON_MS = 5 * 60 * 1000; // check every 5 minutes for auto-resume
 const REVENUE_CRON_MS = 60 * 60 * 1000; // check every hour, run at midnight
 let warmingCronTimer = null;
+let handoffCronTimer = null;
 let revenueCronTimer = null;
 let lastRevenueSnapshotDate = null;
 let server = null;
@@ -274,6 +279,9 @@ function startServer() {
     } else {
       console.warn('[index] REDIS_URL not set, follow-up worker not started');
     }
+    handoffCronTimer = setInterval(() => {
+      handoffService.runAutoResumeCron().catch((err) => console.error('[handoff] auto-resume cron error:', err.message));
+    }, HANDOFF_CRON_MS);
     revenueCronTimer = setInterval(() => {
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
@@ -296,6 +304,7 @@ runMigrations()
 async function gracefulShutdown() {
   console.log('[index] shutting down...');
   if (warmingCronTimer) clearInterval(warmingCronTimer);
+  if (handoffCronTimer) clearInterval(handoffCronTimer);
   if (revenueCronTimer) clearInterval(revenueCronTimer);
   reminderWorker.stop();
   await followUpWorker.stop();

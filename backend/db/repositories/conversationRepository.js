@@ -12,6 +12,10 @@ function toPlainConversation(row) {
     parsed_fields: row.parsed_fields ?? {},
     quote_snapshot: row.quote_snapshot ?? null,
     settings_snapshot: row.settings_snapshot ?? null,
+    bot_paused: row.bot_paused ?? false,
+    paused_at: row.paused_at ?? null,
+    paused_reason: row.paused_reason ?? null,
+    paused_by: row.paused_by ?? null,
     last_updated: row.last_updated,
     created_at: row.created_at,
   };
@@ -140,6 +144,36 @@ async function updateStep(leadId, step) {
   return toPlainConversation(result.rows[0]);
 }
 
+async function pauseBot(leadId, reason = null, pausedBy = 'rule') {
+  const result = await pool.query(
+    `UPDATE conversations
+     SET bot_paused = true, paused_at = NOW(), paused_reason = $1, paused_by = $2, last_updated = NOW()
+     WHERE lead_id = $3
+     RETURNING *`,
+    [reason, pausedBy, leadId]
+  );
+  return toPlainConversation(result.rows[0]);
+}
+
+async function resumeBot(leadId) {
+  const result = await pool.query(
+    `UPDATE conversations
+     SET bot_paused = false, paused_at = NULL, paused_reason = NULL, paused_by = NULL, last_updated = NOW()
+     WHERE lead_id = $1
+     RETURNING *`,
+    [leadId]
+  );
+  return toPlainConversation(result.rows[0]);
+}
+
+async function isPaused(leadId) {
+  const result = await pool.query(
+    'SELECT bot_paused FROM conversations WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [leadId]
+  );
+  return result.rows[0]?.bot_paused === true;
+}
+
 module.exports = {
   createIfNotExists,
   getByLeadId,
@@ -147,4 +181,7 @@ module.exports = {
   updateParsedFields,
   mergeBookingState,
   updateStep,
+  pauseBot,
+  resumeBot,
+  isPaused,
 };

@@ -20,6 +20,7 @@ const aiReplyService = require('../../../services/aiReplyService');
 const { analyzeInboundMessage } = require('../../../services/leadIntelligenceService');
 const { sendInstagramMessage, sendManyChatImage, sendManyChatFile } = require('../../services/manychatService');
 const { createNotification } = require('../../services/notificationService');
+const handoffService = require('../../services/handoffService');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
 
@@ -380,6 +381,36 @@ async function processManyChatPayload(payload, overrideCompany) {
   const hasChatbot = Array.isArray(quoteFields) && quoteFields.length > 0;
 
   if (hasChatbot) {
+    // --- HANDOFF: check if bot is paused for this conversation ---
+    const isBotPaused = await conversationRepository.isPaused(lead.id);
+    if (isBotPaused) {
+      console.log('[manychat/handoff] Bot paused for lead:', lead.id, '— skipping AI reply, message already logged');
+      // Still create notification so owner knows lead sent another message
+      createNotification(companyId, 'new_message', 'New message (bot paused)', `${lead.name || 'Lead'} sent a message while bot is paused`, lead.id).catch(() => {});
+      success = true;
+      return;
+    }
+
+    // --- HANDOFF: evaluate rules before generating AI reply ---
+    try {
+      const userMsgCount = (conversationAfter?.messages || []).filter(m => m.role === 'user').length;
+      const matchedRule = await handoffService.evaluateWithContext(companyId, lead.id, content, {
+        messageCount: userMsgCount,
+      });
+      if (matchedRule) {
+        console.log('[manychat/handoff] Rule triggered:', matchedRule.rule_type, ':', matchedRule.trigger_value, 'for lead:', lead.id);
+        const handoffResult = await handoffService.executeHandoff(companyId, lead.id, conversationAfter?.id, matchedRule, lead.name);
+        if (handoffResult.paused && handoffResult.bridgingMessage && manychatApiKey) {
+          await sendInstagramMessage(subscriberId, handoffResult.bridgingMessage, manychatApiKey);
+          await conversationRepository.appendMessage(lead.id, 'assistant', handoffResult.bridgingMessage, { handoff: true });
+        }
+        success = true;
+        return;
+      }
+    } catch (handoffErr) {
+      console.warn('[manychat/handoff] Rule evaluation error:', handoffErr.message);
+    }
+
     const mode = operating_mode ?? 'autopilot';
     if (operating_mode === null) {
       console.warn('[manychat/webhook] operating_mode not set, defaulting to autopilot');

@@ -152,10 +152,20 @@ async function handleBookingFlow(lead, company, behavior, conversation, companyI
 function buildClaudeMessages(conversationMessages, incomingMessage) {
   const recentMessages = (conversationMessages || []).slice(-20);
   const claudeMessages = recentMessages
-    .map((msg) => ({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.transcription || msg.content || '',
-    }))
+    .map((msg) => {
+      // Owner/system handoff messages: include as user context so Claude sees them
+      if (msg.handoff_instruction || (msg.role === 'system' && msg.content?.includes('[Owner instruction:'))) {
+        return { role: 'user', content: msg.content || '' };
+      }
+      // Messages sent by the human owner (not the bot)
+      if (msg.role === 'owner' || msg.sent_by_human === true) {
+        return { role: 'assistant', content: `[Business owner replied]: ${msg.content || ''}` };
+      }
+      return {
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.transcription || msg.content || '',
+      };
+    })
     .filter((m) => m.content.trim() !== '');
 
   if (claudeMessages.length > 0 && claudeMessages[0].role === 'assistant') {
@@ -277,6 +287,14 @@ async function generateAiReply(companyId, leadId) {
     let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages);
     const leadContext = await buildLeadContext(leadForContext);
     systemPrompt += leadContext;
+
+    // Handoff context: if the business owner replied directly, tell the bot
+    const allMessages = conversation.messages ?? [];
+    const hasOwnerMessages = allMessages.some(m => m.handoff_instruction || (m.role === 'system' && m.content?.includes('[Owner instruction:')));
+    const hasOwnerReplies = allMessages.some(m => m.role === 'owner' || m.sent_by_human === true);
+    if (hasOwnerMessages || hasOwnerReplies) {
+      systemPrompt += `\n\nIMPORTANT CONTEXT: The business owner has personally replied in this conversation. Their messages are included in the chat history. Continue naturally, building on what the owner discussed. Do NOT contradict anything the owner said (especially about pricing, timelines, or commitments). Maintain consistency with the owner's tone and promises.`;
+    }
     const objection = detectObjection(userText);
     if (objection) {
       systemPrompt += `\n\nOBJECTION DETECTED: "${objection.type}"\nSuggested approach: ${objection.hint}`;
