@@ -15,10 +15,9 @@ const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/e
 const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
 const { computeFieldsState } = require('../src/chat/fieldsState');
 const { buildSystemPrompt, buildLeadContext } = require('../src/services/systemPromptBuilder');
-const { buildFieldQuestion } = require('../src/chat/systemPrompt');
 const { detectObjection } = require('../src/services/objectionHandler');
 const { validateAndCleanReply, checkReplyQuality } = require('../src/services/replyValidator');
-const { enforceStyle } = require('../src/chat/enforceStyle');
+const { enforceStyle, getFieldDisplayName } = require('../src/chat/enforceStyle');
 const {
   shouldGreet,
   shouldClose,
@@ -271,7 +270,9 @@ async function generateAiReply(companyId, leadId) {
   let assistantMessage;
 
   if (requiredInfos.length > 0 && !userText.trim()) {
-    assistantMessage = buildFieldQuestion(topMissing.name, behavior, topMissing.units);
+    const displayName = getFieldDisplayName(topMissing);
+    const suffix = topMissing.units ? ` (in ${topMissing.units})` : '';
+    assistantMessage = `What's your ${displayName}${suffix}?`;
   } else {
     let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages);
     const leadContext = await buildLeadContext(leadForContext);
@@ -316,9 +317,7 @@ async function generateAiReply(companyId, leadId) {
   }
 
   assistantMessage = enforceStyle(assistantMessage, behavior, {
-    nextRequiredField: topMissing?.name,
     topMissingField: topMissing,
-    allowedFieldNames,
   });
 
   let finalCollectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);

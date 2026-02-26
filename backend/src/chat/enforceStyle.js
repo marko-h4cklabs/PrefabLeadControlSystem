@@ -42,20 +42,6 @@ function stripBotTells(text) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-const GREETING_PATTERNS = /\b(hi|hello|hey|welcome|greetings|good (morning|afternoon|evening)|thanks for (reaching out|contacting|writing)|great (question|choice|to hear)|glad (you|to)\b)/gi;
-const APOLOGY_FILLER_PATTERNS = /\b(got it|noted|gotcha|understood|sure thing|no problem|of course|absolutely|certainly|thanks|thank you|sorry|apologize|apologies|unfortunately|I'm afraid)\b/gi;
-
-function removeGreetingsAndFiller(text) {
-  if (!text || typeof text !== 'string') return text;
-  let s = text
-    .replace(GREETING_PATTERNS, '')
-    .replace(APOLOGY_FILLER_PATTERNS, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  s = s.replace(/^[,.\s\-]+/, '').trim();
-  return s;
-}
-
 function limitToShort(text) {
   if (!text || typeof text !== 'string') return text;
   const raw = text.split(/(?<=[.!?])\s+/).filter(Boolean);
@@ -76,64 +62,64 @@ function enforceForbiddenTopics(text, forbiddenTopics, replacement) {
     return term && lower.includes(term);
   });
   if (!hit) return text;
-  return replacement || "I can't help with that. What is your [next required field]?";
+  return replacement || "I can't help with that — is there something else I can assist with?";
 }
 
-const NON_CONFIGURED_TOPICS = [
-  'doors', 'windows', 'placement', 'flooring', 'insulation', 'roof', 'delivery', 'timeline',
-  'door', 'window', 'floor', 'insulate', 'deliver',
-];
+/**
+ * Get the human-readable display name for a field.
+ * Uses the label if available, otherwise converts variable_name to "Variable Name".
+ */
+function getFieldDisplayName(field) {
+  if (!field) return '';
+  if (field.label && field.label.trim()) return field.label.trim();
+  return (field.name || '').replace(/_/g, ' ');
+}
 
-function lastSentenceAsksNonConfigured(text, allowedFieldNames) {
-  if (!text || !allowedFieldNames || typeof allowedFieldNames !== 'object') return false;
-  const allowed = new Set([...allowedFieldNames].map((s) => String(s).toLowerCase()));
+/**
+ * Check if the reply already asks about the target field naturally.
+ * Returns true if the reply contains a question mentioning the field.
+ */
+function alreadyAsksAboutField(text, field) {
+  if (!text || !field) return false;
   const lower = text.toLowerCase();
-  const lastQ = lower.split('?').filter(Boolean).pop();
-  if (!lastQ || !lower.includes('?')) return false;
-  const words = lastQ.split(/\s+/).map((w) => w.replace(/[^a-z]/g, ''));
-  for (const topic of NON_CONFIGURED_TOPICS) {
-    if (allowed.has(topic)) continue;
-    if (words.some((w) => w.includes(topic) || topic.includes(w))) return true;
-    if (lastQ.includes(topic)) return true;
-  }
-  return false;
+  if (!lower.includes('?')) return false;
+
+  const displayName = getFieldDisplayName(field).toLowerCase();
+  const rawName = (field.name || '').toLowerCase().replace(/_/g, ' ');
+
+  return lower.includes(displayName) || lower.includes(rawName);
 }
 
-function enforceScope(text, allowedFieldNames, topMissingField) {
-  if (!text || !topMissingField?.name) return text;
-  const allowed = allowedFieldNames instanceof Set ? allowedFieldNames : new Set([...(allowedFieldNames || [])].map((s) => String(s).toLowerCase()));
-  if (lastSentenceAsksNonConfigured(text, allowed)) {
-    return `What is your ${topMissingField.name}?`;
-  }
-  return text;
-}
-
-function enforceMissingFieldQuestion(text, topMissingField) {
-  if (!text || !topMissingField?.name) return text;
-  const question = `What is your ${topMissingField.name}?`;
-  const lower = text.toLowerCase();
-  const fieldLower = topMissingField.name.toLowerCase();
-  if (lower.includes(fieldLower) && (lower.includes('?') || lower.endsWith('?'))) {
-    return text.trim();
-  }
+/**
+ * If the AI reply doesn't end with a question and there's a missing field,
+ * nudge the conversation toward that field naturally — NOT by appending
+ * "What is your phone_number?" but with a human-sounding follow-up.
+ */
+function ensureConversationAdvances(text, topMissingField) {
+  if (!text || !topMissingField) return text;
   const trimmed = text.trim();
-  if (!trimmed) return question;
+  if (!trimmed) return trimmed;
+
+  // If the reply already ends with a question, leave it alone
   if (trimmed.endsWith('?')) return trimmed;
-  return `${trimmed} ${question}`;
+
+  // If the reply already mentions the field, leave it alone
+  if (alreadyAsksAboutField(trimmed, topMissingField)) return trimmed;
+
+  // Don't append anything — the system prompt already instructs the AI to ask
+  // for missing fields naturally. Forcefully appending questions sounds robotic.
+  // The AI will ask in the next turn if it didn't this time.
+  return trimmed;
 }
 
 function enforceStyle(text, behavior, options = {}) {
   let result = text || '';
   result = stripBotTells(result);
   const beh = behavior ?? {};
-  const { nextRequiredField, topMissingField, forbiddenReplacement, allowedFieldNames } = options;
+  const { topMissingField } = options;
 
   if (beh.emojis_enabled === false) {
     result = stripEmojis(result);
-  }
-
-  if (beh.persona_style === 'busy') {
-    result = removeGreetingsAndFiller(result);
   }
 
   if (beh.response_length === 'short') {
@@ -141,21 +127,18 @@ function enforceStyle(text, behavior, options = {}) {
   }
 
   if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {
-    const repl = nextRequiredField
-      ? `What is your ${nextRequiredField}?`
-      : forbiddenReplacement || "I can't help with that.";
+    const repl = topMissingField
+      ? `I can't help with that — but I'd love to help with what you're looking for. What's your ${getFieldDisplayName(topMissingField)}?`
+      : options.forbiddenReplacement || "I can't help with that — is there something else I can assist with?";
     result = enforceForbiddenTopics(result, beh.forbidden_topics, repl);
   }
 
-  const missing = topMissingField ?? (nextRequiredField ? { name: nextRequiredField } : null);
-  if (missing?.name && allowedFieldNames) {
-    result = enforceScope(result, allowedFieldNames, missing);
-  }
-  if (missing?.name) {
-    result = enforceMissingFieldQuestion(result, missing);
+  // Only nudge if the AI completely failed to advance the conversation
+  if (topMissingField) {
+    result = ensureConversationAdvances(result, topMissingField);
   }
 
   return result.trim() || text;
 }
 
-module.exports = { enforceStyle, stripEmojis, stripBotTells, removeGreetingsAndFiller, limitToShort, enforceMissingFieldQuestion, enforceScope };
+module.exports = { enforceStyle, stripEmojis, stripBotTells, limitToShort, getFieldDisplayName };

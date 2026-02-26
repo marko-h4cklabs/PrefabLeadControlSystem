@@ -17,7 +17,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
   const missing = requiredInfos ?? [];
   const parts = [];
 
-  const agentName = beh.agent_name ?? 'Jarvis';
+  const agentName = beh.agent_name ?? 'Alex';
   const agentBackstory = beh.agent_backstory ?? null;
   const botDenyResponse = beh.bot_deny_response ?? "Nope, real person here 😄 What can I help you with?";
   const humanFallback = beh.human_fallback_message ?? 'Let me get someone from the team to follow up with you directly.';
@@ -119,7 +119,7 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
   if (missing.length > 0) {
     parts.push('## WHAT YOU STILL NEED TO FIND OUT');
     parts.push('Things to learn naturally (one at a time):');
-    parts.push(missing.map((m) => `${m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
+    parts.push(missing.map((m) => `${m.label || m.name?.replace(/_/g, ' ') || m.name} (${m.type}${m.units ? `, ${m.units}` : ''})`).join(', '));
     parts.push('CRITICAL: Ask only for the highest priority missing item. One at a time.');
     parts.push('');
   }
@@ -199,20 +199,12 @@ function truncateToLimit(text, limit) {
   return cut.trim();
 }
 
-function buildFieldQuestion(fieldName, behavior, units = null) {
-  const beh = behavior ?? {};
-  const tone = beh.tone ?? 'professional';
-  const persona = beh.persona_style ?? 'busy';
-  const suffix = units ? ` (${units})` : '';
-
-  const questions = {
-    busy_professional: `${fieldName}${suffix}?`,
-    busy_friendly: `${fieldName}${suffix}?`,
-    explanational_professional: `Could you provide the ${fieldName}${suffix}?`,
-    explanational_friendly: `Could you tell me the ${fieldName}${suffix}?`,
-  };
-  const key = `${persona}_${tone}`;
-  return questions[key] ?? questions.busy_professional;
+function buildFieldQuestion(fieldNameOrObj, behavior, units = null) {
+  const displayName = typeof fieldNameOrObj === 'object'
+    ? (fieldNameOrObj.label || (fieldNameOrObj.name || '').replace(/_/g, ' '))
+    : (fieldNameOrObj || '').replace(/_/g, ' ');
+  const suffix = units ? ` (in ${units})` : '';
+  return `What's your ${displayName}${suffix}?`;
 }
 
 module.exports = { buildSystemPrompt, getLengthLimit, truncateToLimit, buildFieldQuestion };

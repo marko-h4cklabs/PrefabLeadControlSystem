@@ -4,26 +4,49 @@
  */
 
 const CASUAL_OPENERS = [
-  "What's good, thanks for reaching out 👋",
-  "Hey! Thanks for the message",
-  "Hey there, what can I do for you?",
-  "Hey, glad you reached out — what's up?",
+  "Hey, thanks for reaching out!",
+  "Hey! What can I do for you?",
+  "Hey there, glad you messaged",
+  "Hey, what's up?",
 ];
 
 const PROFESSIONAL_OPENERS = [
   "Thanks for reaching out, happy to help.",
-  "Hi there — thanks for your message.",
+  "Hi there, thanks for your message.",
   "Hello, thanks for getting in touch.",
+  "Hi, how can I help you today?",
+];
+
+const QUESTION_OPENERS = [
+  "Hey! What caught your eye?",
+  "Hey, what are you looking for?",
+  "Hi! What can I help you with?",
+  "Hey, what brings you here?",
+];
+
+const STATEMENT_OPENERS = [
+  "Hey, glad you reached out — you're in the right place.",
+  "Hey! You came to the right spot.",
+  "Good timing — happy to chat.",
+  "Hey, glad you messaged us!",
+];
+
+const FORMAL_OPENERS = [
+  "Thank you for getting in touch.",
+  "Hello, it's great to hear from you.",
+  "Good day, thank you for your message.",
+  "Hello, I appreciate you reaching out.",
 ];
 
 const DIRECT_OPENERS = [
   "Hey — what are you looking for?",
   "What can I help you with?",
   "Hey, what do you need?",
+  "What's on your mind?",
 ];
 
 function pickRandom(arr) {
-  if (!Array.isArray(arr) || arr.length === 0) return arr[0];
+  if (!Array.isArray(arr) || arr.length === 0) return arr?.[0] ?? '';
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
@@ -32,18 +55,20 @@ async function generateGreeting(userMessage, behavior) {
   const openerStyle = beh.opener_style ?? 'casual';
   const emojis = beh.emojis_enabled ?? false;
 
-  let openers;
-  if (openerStyle === 'professional') {
-    openers = PROFESSIONAL_OPENERS;
-  } else if (openerStyle === 'direct') {
-    openers = DIRECT_OPENERS;
-  } else {
-    openers = CASUAL_OPENERS;
-  }
+  const openerMap = {
+    casual: CASUAL_OPENERS,
+    professional: PROFESSIONAL_OPENERS,
+    question: QUESTION_OPENERS,
+    statement: STATEMENT_OPENERS,
+    formal: FORMAL_OPENERS,
+    direct: DIRECT_OPENERS,
+  };
 
+  const openers = openerMap[openerStyle] || CASUAL_OPENERS;
   let greeting = pickRandom(openers);
-  if (!emojis && greeting.includes('👋')) {
-    greeting = greeting.replace(/\s*👋\s*/g, ' ').trim();
+
+  if (!emojis) {
+    greeting = greeting.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, '').trim();
   }
   return greeting;
 }
@@ -51,29 +76,16 @@ async function generateGreeting(userMessage, behavior) {
 async function generateClosing(userMessage, collectedFields, behavior) {
   const beh = behavior ?? {};
   const tone = beh.tone ?? 'professional';
-  const persona = beh.persona_style ?? 'busy';
-  const emojis = beh.emojis_enabled ?? false;
-  try {
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const collectedStr = Object.keys(collectedFields ?? {}).length ? `Collected: ${JSON.stringify(collectedFields)}` : 'No fields collected';
-    const response = await client.messages.create({
-      model: process.env.ANTHROPIC_MODEL || 'claude-sart-4-6',
-      max_tokens: 32,
-      system: `You output a closing. Rules:
-- ONLY 2-3 words. No punctuation.
-- Tone: ${tone}. Persona: ${persona}. Busy = minimal.
-- No emojis unless explicitly allowed.
-- Examples: "We'll follow up" "Got it thanks" "Done."`,
-      messages: [{ role: 'user', content: userMessage ? `${userMessage}\n${collectedStr}` : collectedStr }],
-    });
-    const text = response.content?.find((b) => b.type === 'text')?.text ?? '';
-    const words = (text.replace(/[.!?]+$/, '').trim().split(/\s+/).filter(Boolean)).slice(0, 3);
-    return words.join(' ') || "We'll follow up";
-  } catch (err) {
-    console.info('[greetingClosingService] closing fallback:', err.message);
-    return "We'll follow up";
-  }
+
+  const closings = {
+    professional: ["We'll follow up shortly", "The team will be in touch", "We'll get back to you"],
+    friendly: ["Talk soon!", "We'll be in touch", "Chat soon"],
+    confident: ["We'll take it from here", "Expect to hear from us", "We're on it"],
+    relatable: ["We got you", "We'll reach out", "Stay tuned"],
+  };
+
+  const options = closings[tone] || closings.professional;
+  return pickRandom(options);
 }
 
 module.exports = { generateGreeting, generateClosing };

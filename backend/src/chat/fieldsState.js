@@ -27,6 +27,7 @@ function computeFieldsState(quoteFields, collectedFields) {
     })
     .map((f) => ({
       name: f.name ?? '',
+      label: f.label || (f.name ?? '').replace(/_/g, ' '),
       type: f.type ?? 'text',
       units: f.units ?? null,
       priority: f.priority ?? 100,

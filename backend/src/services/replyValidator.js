@@ -94,7 +94,7 @@ function validateAndCleanReply(reply, behavior) {
   }
 
   if (!cleaned) {
-    return 'Thanks for reaching out! Let me check on that for you.';
+    return 'Hey, thanks for reaching out! How can I help?';
   }
 
   return cleaned;
