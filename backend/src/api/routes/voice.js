@@ -228,6 +228,33 @@ router.post('/test', async (req, res) => {
   }
 });
 
+router.post('/compare', async (req, res) => {
+  if (!isElevenLabsConfigured()) return res.status(503).json({ error: 'ElevenLabs not configured', configured: false });
+  try {
+    const { text, voice_a, voice_b } = req.body ?? {};
+    if (!text || !voice_a?.voice_id || !voice_b?.voice_id) {
+      return res.status(400).json({ error: 'text, voice_a, and voice_b are required' });
+    }
+    const [audioA, audioB] = await Promise.all([
+      textToSpeech(voice_a.voice_id, text, {
+        stability: voice_a.stability ?? 0.5,
+        similarity_boost: voice_a.similarity_boost ?? 0.75,
+        style: voice_a.style ?? 0,
+        speaker_boost: voice_a.speaker_boost ?? true,
+      }),
+      textToSpeech(voice_b.voice_id, text, {
+        stability: voice_b.stability ?? 0.5,
+        similarity_boost: voice_b.similarity_boost ?? 0.75,
+        style: voice_b.style ?? 0,
+        speaker_boost: voice_b.speaker_boost ?? true,
+      }),
+    ]);
+    res.json({ audio_a: audioA, audio_b: audioB });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/clone/:id', async (req, res) => {
   res.json({ success: true });
 });
