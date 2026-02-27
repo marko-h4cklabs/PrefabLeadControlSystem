@@ -160,10 +160,12 @@ router.put('/:id/activate', async (req, res) => {
     }
 
     // 4. Copy activated persona into chatbot_behavior (agent identity)
+    const safeTone = ['professional', 'friendly', 'confident', 'relatable'].includes(persona.tone)
+      ? persona.tone : 'professional';
     await pool.query(
       `UPDATE chatbot_behavior SET agent_name = $2, agent_backstory = $3, tone = $4, updated_at = NOW()
        WHERE company_id = $1`,
-      [companyId, persona.agent_name || persona.name, persona.system_prompt ?? '', persona.tone ?? 'professional']
+      [companyId, persona.agent_name || persona.name, persona.system_prompt ?? '', safeTone]
     );
 
     // 5. Mark new persona as active
