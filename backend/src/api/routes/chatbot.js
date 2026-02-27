@@ -947,55 +947,19 @@ router.post('/chat', async (req, res) => {
     // ========= BOOKING RESPONSE: user replied to offer =========
     if (bookingPhase === BOOKING_STATES.OFFERED) {
       if (isBookingAcceptance(message)) {
-        selectedReplyPath = 'booking_slots';
-        try {
-          const availability = await getAvailability(companyId, { limit: 5 });
-          const slots = availability.slots || [];
-          if (slots.length > 0) {
-            const slotsText = formatSlotsMessage(slots, 5);
-            const ask = slotsText + '\n\nPlease pick a time, or suggest your own.';
-            await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.SLOTS_SHOWN });
-            await chatConversationRepository.updateBookingState(conversationId, companyId, {
-              offeredSlots: slots, offeredAt: new Date().toISOString(),
-            });
-            await chatMessagesRepository.appendMessage(conversationId, 'assistant', ask);
-            bookingDebug.offered = true; bookingDebug.reason = 'slots_shown';
-            console.info('[chat-booking] SLOTS_SHOWN', { conversationId, slotCount: slots.length });
-            return respond(ask, { ui_action: 'booking_slots', booking: buildBookingPayload('slots', { slots, availableSlots: slots }) });
-          }
-
-          // No slots — transition to manual request flow
-          selectedReplyPath = 'booking_manual_request';
-          if (bkgConfig.allowCustomTime) {
-            const noSlots = "I couldn't find available slots in that range. I can still take your preferred day/time and submit a booking request. When would work best for you?";
-            await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.CUSTOM_TIME });
-            await chatMessagesRepository.appendMessage(conversationId, 'assistant', noSlots);
-            bookingDebug.reason = 'no_slots_custom_time';
-            console.info('[chat-booking] no slots, asking custom time', { conversationId, debug: availability.debug });
-            return respond(noSlots, { ui_action: 'booking_collect_time', booking: buildBookingPayload('awaiting_custom_time', { debug: availability.debug }) });
-          }
-
-          const noSlotsFallback = 'Our team will reach out shortly to find a time that works. Thank you!';
-          await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
-          await chatMessagesRepository.appendMessage(conversationId, 'assistant', noSlotsFallback);
-          bookingDebug.reason = 'no_slots_team_followup';
-          return respond(noSlotsFallback, { ui_action: 'booking_manual_request', booking: buildBookingPayload('not_available', { debug: availability.debug }) });
-        } catch (availErr) {
-          console.error('[chat-booking] availability fetch failed, using manual fallback:', availErr.message);
-          selectedReplyPath = 'booking_manual_request';
-          if (bkgConfig.allowCustomTime) {
-            const fallback = 'When would work best for you? Share your preferred date and time, and our team will arrange it.';
-            await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.CUSTOM_TIME });
-            await chatMessagesRepository.appendMessage(conversationId, 'assistant', fallback);
-            bookingDebug.reason = 'availability_error_manual_fallback';
-            return respond(fallback, { ui_action: 'booking_collect_time', booking: buildBookingPayload('awaiting_custom_time') });
-          }
-          const fallback = 'Our team will contact you to schedule a convenient time. Thank you!';
-          await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
-          await chatMessagesRepository.appendMessage(conversationId, 'assistant', fallback);
-          bookingDebug.reason = 'availability_error';
-          return respond(fallback, { ui_action: 'booking_manual_request', booking: buildBookingPayload('not_available') });
+        selectedReplyPath = 'booking_accepted';
+        const calendlyUrl = behavior?.calendly_url || null;
+        let acceptMsg;
+        if (calendlyUrl) {
+          acceptMsg = `Here's my booking link: ${calendlyUrl}\n\nPick a time that works for you!`;
+        } else {
+          acceptMsg = 'The team will reach out to find a time that works for you.';
         }
+        await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.ACCEPTED });
+        await chatConversationRepository.updateBookingState(conversationId, companyId, { acceptedAt: new Date().toISOString() });
+        await chatMessagesRepository.appendMessage(conversationId, 'assistant', acceptMsg);
+        bookingDebug.reason = 'booking_accepted';
+        return respond(acceptMsg, { ui_action: 'booking_accepted', booking: buildBookingPayload('accepted') });
       }
       if (isBookingDecline(message)) {
         selectedReplyPath = 'booking_declined';
@@ -1145,18 +1109,7 @@ router.post('/chat', async (req, res) => {
         return respond(prereqMsg, { ui_action: 'booking_collect_prereq', booking: buildBookingPayload('offer', { requiredBeforeBooking: missing, missingPrereqs: missing, source: trigger.reason }) });
       }
 
-      // Fetch slots if requested
-      let offerSlots = [];
-      if (trigger.shouldFetchSlots) {
-        try {
-          const avail = await getAvailability(companyId, { limit: 5 });
-          offerSlots = avail.slots || [];
-        } catch (slErr) {
-          console.warn('[chat-booking] slot fetch failed (non-blocking):', slErr.message);
-        }
-      }
-
-      // Build the offer message
+      // Build the offer message — never show in-chat slots, use Calendly link if available
       let offerMsg = '';
       if (trigger.reason === 'auto_after_quote' && quoteComplete) {
         try {
@@ -1172,37 +1125,35 @@ router.post('/chat', async (req, res) => {
         }
       }
 
-      if (offerSlots.length > 0) {
-        const slotsText = formatSlotsMessage(offerSlots, 5);
-        offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + slotsText + '\n\nPick a time, or suggest your own!';
-      } else if (!offerMsg || !looksLikeBookingOffer(offerMsg)) {
-        offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + buildBookingQuestion(bkgConfig);
+      if (!offerMsg || !looksLikeBookingOffer(offerMsg)) {
+        const calendlyUrl = behavior?.calendly_url || null;
+        if (calendlyUrl) {
+          offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + `Would you like to schedule a call? Here's my booking link: ${calendlyUrl}`;
+        } else {
+          offerMsg = (offerMsg ? offerMsg + '\n\n' : '') + buildBookingQuestion(bkgConfig);
+        }
       }
 
-      const offerPhase = offerSlots.length > 0 ? BOOKING_STATES.SLOTS_SHOWN : BOOKING_STATES.OFFERED;
-      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: offerPhase });
+      await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED });
       await chatConversationRepository.updateBookingState(conversationId, companyId, {
         ...(trigger.bookingStatePatch || {}),
         offeredAt: new Date().toISOString(),
         offerSource: trigger.reason,
         dismissed: false,
-        ...(offerSlots.length > 0 ? { offeredSlots: offerSlots } : {}),
       });
-      bookingPhase = offerPhase;
+      bookingPhase = BOOKING_STATES.OFFERED;
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', offerMsg);
       bookingDebug.offered = true;
       bookingDebug.reason = trigger.reason;
-      console.info('[chat-booking] OFFERED', { conversationId, reason: trigger.reason, slotsCount: offerSlots.length });
+      console.info('[chat-booking] OFFERED', { conversationId, reason: trigger.reason });
       return respond(offerMsg, {
-        ui_action: offerSlots.length > 0 ? 'booking_slots' : 'booking_offer',
-        booking: buildBookingPayload(offerSlots.length > 0 ? 'slots' : 'offer', {
+        ui_action: 'booking_offer',
+        booking: buildBookingPayload('offer', {
           source: trigger.reason,
           defaultAppointmentType: bkgConfig.defaultType,
-          slots: offerSlots,
-          availableSlots: offerSlots,
         }),
         booking_offer: true,
-        quick_replies: offerSlots.length > 0 ? [] : ['Yes', 'Not now'],
+        quick_replies: ['Yes', 'Not now'],
       });
     }
 

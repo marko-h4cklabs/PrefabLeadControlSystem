@@ -112,9 +112,24 @@ function ensureConversationAdvances(text, topMissingField) {
   return trimmed;
 }
 
+/**
+ * Strip em-dashes and double dashes — a dead giveaway of chatbot-generated text.
+ * Replace with comma or space depending on context.
+ */
+function stripDashes(text) {
+  if (!text || typeof text !== 'string') return text;
+  // Replace " — " or " -- " (with spaces) with ", "
+  let result = text.replace(/\s*[—–]\s*/g, ', ');
+  result = result.replace(/\s*--\s*/g, ', ');
+  // Clean up double commas or comma at start
+  result = result.replace(/^,\s*/, '').replace(/,\s*,/g, ',');
+  return result;
+}
+
 function enforceStyle(text, behavior, options = {}) {
   let result = text || '';
   result = stripBotTells(result);
+  result = stripDashes(result);
   const beh = behavior ?? {};
   const { topMissingField } = options;
 
@@ -128,8 +143,8 @@ function enforceStyle(text, behavior, options = {}) {
 
   if (beh.forbidden_topics && beh.forbidden_topics.length > 0) {
     const repl = topMissingField
-      ? `I can't help with that — but I'd love to help with what you're looking for. What's your ${getFieldDisplayName(topMissingField)}?`
-      : options.forbiddenReplacement || "I can't help with that — is there something else I can assist with?";
+      ? `I can't help with that, but I'd love to help with what you're looking for. What's your ${getFieldDisplayName(topMissingField)}?`
+      : options.forbiddenReplacement || "I can't help with that, is there something else I can assist with?";
     result = enforceForbiddenTopics(result, beh.forbidden_topics, repl);
   }
 

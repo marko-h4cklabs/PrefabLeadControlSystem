@@ -43,6 +43,17 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     }
 
     res.status(200).json({ received: true });
+
+    // Deduplicate: extract message ID and skip if already processed via main webhook
+    const messageId = payload.id ?? null;
+    if (messageId) {
+      const { processedMessageIds } = require('./manychat');
+      if (processedMessageIds.has(messageId)) {
+        console.log('[manychat/webhook-by-token] Duplicate messageId skipped:', messageId);
+        return;
+      }
+    }
+
     processManyChatPayload(payload, companyRow).catch((err) => {
       console.error('[manychat/webhook-by-token] Async processing error:', err);
     });

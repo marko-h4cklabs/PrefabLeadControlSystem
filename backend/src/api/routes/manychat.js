@@ -28,13 +28,13 @@ const rawJsonParser = express.raw({ type: 'application/json' });
 const MESSAGE_LIMITS = { trial: 100, pro: 2000, enterprise: 999999 };
 
 // --- Duplicate message protection ---
-// Track recently processed webhook message IDs to prevent duplicate processing
+// Track recently processed webhook message IDs to prevent duplicate processing (5 min TTL)
 const processedMessageIds = new Map();
 // Track per-lead processing locks to prevent concurrent AI reply generation
 const leadProcessingLocks = new Map();
 
 setInterval(() => {
-  const cutoff = Date.now() - 60_000;
+  const cutoff = Date.now() - 300_000;
   for (const [id, ts] of processedMessageIds) {
     if (ts < cutoff) processedMessageIds.delete(id);
   }
@@ -663,3 +663,4 @@ async function processManyChatPayload(payload, overrideCompany) {
 
 module.exports = router;
 module.exports.processManyChatPayload = processManyChatPayload;
+module.exports.processedMessageIds = processedMessageIds;

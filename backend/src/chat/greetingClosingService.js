@@ -74,18 +74,10 @@ async function generateGreeting(userMessage, behavior) {
 }
 
 async function generateClosing(userMessage, collectedFields, behavior) {
-  const beh = behavior ?? {};
-  const tone = beh.tone ?? 'professional';
-
-  const closings = {
-    professional: ["We'll follow up shortly", "The team will be in touch", "We'll get back to you"],
-    friendly: ["Talk soon!", "We'll be in touch", "Chat soon"],
-    confident: ["We'll take it from here", "Expect to hear from us", "We're on it"],
-    relatable: ["We got you", "We'll reach out", "Stay tuned"],
-  };
-
-  const options = closings[tone] || closings.professional;
-  return pickRandom(options);
+  // Disabled: canned closing phrases ("We got you", "Stay tuned", etc.) sound robotic
+  // and bypass the AI prompt, making them uncontrollable. The AI handles natural
+  // conversation endings through the system prompt.
+  return '';
 }
 
 module.exports = { generateGreeting, generateClosing };

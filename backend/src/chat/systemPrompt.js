@@ -140,31 +140,19 @@ function buildSystemPrompt(behavior, companyInfo, quoteFields, collectedFields, 
     && schedulingConfig.chatbotBookingMode !== 'off';
 
   if (bookingEnabled) {
-    parts.push('## Scheduling / Booking (MUST follow when all quote fields are collected)');
+    parts.push('## Scheduling / Booking');
     const typeLabel = (schedulingConfig.chatbotBookingDefaultType || 'call').replace(/_/g, ' ');
+    const calendlyUrl = schedulingConfig.calendly_url || schedulingConfig.calendlyUrl || null;
 
-    parts.push(`- IMMEDIATELY after the quote summary, ask: "Would you like to schedule a ${typeLabel} to discuss your project further?"`);
-    parts.push('- This booking question is MANDATORY after the summary. Do not skip it.');
-    parts.push('- If the user expresses interest in scheduling/meeting/calling at any point, acknowledge it positively.');
-
-    if (schedulingConfig.chatbotAllowUserProposedTime !== false) {
-      parts.push('- If the user proposes a date or time, acknowledge their preference.');
+    parts.push(`- After all required info is collected and the lead seems interested, offer to book a ${typeLabel}.`);
+    if (calendlyUrl) {
+      parts.push(`- Send them this booking link: ${calendlyUrl}`);
     } else {
-      parts.push('- Do NOT ask the user for a specific date/time. Just confirm interest.');
+      parts.push('- Let them know the team will follow up to schedule.');
     }
-
-    if (schedulingConfig.chatbotBookingRequiresName) {
-      parts.push('- Before confirming a booking request, ask for their full name if not already known.');
-    }
-    if (schedulingConfig.chatbotBookingRequiresPhone) {
-      parts.push('- Before confirming a booking request, ask for their phone number if not already known.');
-    }
-
-    if (companyInfo?.google_calendar_connected) {
-      parts.push('- IMPORTANT: Only suggest times that are confirmed available. Do not offer times that are already blocked.');
-    }
-
-    parts.push('- Do NOT confirm an appointment is booked. Say the team will follow up to confirm the exact time.');
+    parts.push('- NEVER show numbered time slots or available times in the chat.');
+    parts.push('- NEVER list calendar availability inline.');
+    parts.push('- Only offer booking ONCE per conversation. If they decline, respect it.');
     parts.push('');
   }
 

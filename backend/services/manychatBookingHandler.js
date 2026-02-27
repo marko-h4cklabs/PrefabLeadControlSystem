@@ -105,22 +105,20 @@ async function handleActiveBookingPhase({ leadId, companyId, userMessage, bookin
     return null; // fall through to normal AI
   }
 
-  // --- OFFERED: user was asked "would you like to book?" (no slots shown yet) ---
+  // --- OFFERED: user was asked "would you like to book?" ---
   if (bookingPhase === BOOKING_STATES.OFFERED) {
     if (isBookingAcceptance(msg) || looksLikeBookingIntent(msg)) {
-      // Fetch and show slots
-      const avail = await getAvailability(companyId, { limit: 5 });
-      const slots = avail.slots || [];
-      if (slots.length === 0) {
-        await conversationRepository.mergeBookingState(leadId, null, {});
-        return { handled: true, replyMessage: "I don't have any available slots right now. I'll have someone from the team reach out to schedule." };
-      }
-      const slotsText = formatSlotsMessage(slots, 5);
-      await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.SLOTS_SHOWN, {
-        offeredSlots: slots,
-        selectedSlot: null,
+      // Send Calendly link if configured, otherwise let team follow up
+      const { chatbotBehaviorRepository } = require('../db/repositories');
+      const behavior = await chatbotBehaviorRepository.get(companyId);
+      const calendlyUrl = behavior?.calendly_url || null;
+      await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.ACCEPTED, {
+        acceptedAt: new Date().toISOString(),
       });
-      return { handled: true, replyMessage: `Great! ${slotsText}\n\nReply with a number to select a time.` };
+      if (calendlyUrl) {
+        return { handled: true, replyMessage: `Here's my booking link: ${calendlyUrl}\n\nPick a time that works for you!` };
+      }
+      return { handled: true, replyMessage: "The team will reach out to find a time that works for you." };
     }
     if (isBookingDecline(msg)) {
       await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.DECLINED, {
@@ -191,37 +189,23 @@ async function evaluatePostReplyBooking({ leadId, companyId, userMessage, quoteC
 
     if (!trigger.shouldOfferBooking) return null;
 
-    // Fetch available slots
-    const avail = await getAvailability(companyId, { limit: 5 });
-    const slots = avail.slots || [];
+    // Offer booking via Calendly link or simple question — never show in-chat slots
+    const { chatbotBehaviorRepository } = require('../db/repositories');
+    const behavior = await chatbotBehaviorRepository.get(companyId);
+    const calendlyUrl = behavior?.calendly_url || null;
 
-    if (slots.length === 0) {
-      // No slots — offer without slot list
-      const question = buildBookingQuestion(bkgConfig);
-      await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.OFFERED, {
-        offeredAt: new Date().toISOString(),
-        offerSource: trigger.reason,
-      });
-      return {
-        offerMessage: `\n\n${question} (I'll check available times once you confirm)`,
-        bookingPhase: BOOKING_STATES.OFFERED,
-      };
-    }
+    const question = calendlyUrl
+      ? `Would you like to schedule a call? Here's my booking link: ${calendlyUrl}`
+      : buildBookingQuestion(bkgConfig);
 
-    // Show slots with offer
-    const slotsText = formatSlotsMessage(slots, 5);
-    const question = buildBookingQuestion(bkgConfig);
-
-    await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.SLOTS_SHOWN, {
+    await conversationRepository.mergeBookingState(leadId, BOOKING_STATES.OFFERED, {
       offeredAt: new Date().toISOString(),
       offerSource: trigger.reason,
-      offeredSlots: slots,
-      selectedSlot: null,
     });
 
     return {
-      offerMessage: `\n\n${question}\n\n${slotsText}\n\nReply with a number to select a time, or "no thanks" to skip.`,
-      bookingPhase: BOOKING_STATES.SLOTS_SHOWN,
+      offerMessage: `\n\n${question}`,
+      bookingPhase: BOOKING_STATES.OFFERED,
     };
   } catch (err) {
     console.error('[booking] evaluatePostReplyBooking error:', err.message);
