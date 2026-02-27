@@ -21,6 +21,7 @@ const { analyzeInboundMessage } = require('../../../services/leadIntelligenceSer
 const { sendInstagramMessage, sendManyChatImage, sendManyChatFile } = require('../../services/manychatService');
 const { createNotification } = require('../../services/notificationService');
 const handoffService = require('../../services/handoffService');
+const incomingMessageQueue = require('../../../services/incomingMessageQueue');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
 
@@ -170,9 +171,21 @@ router.post('/', rawJsonParser, async (req, res) => {
 
     res.status(200).json({ received: true });
 
-    processManyChatPayload(payload).catch((err) => {
-      console.error('[manychat/webhook] Async processing error:', err);
-    });
+    // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).
+    // Falls back to fire-and-forget if Redis is unavailable.
+    const messageId = payload.id ?? null;
+    if (process.env.REDIS_URL) {
+      incomingMessageQueue.enqueueMessage(payload, messageId).catch((err) => {
+        console.error('[manychat/webhook] Queue enqueue failed, falling back to direct processing:', err.message);
+        processManyChatPayload(payload).catch((e) => {
+          console.error('[manychat/webhook] Fallback processing error:', e);
+        });
+      });
+    } else {
+      processManyChatPayload(payload).catch((err) => {
+        console.error('[manychat/webhook] Async processing error:', err);
+      });
+    }
   } catch (err) {
     console.error('[manychat/webhook] Error:', err);
     if (!res.headersSent) {

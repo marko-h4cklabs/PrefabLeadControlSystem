@@ -194,6 +194,7 @@ app.use((err, req, res, next) => {
 
 const reminderWorker = require('../services/appointmentReminderWorker');
 const followUpWorker = require('../services/followUpWorker');
+const incomingMessageWorker = require('../services/incomingMessageWorker');
 const warmingWorker = require('./workers/warmingWorker');
 const warmingService = require('./services/warmingService');
 const revenueSnapshotService = require('./services/revenueSnapshotService');
@@ -271,6 +272,7 @@ function startServer() {
     console.log(`Server listening on port ${PORT}`);
     reminderWorker.start();
     if (process.env.REDIS_URL) {
+      incomingMessageWorker.start();
       followUpWorker.start();
       warmingWorker.start();
       warmingCronTimer = setInterval(() => {
@@ -307,10 +309,13 @@ async function gracefulShutdown() {
   if (handoffCronTimer) clearInterval(handoffCronTimer);
   if (revenueCronTimer) clearInterval(revenueCronTimer);
   reminderWorker.stop();
+  await incomingMessageWorker.stop();
   await followUpWorker.stop();
   await warmingWorker.stop();
   const queueService = require('../services/queueService');
+  const incomingMessageQueue = require('../services/incomingMessageQueue');
   await queueService.close();
+  await incomingMessageQueue.close();
   server.close(() => process.exit(0));
 }
 
