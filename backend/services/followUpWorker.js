@@ -3,6 +3,7 @@
  * Processes scheduled outreach jobs: no_reply, post_quote, cold_lead, custom.
  */
 
+const logger = require('../src/lib/logger');
 const { Worker } = require('bullmq');
 const queueService = require('./queueService');
 const {
@@ -39,23 +40,23 @@ async function hasAppointmentBooked(companyId, leadId) {
 
 async function processJob(job) {
   const { leadId, companyId, type, scheduledAt } = job.data;
-  console.log(`[follow-up] processing job type=${type} for leadId=${leadId}`);
+  logger.info(`[follow-up] processing job type=${type} for leadId=${leadId}`);
 
   let lead;
   try {
     lead = await leadRepository.findById(companyId, leadId);
   } catch (err) {
-    console.error('[follow-up] fetch lead error:', err.message);
+    logger.error('[follow-up] fetch lead error:', err.message);
     return;
   }
 
   if (!lead) {
-    console.log('[follow-up] lead not found, skipping');
+    logger.info('[follow-up] lead not found, skipping');
     return;
   }
 
   if (lead.status === 'qualified' || lead.status === 'disqualified') {
-    console.log('[follow-up] lead status is qualified/disqualified, skipping');
+    logger.info('[follow-up] lead status is qualified/disqualified, skipping');
     return;
   }
 
@@ -64,7 +65,7 @@ async function processJob(job) {
       case 'no_reply': {
         const replied = await hasUserRepliedSince(leadId, scheduledAt || 0);
         if (replied) {
-          console.log('[follow-up] lead replied since scheduled, skipping');
+          logger.info('[follow-up] lead replied since scheduled, skipping');
           return;
         }
         let conversation = await conversationRepository.getByLeadId(leadId);
@@ -94,7 +95,7 @@ async function processJob(job) {
       case 'post_quote': {
         const booked = await hasAppointmentBooked(companyId, leadId);
         if (booked) {
-          console.log('[follow-up] appointment already booked, skipping');
+          logger.info('[follow-up] appointment already booked, skipping');
           return;
         }
         let conv = await conversationRepository.getByLeadId(leadId);
@@ -121,7 +122,7 @@ async function processJob(job) {
 
       case 'cold_lead': {
         if ((lead.score ?? 0) > 40) {
-          console.log('[follow-up] lead score > 40, skipping cold_lead');
+          logger.info('[follow-up] lead score > 40, skipping cold_lead');
           return;
         }
         let c2 = await conversationRepository.getByLeadId(leadId);
@@ -149,7 +150,7 @@ async function processJob(job) {
       case 'custom': {
         const message = job.data.message;
         if (!message || typeof message !== 'string') {
-          console.log('[follow-up] custom job missing message, skipping');
+          logger.info('[follow-up] custom job missing message, skipping');
           return;
         }
         let c4 = await conversationRepository.getByLeadId(leadId);
@@ -168,10 +169,10 @@ async function processJob(job) {
       }
 
       default:
-        console.log('[follow-up] unknown type', type);
+        logger.info('[follow-up] unknown type', type);
     }
   } catch (err) {
-    console.error('[follow-up] job processing error:', err.message);
+    logger.error('[follow-up] job processing error:', err.message);
     // Do not throw - prevents job from blocking the queue
   }
 }
@@ -191,21 +192,29 @@ function start() {
   );
 
   worker.on('error', (err) => {
-    console.error('[follow-up worker] error:', err.message);
+    logger.error('[follow-up worker] error:', err.message);
   });
 
-  worker.on('failed', (job, err) => {
-    console.error('[follow-up worker] job failed:', job?.id, err?.message);
+  worker.on('failed', async (job, err) => {
+    logger.error('[follow-up worker] job failed:', job?.id, err?.message);
+    if (job && job.attemptsMade >= (job.opts?.attempts || 2)) {
+      const { sendAdminAlert } = require('../src/services/adminAlertService');
+      sendAdminAlert(
+        `dlq:followup:${job.id}`,
+        'Follow-up job permanently failed',
+        { jobId: job.id, leadId: job.data?.leadId, type: job.data?.type, error: err?.message }
+      ).catch(() => {});
+    }
   });
 
-  console.info('[follow-up worker] started, concurrency=', CONCURRENCY);
+  logger.info('[follow-up worker] started, concurrency=', CONCURRENCY);
 }
 
 async function stop() {
   if (worker) {
     await worker.close();
     worker = null;
-    console.info('[follow-up worker] stopped');
+    logger.info('[follow-up worker] stopped');
   }
 }
 

@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const { z } = require('zod');
 
 const APPOINTMENT_TYPES = ['call', 'meeting', 'follow_up', 'consultation', 'video_call'];
@@ -108,7 +109,7 @@ function logConflicts(canonical, resolved, sources) {
   if (defined.length > 1) {
     const conflicting = defined.some(([, v]) => v !== resolved);
     if (conflicting) {
-      console.warn(
+      logger.warn(
         `[scheduling-settings] CONFLICT on "${canonical}": winner=${JSON.stringify(resolved)} from:`,
         defined.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')
       );

@@ -1,3 +1,4 @@
+const logger = require('../../src/lib/logger');
 const { pool } = require('../index');
 const conversationRepository = require('./conversationRepository');
 
@@ -130,7 +131,7 @@ async function findAll(companyId, options = {}) {
   try {
     result = await pool.query(sql, params);
   } catch (err) {
-    console.error('[leadRepository.findAll] SQL error:', err.message, 'params:', params);
+    logger.error('[leadRepository.findAll] SQL error:', err.message, 'params:', params);
     throw err;
   }
   return result.rows.map((r) => {
@@ -182,7 +183,7 @@ async function count(companyId, options = {}) {
       const result = await pool.query(sql, params);
       return result.rows[0]?.count ?? 0;
     } catch (err) {
-      console.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
+      logger.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
       throw err;
     }
   }
@@ -205,7 +206,7 @@ async function count(companyId, options = {}) {
     const result = await pool.query(sql, params);
     return result.rows[0]?.count ?? 0;
   } catch (err) {
-    console.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
+    logger.error('[leadRepository.count] SQL error:', err.message, 'params:', params);
     throw err;
   }
 }

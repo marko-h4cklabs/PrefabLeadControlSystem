@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -26,7 +27,7 @@ router.get('/', async (req, res) => {
     }));
     return res.json({ items });
   } catch (err) {
-    console.error('[chatbot/personas] list:', err.message);
+    logger.error('[chatbot/personas] list:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list personas');
   }
 });
@@ -55,7 +56,7 @@ router.post('/', async (req, res) => {
     const row = r.rows[0];
     return res.status(201).json(row);
   } catch (err) {
-    console.error('[chatbot/personas] create:', err.message);
+    logger.error('[chatbot/personas] create:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create persona');
   }
 });
@@ -105,7 +106,7 @@ router.put('/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
     return res.json(r.rows[0]);
   } catch (err) {
-    console.error('[chatbot/personas] update:', err.message);
+    logger.error('[chatbot/personas] update:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update persona');
   }
 });
@@ -176,7 +177,7 @@ router.put('/:id/activate', async (req, res) => {
 
     return res.json({ success: true, id: persona.id, name: persona.name, is_active: true });
   } catch (err) {
-    console.error('[chatbot/personas] activate:', err.message);
+    logger.error('[chatbot/personas] activate:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to activate persona');
   }
 });
@@ -197,7 +198,7 @@ router.delete('/:id', async (req, res) => {
     await pool.query('DELETE FROM chatbot_personas WHERE id = $1 AND company_id = $2', [id, companyId]);
     return res.json({ success: true, id });
   } catch (err) {
-    console.error('[chatbot/personas] delete:', err.message);
+    logger.error('[chatbot/personas] delete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete persona');
   }
 });

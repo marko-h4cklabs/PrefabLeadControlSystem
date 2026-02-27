@@ -3,7 +3,9 @@
  * All outbound calls use the company's apiKey parameter; no global env.
  */
 
+const logger = require('../lib/logger');
 const axios = require('axios');
+const { decrypt } = require('../lib/encryption');
 
 async function getPageInfo(apiKey) {
   if (!apiKey || !String(apiKey).trim()) {
@@ -48,7 +50,7 @@ async function sendInstagramMessage(subscriberId, text, apiKey) {
 
 async function sendManyChatImage(lead, imageUrl, caption, company) {
   try {
-    const apiKey = company?.manychat_api_key;
+    const apiKey = decrypt(company?.manychat_api_key);
     if (!apiKey) return;
     const subscriberId = lead?.external_id;
     if (!subscriberId) return;
@@ -77,7 +79,7 @@ async function sendManyChatImage(lead, imageUrl, caption, company) {
       }
     );
   } catch (err) {
-    console.error('[manychat] sendManyChatImage error:', err.message);
+    logger.error('[manychat] sendManyChatImage error:', err.message);
   }
 }
 

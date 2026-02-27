@@ -2,6 +2,7 @@
  * BullMQ worker for warming sequence steps. Processes jobs from warming-queue, concurrency 3.
  */
 
+const logger = require('../lib/logger');
 const { Worker } = require('bullmq');
 const warmingService = require('../services/warmingService');
 
@@ -22,21 +23,29 @@ function start() {
   );
 
   worker.on('error', (err) => {
-    console.error('[warmingWorker] error:', err.message);
+    logger.error('[warmingWorker] error:', err.message);
   });
 
-  worker.on('failed', (job, err) => {
-    console.error('[warmingWorker] job failed:', job?.id, err?.message);
+  worker.on('failed', async (job, err) => {
+    logger.error('[warmingWorker] job failed:', job?.id, err?.message);
+    if (job && job.attemptsMade >= (job.opts?.attempts || 1)) {
+      const { sendAdminAlert } = require('../services/adminAlertService');
+      sendAdminAlert(
+        `dlq:warming:${job.id}`,
+        'Warming job permanently failed',
+        { jobId: job.id, enrollmentId: job.data?.enrollmentId, stepId: job.data?.stepId, error: err?.message }
+      ).catch(() => {});
+    }
   });
 
-  console.info('[warmingWorker] started, concurrency=', CONCURRENCY);
+  logger.info('[warmingWorker] started, concurrency=', CONCURRENCY);
 }
 
 async function stop() {
   if (worker) {
     await worker.close();
     worker = null;
-    console.info('[warmingWorker] stopped');
+    logger.info('[warmingWorker] stopped');
   }
 }
 

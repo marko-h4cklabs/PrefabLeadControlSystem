@@ -3,6 +3,7 @@
  * Handles scheduled outreach to leads (no_reply, post_quote, cold_lead, custom).
  */
 
+const logger = require('../src/lib/logger');
 const IORedis = require('ioredis');
 const { Queue } = require('bullmq');
 
@@ -30,7 +31,12 @@ function getQueue() {
       connection: conn,
       defaultJobOptions: {
         removeOnComplete: { age: 3600, count: 1000 },
-        removeOnFail: { age: 86400 },
+        removeOnFail: { age: 86400 * 3 },
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 10000,
+        },
       },
     });
   }
@@ -84,7 +90,7 @@ async function scheduleFollowUp(leadId, companyId, type, delayMs, payload = {}) 
 
     return { queued: true, jobId: job.id ?? jobId };
   } catch (err) {
-    console.error('[queueService] scheduleFollowUp error:', err.message);
+    logger.error('[queueService] scheduleFollowUp error:', err.message);
     throw err;
   }
 }
@@ -106,7 +112,7 @@ async function cancelFollowUp(leadId, type) {
     }
     return false;
   } catch (err) {
-    console.error('[queueService] cancelFollowUp error:', err.message);
+    logger.error('[queueService] cancelFollowUp error:', err.message);
     throw err;
   }
 }
@@ -126,7 +132,7 @@ async function getQueueStats() {
     ]);
     return { waiting, active, completed, failed, delayed };
   } catch (err) {
-    console.error('[queueService] getQueueStats error:', err.message);
+    logger.error('[queueService] getQueueStats error:', err.message);
     return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
   }
 }
@@ -142,7 +148,7 @@ async function close() {
       connection = null;
     }
   } catch (err) {
-    console.error('[queueService] close error:', err.message);
+    logger.error('[queueService] close error:', err.message);
   }
 }
 

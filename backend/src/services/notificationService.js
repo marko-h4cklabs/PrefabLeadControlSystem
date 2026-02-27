@@ -1,3 +1,4 @@
+const logger = require('../lib/logger');
 const { notificationRepository } = require('../../db/repositories');
 
 async function createNotification(companyId, type, title, message, leadId = null, metadata = {}) {

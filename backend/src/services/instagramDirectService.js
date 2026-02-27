@@ -7,6 +7,7 @@
  *   FACEBOOK_PAGE_ID     — (optional) Facebook Page ID; skips /me/accounts resolution
  */
 
+const logger = require('../lib/logger');
 const axios = require('axios');
 
 const GRAPH_API_VERSION = 'v21.0';
@@ -42,13 +43,13 @@ async function resolvePageToken(token) {
   // Option 1: explicit Page ID from env
   const envPageId = (process.env.FACEBOOK_PAGE_ID || '').trim();
   if (envPageId) {
-    console.log('[instagram-direct] Using FACEBOOK_PAGE_ID from env:', envPageId);
+    logger.info('[instagram-direct] Using FACEBOOK_PAGE_ID from env:', envPageId);
     _cachedPageInfo = { pageId: envPageId, pageToken: token };
     return _cachedPageInfo;
   }
 
   // Option 2: resolve via /me/accounts
-  console.log('[instagram-direct] No FACEBOOK_PAGE_ID set, resolving via /me/accounts...');
+  logger.info('[instagram-direct] No FACEBOOK_PAGE_ID set, resolving via /me/accounts...');
   const response = await axios.get(`${GRAPH_API_BASE}/me/accounts`, {
     params: {
       access_token: token,
@@ -58,7 +59,7 @@ async function resolvePageToken(token) {
   });
 
   const pages = response.data?.data || [];
-  console.log('[instagram-direct] /me/accounts returned', pages.length, 'pages:', pages.map((p) => `${p.name} (${p.id})`).join(', '));
+  logger.info('[instagram-direct] /me/accounts returned', pages.length, 'pages:', pages.map((p) => `${p.name} (${p.id})`).join(', '));
 
   const igPage = pages.find((p) => p.instagram_business_account) || pages[0];
   if (!igPage) {
@@ -66,7 +67,7 @@ async function resolvePageToken(token) {
   }
 
   _cachedPageInfo = { pageId: igPage.id, pageToken: igPage.access_token };
-  console.log('[instagram-direct] Resolved page:', igPage.name, 'pageId:', igPage.id);
+  logger.info('[instagram-direct] Resolved page:', igPage.name, 'pageId:', igPage.id);
   return _cachedPageInfo;
 }
 

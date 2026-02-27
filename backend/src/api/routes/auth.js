@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
@@ -10,8 +11,50 @@ const { generateVerifyToken, sendVerificationEmail } = require('../../services/e
 const { generateSmsCode, sendVerificationSms, isTwilioConfigured } = require('../../services/smsService');
 const rateLimit = require('express-rate-limit');
 const { getGoogleUserInfo, isGoogleConfigured } = require('../../services/googleAuthService');
+const { getRedisClient } = require('../../lib/redis');
 
 const router = express.Router();
+
+// --- Refresh token helpers ---
+const REFRESH_TOKEN_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
+const ACCESS_TOKEN_EXPIRY = '15m';
+
+function generateAccessToken(payload) {
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+}
+
+async function generateRefreshToken(userId) {
+  const token = crypto.randomBytes(40).toString('hex');
+  const redis = getRedisClient();
+  if (redis) {
+    await redis.set(`refresh:${token}`, userId, 'EX', REFRESH_TOKEN_TTL);
+  }
+  return token;
+}
+
+async function validateRefreshToken(token) {
+  if (!token) return null;
+  const redis = getRedisClient();
+  if (!redis) return null;
+  const userId = await redis.get(`refresh:${token}`);
+  return userId || null;
+}
+
+async function revokeRefreshToken(token) {
+  if (!token) return;
+  const redis = getRedisClient();
+  if (redis) await redis.del(`refresh:${token}`);
+}
+
+function setRefreshCookie(res, token) {
+  res.cookie('refresh_token', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: REFRESH_TOKEN_TTL * 1000,
+    path: '/api/auth',
+  });
+}
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -155,14 +198,12 @@ router.post('/signup', authLimiter, async (req, res) => {
       body.full_name || body.fullName || companyName,
       verifyToken
     ).catch((err) => {
-      console.error('[register] Failed to send verification email:', err.message);
+      logger.error('[register] Failed to send verification email:', err.message);
     });
 
-    const token = jwt.sign(
-      { id: user.id, companyId: company.id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+    const token = generateAccessToken({ id: user.id, companyId: company.id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
 
     res.status(201).json({
       token,
@@ -231,14 +272,12 @@ router.post('/register', authLimiter, async (req, res) => {
       body.full_name || body.fullName || body.company_name || body.companyName,
       verifyToken
     ).catch((err) => {
-      console.error('[register] Failed to send verification email:', err.message);
+      logger.error('[register] Failed to send verification email:', err.message);
     });
 
-    const token = jwt.sign(
-      { id: user.id, companyId: company.id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+    const token = generateAccessToken({ id: user.id, companyId: company.id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
 
     res.status(201).json({
       token,
@@ -323,11 +362,10 @@ router.post('/login', authLimiter, async (req, res) => {
       'UPDATE users SET login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1',
       [user.id]
     );
-    const token = jwt.sign(
-      { id: user.id, companyId: user.company_id, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+
     res.json({
       token,
       user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id },
@@ -424,7 +462,7 @@ router.post('/send-phone-code', authMiddleware, async (req, res) => {
     );
 
     if (!isTwilioConfigured()) {
-      console.log(`[dev] SMS code for ${normalized}: ${code}`);
+      logger.info(`[dev] SMS code for ${normalized}: ${code}`);
       return res.json({
         success: true,
         dev_code: process.env.NODE_ENV !== 'production' ? code : undefined,
@@ -561,22 +599,20 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
           opener_style: 'greeting',
         });
       } catch (e) {
-        console.error('[google/callback] chatbot_behavior init failed:', e.message);
+        logger.error('[google/callback] chatbot_behavior init failed:', e.message);
       }
     }
 
-    const token = jwt.sign(
-      { id: userId, companyId, role: 'admin' },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+    const token = generateAccessToken({ id: userId, companyId, role: 'admin' });
+    const refreshToken = await generateRefreshToken(userId);
+    setRefreshCookie(res, refreshToken);
 
     const redirectPath = isNewUser ? '/onboarding' : '/dashboard';
     return res.redirect(
       `${frontendUrl}/auth/callback?token=${token}&companyId=${companyId}&isNew=${isNewUser}&redirect=${redirectPath}`
     );
   } catch (err) {
-    console.error('[google/callback]', err.message);
+    logger.error('[google/callback]', err.message);
     return res.redirect(`${frontendUrl}/login?error=google_failed`);
   }
 });
@@ -616,6 +652,56 @@ router.get('/me', authMiddleware, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
   }
+});
+
+// --- Token refresh: exchange refresh token cookie for new access + refresh tokens ---
+router.post('/refresh', async (req, res) => {
+  try {
+    const oldRefresh = req.cookies?.refresh_token;
+    if (!oldRefresh) {
+      return res.status(401).json({ error: { code: 'NO_REFRESH_TOKEN', message: 'Refresh token required' } });
+    }
+
+    const userId = await validateRefreshToken(oldRefresh);
+    if (!userId) {
+      // Token invalid or expired — clear cookie
+      res.clearCookie('refresh_token', { path: '/api/auth' });
+      return res.status(401).json({ error: { code: 'INVALID_REFRESH_TOKEN', message: 'Invalid or expired refresh token' } });
+    }
+
+    // Revoke old token (rotation)
+    await revokeRefreshToken(oldRefresh);
+
+    // Look up user to build new access token
+    const userRow = await pool.query(
+      'SELECT id, email, role, company_id FROM users WHERE id = $1',
+      [userId]
+    );
+    const user = userRow.rows[0];
+    if (!user) {
+      res.clearCookie('refresh_token', { path: '/api/auth' });
+      return res.status(401).json({ error: { code: 'USER_NOT_FOUND', message: 'User no longer exists' } });
+    }
+
+    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
+    const newRefresh = await generateRefreshToken(user.id);
+    setRefreshCookie(res, newRefresh);
+
+    res.json({ token });
+  } catch (err) {
+    logger.error({ err }, '[auth/refresh] Error');
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+  }
+});
+
+// --- Logout: revoke refresh token ---
+router.post('/logout', async (req, res) => {
+  const refreshToken = req.cookies?.refresh_token;
+  if (refreshToken) {
+    await revokeRefreshToken(refreshToken);
+  }
+  res.clearCookie('refresh_token', { path: '/api/auth' });
+  res.json({ success: true });
 });
 
 module.exports = router;

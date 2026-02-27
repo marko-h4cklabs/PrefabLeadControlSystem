@@ -3,12 +3,14 @@
  * Enrolls leads in sequences, processes steps via BullMQ, cancels on reply, calculates no-show risk.
  */
 
+const logger = require('../lib/logger');
 const IORedis = require('ioredis');
 const { Queue } = require('bullmq');
 const { pool } = require('../../db');
 const { leadRepository, companyRepository, conversationRepository } = require('../../db/repositories');
 const { sendInstagramMessage } = require('./manychatService');
 const { createNotification } = require('./notificationService');
+const { decrypt } = require('../lib/encryption');
 
 const QUEUE_NAME = 'warming-queue';
 let queue = null;
@@ -29,7 +31,12 @@ function getQueue() {
       connection: getConnection(),
       defaultJobOptions: {
         removeOnComplete: { age: 86400, count: 5000 },
-        removeOnFail: { age: 86400 },
+        removeOnFail: { age: 86400 * 3 },
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 10000,
+        },
       },
     });
   }
@@ -84,7 +91,7 @@ async function enrollLead(leadId, companyId, triggerEvent) {
         { jobId: `warming-${enrollmentId}-${first.id}`, delay: delayMs }
       );
     } catch (err) {
-      console.error('[warming] schedule first step failed:', err.message);
+      logger.error('[warming] schedule first step failed:', err.message);
     }
   }
 
@@ -160,7 +167,7 @@ Output ONLY the message text, nothing else.`;
     const text = content?.[0]?.text || content?.text || null;
     return typeof text === 'string' ? text.trim() : null;
   } catch (err) {
-    console.warn('[warming] AI follow-up generation failed:', err.message);
+    logger.warn('[warming] AI follow-up generation failed:', err.message);
     return null;
   }
 }
@@ -220,7 +227,7 @@ async function processWarmingStep(enrollmentId, stepId) {
   // Evaluate branching conditions
   const conditions = st.conditions || null;
   if (!evaluateConditions(conditions, { leadReplied, lastSentiment })) {
-    console.log(`[warming] Step ${st.step_order} skipped due to conditions for enrollment ${enrollmentId}`);
+    logger.info(`[warming] Step ${st.step_order} skipped due to conditions for enrollment ${enrollmentId}`);
     // Skip to next step
     await scheduleNextStep(enr, st, enrollmentId);
     return;
@@ -271,12 +278,12 @@ async function processWarmingStep(enrollmentId, stepId) {
       `SELECT manychat_api_key FROM companies WHERE id = $1`,
       [enr.company_id]
     );
-    const apiKey = mcRow.rows[0]?.manychat_api_key;
+    const apiKey = decrypt(mcRow.rows[0]?.manychat_api_key);
     if (apiKey && lead.external_id) {
       manychatResponse = await sendInstagramMessage(lead.external_id, message, apiKey);
     }
   } catch (err) {
-    console.error('[warming] send message failed:', err.message);
+    logger.error('[warming] send message failed:', err.message);
     manychatResponse = { error: err.message };
   }
 
@@ -352,7 +359,7 @@ async function handleEscalation(enrollment, lead, sequence) {
       break;
   }
 
-  console.log(`[warming] Escalation: ${action} for lead ${enrollment.lead_id} after ${sequence.max_follow_ups} follow-ups`);
+  logger.info(`[warming] Escalation: ${action} for lead ${enrollment.lead_id} after ${sequence.max_follow_ups} follow-ups`);
 }
 
 /**
@@ -392,7 +399,7 @@ async function getLeadActiveWindow(leadId) {
     }
     return null;
   } catch (err) {
-    console.warn('[warming] getLeadActiveWindow error:', err.message);
+    logger.warn('[warming] getLeadActiveWindow error:', err.message);
     return null;
   }
 }
@@ -485,7 +492,7 @@ async function scheduleNextStep(enrollment, currentStep, enrollmentId) {
     );
 
     if (smartTimed) {
-      console.log(`[warming] Smart timing: enrollment ${enrollmentId} next step at ${nextSendAt.toISOString()}`);
+      logger.info(`[warming] Smart timing: enrollment ${enrollmentId} next step at ${nextSendAt.toISOString()}`);
     }
   } else {
     await pool.query(
@@ -666,7 +673,7 @@ async function recordLeadReply(leadId, messageText) {
 
     return { messageLogId: lastMsg.rows[0].id, enrollmentId: lastMsg.rows[0].enrollment_id, sentiment };
   } catch (err) {
-    console.warn('[warming] recordLeadReply error:', err.message);
+    logger.warn('[warming] recordLeadReply error:', err.message);
     return null;
   }
 }
@@ -698,7 +705,7 @@ async function updateDailyAnalytics(companyId, sequenceId) {
       [companyId, sequenceId, today]
     );
   } catch (err) {
-    console.warn('[warming] updateDailyAnalytics error:', err.message);
+    logger.warn('[warming] updateDailyAnalytics error:', err.message);
   }
 }
 
@@ -723,10 +730,10 @@ async function runHourlyNoReply72hEnrollment() {
       const result = await enrollLead(r.lead_id, r.company_id, 'no_reply_72h');
       if (result.enrolled) enrolled += result.enrolled;
     } catch (err) {
-      console.error('[warming] hourly no_reply_72h enroll error:', err.message);
+      logger.error('[warming] hourly no_reply_72h enroll error:', err.message);
     }
   }
-  if (enrolled > 0) console.info('[warming] hourly no_reply_72h enrolled', enrolled, 'lead(s)');
+  if (enrolled > 0) logger.info('[warming] hourly no_reply_72h enrolled', enrolled, 'lead(s)');
   return enrolled;
 }
 

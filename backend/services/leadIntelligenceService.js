@@ -3,6 +3,7 @@
  * Runs after every inbound message (async, non-blocking).
  */
 
+const logger = require('../src/lib/logger');
 const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 // OPENAI_API_KEY=your_openai_key (optional fallback)
@@ -102,7 +103,7 @@ async function runIntentScoring(leadId, companyId, messages) {
   try {
     raw = await callClaude(INTENT_SYSTEM_PROMPT, userPrompt, 512);
   } catch (err) {
-    console.error('[leadIntelligence] intent scoring Claude error:', err.message);
+    logger.error('[leadIntelligence] intent scoring Claude error:', err.message);
     return { justBecameHotLead: false };
   }
 
@@ -111,7 +112,7 @@ async function runIntentScoring(leadId, companyId, messages) {
     const cleaned = raw.replace(/```json|```/g, '').trim();
     parsed = parseIntentJson(cleaned);
   } catch (err) {
-    console.error('[leadIntelligence] intent JSON parse error:', err.message);
+    logger.error('[leadIntelligence] intent JSON parse error:', err.message);
     return { justBecameHotLead: false };
   }
 
@@ -163,7 +164,7 @@ async function runIntentScoring(leadId, companyId, messages) {
           leadId
         );
       } catch (e) {
-        console.warn('[leadIntelligence] createNotification hot_lead:', e.message);
+        logger.warn('[leadIntelligence] createNotification hot_lead:', e.message);
       }
     }
   }
@@ -182,7 +183,7 @@ async function runIntentScoring(leadId, companyId, messages) {
         leadId
       );
     } catch (e) {
-      console.warn('[leadIntelligence] createNotification budget_detected:', e.message);
+      logger.warn('[leadIntelligence] createNotification budget_detected:', e.message);
     }
   }
 
@@ -206,7 +207,7 @@ async function generateConversationSummary(leadId, messages) {
       );
     }
   } catch (err) {
-    console.error('[leadIntelligence] summary Claude error:', err.message);
+    logger.error('[leadIntelligence] summary Claude error:', err.message);
   }
 }
 

@@ -2,9 +2,11 @@
  * ManyChat webhook by company webhook_token: POST /api/webhook/manychat/:webhookToken
  * No global signature; the token in the URL identifies the company.
  */
+const logger = require('../../lib/logger');
 const express = require('express');
 const { pool } = require('../../../db');
 const { processManyChatPayload } = require('./manychat');
+const { decrypt } = require('../../lib/encryption');
 
 const router = express.Router();
 
@@ -44,21 +46,22 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
 
     res.status(200).json({ received: true });
 
-    // Deduplicate: extract message ID and skip if already processed via main webhook
+    // Deduplicate: Redis-backed dedup shared with main webhook
     const messageId = payload.id ?? null;
     if (messageId) {
-      const { processedMessageIds } = require('./manychat');
-      if (processedMessageIds.has(messageId)) {
-        console.log('[manychat/webhook-by-token] Duplicate messageId skipped:', messageId);
+      const { isMessageProcessed } = require('../../lib/redis');
+      const isDuplicate = await isMessageProcessed(messageId, 3600);
+      if (isDuplicate) {
+        logger.info({ messageId }, 'Duplicate messageId skipped (webhook-by-token)');
         return;
       }
     }
 
     processManyChatPayload(payload, companyRow).catch((err) => {
-      console.error('[manychat/webhook-by-token] Async processing error:', err);
+      logger.error('[manychat/webhook-by-token] Async processing error:', err);
     });
   } catch (err) {
-    console.error('[manychat/webhook-by-token] Error:', err);
+    logger.error('[manychat/webhook-by-token] Error:', err);
     if (!res.headersSent) {
       res.status(500).json({ error: 'Internal error' });
     }

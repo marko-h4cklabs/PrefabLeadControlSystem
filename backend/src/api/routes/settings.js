@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -5,6 +6,7 @@ const { notificationSettingsRepository, schedulingSettingsRepository } = require
 const { requireRole } = require('../middleware/auth');
 const { errorJson } = require('../middleware/errors');
 const { schedulingSettingsSchema } = require('../validators/schedulingSettingsSchema');
+const { encrypt, decrypt } = require('../../lib/encryption');
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -142,7 +144,7 @@ router.get('/scheduling', async (req, res) => {
     }
     res.json(settings);
   } catch (err) {
-    console.error('[settings/scheduling] GET error:', err.message);
+    logger.error('[settings/scheduling] GET error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load scheduling settings');
   }
 });
@@ -210,7 +212,7 @@ router.get('/manychat', async (req, res) => {
     if (!row) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Company not found' } });
     }
-    const rawKey = row.manychat_api_key ?? null;
+    const rawKey = decrypt(row.manychat_api_key) ?? null;
     res.json({
       manychat_api_key: maskApiKey(rawKey),
       manychat_page_id: row.manychat_page_id ?? null,
@@ -247,7 +249,7 @@ router.put('/manychat', requireRole('owner', 'admin'), async (req, res) => {
 
     await pool.query(
       `UPDATE companies SET manychat_api_key = $2, manychat_page_id = $3, manychat_connected = true WHERE id = $1`,
-      [companyId, apiKey, resolvedPageId || null]
+      [companyId, encrypt(apiKey), resolvedPageId || null]
     );
     res.json({ success: true, page_name: pageName ?? null, page_id: resolvedPageId ?? null });
   } catch (err) {
@@ -301,7 +303,7 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
         .filter(Boolean);
       const msg = flat.formErrors?.[0] || fieldMsgs.join('; ') || 'Validation failed';
       const wh = body.working_hours ?? body.workingHours;
-      console.error('[settings/scheduling] PUT validation failed:', {
+      logger.error('[settings/scheduling] PUT validation failed:', {
         bodyKeys: Object.keys(body),
         workingHoursType: wh == null ? 'null' : Array.isArray(wh) ? 'array' : typeof wh,
         workingHoursFirstItem: Array.isArray(wh) ? JSON.stringify(wh[0]) : undefined,
@@ -334,7 +336,7 @@ router.put('/scheduling', requireRole('owner', 'admin'), async (req, res) => {
     });
     res.json(saved);
   } catch (err) {
-    console.error('[settings/scheduling] PUT error:', err.message);
+    logger.error('[settings/scheduling] PUT error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to save scheduling settings');
   }
 });

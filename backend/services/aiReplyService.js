@@ -1,3 +1,4 @@
+const logger = require('../src/lib/logger');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const { pool } = require('../db');
 const {
@@ -145,7 +146,7 @@ async function handleBookingFlow(lead, company, behavior, conversation, companyI
       lead.id
     );
   } catch (err) {
-    console.error('[bookingFlow] Error:', err.message);
+    logger.error('[bookingFlow] Error:', err.message);
   }
 }
 
@@ -262,7 +263,7 @@ async function generateAiReply(companyId, leadId) {
   const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
   const topMissing = requiredInfos[0] ?? null;
 
-  console.info('[aiReplyService]', {
+  logger.info('[aiReplyService]', {
     endpoint: 'POST /leads/:leadId/ai-reply',
     companyId,
     leadId,
@@ -302,7 +303,7 @@ async function generateAiReply(companyId, leadId) {
     systemPrompt += '\n\nRespond with ONLY a JSON object: {"assistant_message": "your reply text", "field_updates": {}}. No other text.';
 
     try {
-      console.log(
+      logger.info(
         '[aiReplyService] System prompt for company',
         companyId,
         'lead',
@@ -311,7 +312,7 @@ async function generateAiReply(companyId, leadId) {
         systemPrompt
       );
     } catch (e) {
-      console.warn('[aiReplyService] Failed to log system prompt:', e.message);
+      logger.warn('[aiReplyService] Failed to log system prompt:', e.message);
     }
 
     const claudeMessages = buildClaudeMessages(conversation.messages, userText);
@@ -324,7 +325,7 @@ async function generateAiReply(companyId, leadId) {
     rawReply = validateAndCleanReply(rawReply, behavior);
     const qualityIssues = checkReplyQuality(rawReply);
     if (qualityIssues.length > 0) {
-      console.warn('[aiReply] Quality issues detected:', qualityIssues);
+      logger.warn('[aiReply] Quality issues detected:', qualityIssues);
     }
     assistantMessage = rawReply;
 

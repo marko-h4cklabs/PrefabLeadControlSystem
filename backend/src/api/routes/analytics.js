@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { analyticsRepository, dealRepository } = require('../../../db/repositories');
@@ -65,7 +66,7 @@ router.get('/dashboard', async (req, res) => {
 
     const dataAsOf = new Date().toISOString();
     if (ANALYTICS_DEBUG) {
-      console.info('[analytics] dashboard', {
+      logger.info('[analytics] dashboard', {
         userId: req.user?.id,
         tenantId: companyId,
         range: appliedFilters.range,
@@ -107,7 +108,7 @@ router.get('/dashboard', async (req, res) => {
       return res.status(500).json({ error: { code: 'DB_ERROR', message: 'Analytics tables not available' } });
     }
     if (process.env.NODE_ENV !== 'production') {
-      console.error('[analytics] dashboard error:', err.message);
+      logger.error('[analytics] dashboard error:', err.message);
     }
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

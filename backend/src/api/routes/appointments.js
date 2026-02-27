@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -38,7 +39,7 @@ function fmtTime(iso) {
 }
 
 function logDbError(tag, err, extra = {}) {
-  console.error(`[appointments] ${tag}:`, { message: err.message, code: err.code, detail: err.detail, ...extra });
+  logger.error(`[appointments] ${tag}:`, { message: err.message, code: err.code, detail: err.detail, ...extra });
 }
 
 async function createAppointmentHandler(req, res, overrideLeadId) {
@@ -86,12 +87,12 @@ async function createAppointmentHandler(req, res, overrideLeadId) {
 
     if ((status || appointment.status) === 'scheduled') {
       const warmingService = require('../../services/warmingService');
-      warmingService.enrollLead(lead_id, companyId, 'call_booked').catch((err) => console.error('[appointments] warming enroll error:', err.message));
+      warmingService.enrollLead(lead_id, companyId, 'call_booked').catch((err) => logger.error('[appointments] warming enroll error:', err.message));
     }
 
     if (companyId) {
       googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
-        console.error('[appointments] Google sync:', err.message)
+        logger.error('[appointments] Google sync:', err.message)
       );
     }
 
@@ -223,7 +224,7 @@ router.patch('/:id', async (req, res) => {
 
     if (parsed.data.status === 'no_show') {
       const warmingService = require('../../services/warmingService');
-      warmingService.enrollLead(existing.leadId, companyId, 'no_show_detected').catch((err) => console.error('[appointments] warming no-show enroll error:', err.message));
+      warmingService.enrollLead(existing.leadId, companyId, 'no_show_detected').catch((err) => logger.error('[appointments] warming no-show enroll error:', err.message));
     }
 
     const companyRow = (await pool.query(
@@ -234,17 +235,17 @@ router.patch('/:id', async (req, res) => {
       if (parsed.data.status === 'cancelled') {
         try {
           await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
-          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+          logger.info('[googleCalendar] Event deleted:', existing.google_event_id);
         } catch (err) {
-          console.error('[googleCalendar] Delete failed:', err.message);
+          logger.error('[googleCalendar] Delete failed:', err.message);
         }
       } else if (parsed.data.start_at != null || parsed.data.end_at != null) {
         try {
           const lead = await leadRepository.findById(companyId, existing.leadId);
           await googleCalendarService.updateCalendarEvent(companyRow, { ...updated, google_event_id: existing.google_event_id }, lead);
-          console.log('[googleCalendar] Event updated:', existing.google_event_id);
+          logger.info('[googleCalendar] Event updated:', existing.google_event_id);
         } catch (err) {
-          console.error('[googleCalendar] Update failed:', err.message);
+          logger.error('[googleCalendar] Update failed:', err.message);
         }
       }
     }
@@ -283,9 +284,9 @@ router.post('/:id/reschedule', async (req, res) => {
         try {
           const lead = await leadRepository.findById(companyId, existing.leadId);
           await googleCalendarService.updateCalendarEvent(companyRow, { ...updated, google_event_id: existing.google_event_id }, lead);
-          console.log('[googleCalendar] Event updated (reschedule):', existing.google_event_id);
+          logger.info('[googleCalendar] Event updated (reschedule):', existing.google_event_id);
         } catch (err) {
-          console.error('[googleCalendar] Update failed:', err.message);
+          logger.error('[googleCalendar] Update failed:', err.message);
         }
       }
     }
@@ -334,9 +335,9 @@ router.post('/:id/status', async (req, res) => {
       if (companyRow?.google_calendar_connected) {
         try {
           await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
-          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+          logger.info('[googleCalendar] Event deleted:', existing.google_event_id);
         } catch (err) {
-          console.error('[googleCalendar] Delete failed:', err.message);
+          logger.error('[googleCalendar] Delete failed:', err.message);
         }
       }
     }
@@ -385,9 +386,9 @@ router.post('/:id/cancel', async (req, res) => {
       if (companyRow?.google_calendar_connected) {
         try {
           await googleCalendarService.deleteCalendarEvent(companyRow, existing.google_event_id);
-          console.log('[googleCalendar] Event deleted:', existing.google_event_id);
+          logger.info('[googleCalendar] Event deleted:', existing.google_event_id);
         } catch (err) {
-          console.error('[googleCalendar] Delete failed:', err.message);
+          logger.error('[googleCalendar] Delete failed:', err.message);
         }
       }
     }

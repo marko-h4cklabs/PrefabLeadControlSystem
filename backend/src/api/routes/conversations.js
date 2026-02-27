@@ -2,10 +2,12 @@
  * Conversations API - voice messages, reply suggestions (copilot), and related endpoints.
  */
 
+const logger = require('../../lib/logger');
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
 const { pool } = require('../../../db');
+const { decrypt } = require('../../lib/encryption');
 const {
   leadRepository,
   conversationRepository,
@@ -135,7 +137,7 @@ router.post(
 
           aiReply = { text: replyText, audio_base64: audioBase64 };
         } catch (err) {
-          console.error('[conversations/voice-message] AI reply error:', err.message);
+          logger.error('[conversations/voice-message] AI reply error:', err.message);
         }
       }
 
@@ -250,7 +252,7 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
     }
 
     const { sendInstagramMessage } = require('../../services/manychatService');
-    await sendInstagramMessage(lead.external_id, text.trim(), lead.manychat_api_key);
+    await sendInstagramMessage(lead.external_id, text.trim(), decrypt(lead.manychat_api_key));
 
     // Append to conversation history
     await conversationRepository.appendMessage(suggestion.lead_id, 'assistant', text.trim());

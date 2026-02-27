@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { appointmentRepository } = require('../../../db/repositories');
@@ -16,7 +17,7 @@ router.get('/appointments', async (req, res) => {
     }
     return res.json({ items: [] });
   } catch (err) {
-    console.error('[calendar/appointments]', err.message);
+    logger.error('[calendar/appointments]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load appointments');
   }
 });

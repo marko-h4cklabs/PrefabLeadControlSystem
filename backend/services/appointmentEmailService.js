@@ -3,6 +3,7 @@
  * Reuses existing email infra when available.
  */
 
+const logger = require('../src/lib/logger');
 let sendNewLeadEmail;
 try {
   ({ sendNewLeadEmail } = require('./emailService'));
@@ -24,7 +25,7 @@ async function sendAppointmentReminderEmail({ to, leadName, appointmentTitle, ap
     `Log in to view details.`;
 
   // TODO: Wire to actual email transport (sendgrid/ses/smtp) when ready
-  console.info('[appointmentEmail] reminder email scaffold:', { to, subject, bodyLength: body.length });
+  logger.info('[appointmentEmail] reminder email scaffold:', { to, subject, bodyLength: body.length });
   return { sent: false, scaffold: true, subject };
 }
 
@@ -37,7 +38,7 @@ async function sendAppointmentConfirmationEmail({ to, leadName, appointmentTitle
   const subject = `Appointment confirmed: ${typeLabel} with ${leadName}`;
 
   // TODO: Wire to actual email transport when ready
-  console.info('[appointmentEmail] confirmation email scaffold:', { to, subject });
+  logger.info('[appointmentEmail] confirmation email scaffold:', { to, subject });
   return { sent: false, scaffold: true, subject };
 }
 

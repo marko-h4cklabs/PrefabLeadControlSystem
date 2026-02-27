@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { schedulingRequestRepository, leadRepository, appointmentRepository, notificationRepository } = require('../../../db/repositories');
@@ -33,7 +34,7 @@ function fmtTime(iso) {
 }
 
 function logDbError(tag, err, extra = {}) {
-  console.error(`[scheduling-requests] ${tag}:`, { message: err.message, code: err.code, detail: err.detail, ...extra });
+  logger.error(`[scheduling-requests] ${tag}:`, { message: err.message, code: err.code, detail: err.detail, ...extra });
 }
 
 // POST /api/scheduling-requests
@@ -208,7 +209,7 @@ router.post('/:id/convert-to-appointment', async (req, res) => {
     });
 
     googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
-      console.error('[scheduling-requests] Google sync:', err.message)
+      logger.error('[scheduling-requests] Google sync:', err.message)
     );
 
     const updatedRequest = await schedulingRequestRepository.findById(companyId, req.params.id);

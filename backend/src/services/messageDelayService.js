@@ -12,6 +12,7 @@
  *   if (!shouldProceed) return; // superseded by a newer message
  */
 
+const logger = require('../lib/logger');
 const pendingReplies = new Map();
 
 /**
@@ -31,7 +32,7 @@ function waitOrReset(leadId, delaySeconds, opts = {}) {
   let actualDelay = delaySeconds;
   if (opts.randomEnabled && opts.minSeconds != null && opts.maxSeconds != null && opts.maxSeconds > opts.minSeconds) {
     actualDelay = opts.minSeconds + Math.random() * (opts.maxSeconds - opts.minSeconds);
-    console.log(`[messageDelay] Random delay for lead ${leadId}: ${actualDelay.toFixed(1)}s (range ${opts.minSeconds}-${opts.maxSeconds}s)`);
+    logger.info(`[messageDelay] Random delay for lead ${leadId}: ${actualDelay.toFixed(1)}s (range ${opts.minSeconds}-${opts.maxSeconds}s)`);
   }
 
   return new Promise((resolve) => {

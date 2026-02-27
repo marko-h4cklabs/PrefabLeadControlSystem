@@ -1,6 +1,7 @@
 /**
  * Stripe webhook — must be mounted with express.raw({ type: 'application/json' }) BEFORE express.json()
  */
+const logger = require('../../lib/logger');
 const express = require('express');
 const { pool } = require('../../../db');
 const stripeService = require('../../services/stripeService');
@@ -15,14 +16,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    console.error('[billing/webhook] STRIPE_WEBHOOK_SECRET not set');
+    logger.error('[billing/webhook] STRIPE_WEBHOOK_SECRET not set');
     return res.status(500).json({ error: 'Webhook not configured' });
   }
   let event;
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
   } catch (err) {
-    console.error('[billing/webhook] Signature verification failed:', err.message);
+    logger.error('[billing/webhook] Signature verification failed:', err.message);
     return res.status(400).json({ error: 'Invalid signature' });
   }
   try {
@@ -40,7 +41,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       ]
     );
   } catch (e) {
-    console.warn('[billing/webhook] Log insert failed:', e.message);
+    logger.warn('[billing/webhook] Log insert failed:', e.message);
   }
   let companyId = null;
   const obj = event.data?.object || {};

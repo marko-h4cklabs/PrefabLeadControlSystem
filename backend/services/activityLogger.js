@@ -3,6 +3,7 @@
  * Fire-and-forget; errors are caught.
  */
 
+const logger = require('../src/lib/logger');
 const { leadActivitiesRepository } = require('../db/repositories');
 
 async function logLeadActivity({
@@ -27,7 +28,7 @@ async function logLeadActivity({
       metadata: typeof metadata === 'object' ? metadata : {},
     });
   } catch (err) {
-    console.error('[activityLogger] Failed to log:', err.message);
+    logger.error('[activityLogger] Failed to log:', err.message);
   }
 }
 

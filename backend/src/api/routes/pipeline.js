@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -46,7 +47,7 @@ router.get('/', async (req, res) => {
 
     res.json({ stages });
   } catch (err) {
-    console.error('[pipeline]', err.message);
+    logger.error('[pipeline]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load pipeline');
   }
 });
@@ -98,7 +99,7 @@ router.get('/stats', async (req, res) => {
       conversion_rate: totalLeads > 0 ? Math.round((wonCount / totalLeads) * 100) : 0,
     });
   } catch (err) {
-    console.error('[pipeline/stats]', err.message);
+    logger.error('[pipeline/stats]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load pipeline stats');
   }
 });

@@ -5,6 +5,7 @@
  * State is stored in conversations.parsed_fields under __booking_phase and __booking.
  */
 
+const logger = require('../src/lib/logger');
 const { evaluateBookingTrigger, looksLikeBookingIntent, isActiveBookingPhase } = require('./bookingTriggerService');
 const { getAvailability, isSlotAvailable } = require('./availabilityService');
 const {
@@ -51,7 +52,7 @@ async function handleActiveBookingPhase({ leadId, companyId, userMessage, bookin
         dismissed: true,
         dismissedAt: new Date().toISOString(),
       });
-      console.log('[booking] User declined booking in SLOTS_SHOWN phase');
+      logger.info('[booking] User declined booking in SLOTS_SHOWN phase');
       return null; // fall through to normal AI reply
     }
 
@@ -98,7 +99,7 @@ async function handleActiveBookingPhase({ leadId, companyId, userMessage, bookin
     }
 
     // Unrecognized message in booking flow — exit and let AI handle it
-    console.log('[booking] Unrecognized message in SLOTS_SHOWN, exiting booking flow');
+    logger.info('[booking] Unrecognized message in SLOTS_SHOWN, exiting booking flow');
     await conversationRepository.mergeBookingState(leadId, null, {
       offeredSlots: offeredSlots,
     });
@@ -125,7 +126,7 @@ async function handleActiveBookingPhase({ leadId, companyId, userMessage, bookin
         dismissed: true,
         dismissedAt: new Date().toISOString(),
       });
-      console.log('[booking] User declined booking offer');
+      logger.info('[booking] User declined booking offer');
       return null;
     }
     // Unrecognized — exit booking
@@ -185,7 +186,7 @@ async function evaluatePostReplyBooking({ leadId, companyId, userMessage, quoteC
       assistantCountSinceOffer,
     });
 
-    console.log('[booking] evaluateBookingTrigger result:', trigger.reason, 'shouldOffer:', trigger.shouldOfferBooking);
+    logger.info('[booking] evaluateBookingTrigger result:', trigger.reason, 'shouldOffer:', trigger.shouldOfferBooking);
 
     if (!trigger.shouldOfferBooking) return null;
 
@@ -208,7 +209,7 @@ async function evaluatePostReplyBooking({ leadId, companyId, userMessage, quoteC
       bookingPhase: BOOKING_STATES.OFFERED,
     };
   } catch (err) {
-    console.error('[booking] evaluatePostReplyBooking error:', err.message);
+    logger.error('[booking] evaluatePostReplyBooking error:', err.message);
     return null;
   }
 }
@@ -267,7 +268,7 @@ async function confirmBooking({ leadId, companyId, lead, bookingData }) {
 
   // Side effects (non-blocking)
   googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) => {
-    console.warn('[booking] Google Calendar sync failed:', err.message);
+    logger.warn('[booking] Google Calendar sync failed:', err.message);
   });
   logLeadActivity({
     companyId,
@@ -286,7 +287,7 @@ async function confirmBooking({ leadId, companyId, lead, bookingData }) {
     leadId
   ).catch(() => {});
 
-  console.log('[booking] Appointment confirmed:', appointment.id, 'for lead:', leadId);
+  logger.info('[booking] Appointment confirmed:', appointment.id, 'for lead:', leadId);
 
   return {
     handled: true,

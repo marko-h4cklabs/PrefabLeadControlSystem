@@ -1,3 +1,4 @@
+const logger = require('../src/lib/logger');
 const { pool } = require('../db/index');
 const { schedulingSettingsRepository } = require('../db/repositories');
 const { normalizeSchedulingSettings, workingHoursToDayMap } = require('./schedulingNormalizer');
@@ -154,7 +155,7 @@ async function getAvailability(companyId, opts = {}) {
         d = addDays(d, 1);
       }
     } catch (err) {
-      console.warn('[availability] Google busy slots failed:', err.message);
+      logger.warn('[availability] Google busy slots failed:', err.message);
     }
   }
 
@@ -232,7 +233,7 @@ async function getAvailability(companyId, opts = {}) {
     else reason = 'no_slots_in_range';
   }
 
-  console.info('[availability]', {
+  logger.info('[availability]', {
     companyId, enabledDays, daysScanned, slotsGenerated,
     conflictsSkipped, pastSkipped, dupesSkipped, returned: slots.length, reason,
   });

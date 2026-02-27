@@ -3,6 +3,7 @@
  * the appointment setter workflow.
  */
 
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');

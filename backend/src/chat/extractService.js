@@ -1,3 +1,4 @@
+const logger = require('../lib/logger');
 const Anthropic = require('@anthropic-ai/sdk');
 const { dimensionsToDisplayString } = require('./dimensionsFormat');
 
@@ -109,7 +110,7 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
       missing_required: [],
     };
   } catch (err) {
-    console.info('[extractService] extraction failed, returning empty:', err.message);
+    logger.info('[extractService] extraction failed, returning empty:', err.message);
     return {
       extracted: [],
       missing_required: missingRequiredFallback,

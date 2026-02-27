@@ -6,6 +6,7 @@
  * optionally sends a bridging message, and logs the event.
  */
 
+const logger = require('../lib/logger');
 const { pool } = require('../../db');
 const { conversationRepository } = require('../../db/repositories');
 const { createNotification } = require('./notificationService');
@@ -142,7 +143,7 @@ async function generateConversationSummary(messages) {
     const text = content?.[0]?.text || content?.text || null;
     return typeof text === 'string' ? text.trim() : null;
   } catch (err) {
-    console.warn('[handoff] summary generation failed:', err.message);
+    logger.warn('[handoff] summary generation failed:', err.message);
     return null;
   }
 }
@@ -186,7 +187,7 @@ async function executeHandoff(companyId, leadId, conversationId, rule, leadName)
     notificationBody,
     leadId,
     { rule_id: rule.id, rule_type: rule.rule_type, trigger_value: rule.trigger_value, summary }
-  ).catch(err => console.warn('[handoff] notification error:', err.message));
+  ).catch(err => logger.warn('[handoff] notification error:', err.message));
 
   return {
     paused: true,
@@ -208,7 +209,7 @@ async function resumeHandoff(leadId, resumedBy = 'manual') {
      WHERE lead_id = $2 AND resumed_at IS NULL
      ORDER BY paused_at DESC LIMIT 1`,
     [resumedBy, leadId]
-  ).catch(err => console.warn('[handoff] resume log update:', err.message));
+  ).catch(err => logger.warn('[handoff] resume log update:', err.message));
 }
 
 /**
@@ -256,7 +257,7 @@ async function runAutoResumeCron() {
     for (const row of companies.rows) {
       const stale = await findStaleHandoffs(row.company_id, row.auto_resume_minutes);
       for (const conv of stale) {
-        console.log(`[handoff/auto-resume] Resuming bot for lead ${conv.lead_id} (paused ${row.auto_resume_minutes}+ min)`);
+        logger.info(`[handoff/auto-resume] Resuming bot for lead ${conv.lead_id} (paused ${row.auto_resume_minutes}+ min)`);
         await resumeHandoff(conv.lead_id, 'auto_resume');
         await createNotification(
           row.company_id,
@@ -268,9 +269,9 @@ async function runAutoResumeCron() {
         resumed++;
       }
     }
-    if (resumed > 0) console.log(`[handoff/auto-resume] Resumed ${resumed} conversation(s)`);
+    if (resumed > 0) logger.info(`[handoff/auto-resume] Resumed ${resumed} conversation(s)`);
   } catch (err) {
-    console.error('[handoff/auto-resume] Error:', err.message);
+    logger.error('[handoff/auto-resume] Error:', err.message);
   }
 }
 

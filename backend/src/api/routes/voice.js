@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -187,7 +188,7 @@ router.post('/clone', upload.array('samples', 5), async (req, res) => {
 
     res.json({ success: true, voice_id: voiceId, name: String(name).trim() });
   } catch (err) {
-    console.error('[voice/clone]', err.response?.data || err.message);
+    logger.error('[voice/clone]', err.response?.data || err.message);
     const msg =
       err.response?.data?.detail?.message || err.response?.data?.detail || err.message;
     res.status(500).json({ error: msg || 'Voice cloning failed' });

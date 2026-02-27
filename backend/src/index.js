@@ -1,10 +1,37 @@
 require('dotenv').config();
+
+// --- Sentry: must initialize before other imports for full coverage ---
+const Sentry = require('@sentry/node');
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.1,
+  });
+}
+
+// --- Crash handlers: must be registered before anything else ---
+const logger = require('./lib/logger');
+
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err }, 'UNCAUGHT EXCEPTION - process will exit');
+  setTimeout(() => process.exit(1), 1000);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.fatal({ err: reason }, 'UNHANDLED REJECTION - process will exit');
+  setTimeout(() => process.exit(1), 1000);
+});
+
 const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const pinoHttp = require('pino-http');
 const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
+const requestIdMiddleware = require('./middleware/requestId');
 const authRouter = require('./api/routes/auth');
 const meRouter = require('./api/routes/me');
 const companiesRouter = require('./api/routes/companies');
@@ -41,6 +68,7 @@ const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', 1);
 
+// --- CORS: explicit origin allowlist, reject all in production if empty ---
 function parseAllowedOrigins() {
   const raw = process.env.FRONTEND_ORIGIN || '';
   if (!raw.trim()) return [];
@@ -53,34 +81,52 @@ function parseAllowedOrigins() {
 
 const allowedOrigins = parseAllowedOrigins();
 
+if (allowedOrigins.length === 0 && process.env.NODE_ENV === 'production') {
+  logger.warn('No FRONTEND_ORIGIN set - CORS will reject all cross-origin requests in production');
+}
+
 function normalizeOrigin(origin) {
   if (!origin || typeof origin !== 'string') return origin;
   return origin.replace(/\/+$/, '');
 }
 
 const corsOptions = {
-  origin:
-    allowedOrigins.length > 0
-      ? (origin, cb) => {
-          const norm = normalizeOrigin(origin);
-          if (!origin || !norm) {
-            cb(null, true);
-            return;
-          }
-          const allowed = allowedOrigins.some((a) => a === norm);
-          if (allowed) {
-            cb(null, true);
-          } else {
-            console.warn('[cors] blocked origin:', origin);
-            cb(new Error('Not allowed by CORS'));
-          }
-        }
-      : true,
+  origin: (origin, cb) => {
+    // Allow requests with no origin (server-to-server, health checks, webhooks)
+    if (!origin) return cb(null, true);
+    const norm = normalizeOrigin(origin);
+    if (!norm) return cb(null, true);
+    if (allowedOrigins.length > 0 && allowedOrigins.some((a) => a === norm)) {
+      return cb(null, true);
+    }
+    // In development, allow all if no origins configured
+    if (allowedOrigins.length === 0 && process.env.NODE_ENV !== 'production') {
+      return cb(null, true);
+    }
+    logger.warn({ origin }, 'CORS blocked origin');
+    cb(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 };
 
 app.use(helmet());
 app.use(cors(corsOptions));
+
+// --- Request ID for tracing ---
+app.use(requestIdMiddleware);
+
+// --- Structured request logging via pino-http ---
+app.use(pinoHttp({
+  logger,
+  autoLogging: {
+    ignore: (req) => req.url === '/health' || req.url === '/api/health',
+  },
+  customLogLevel: (req, res, err) => {
+    if (res.statusCode >= 500 || err) return 'error';
+    if (res.statusCode >= 400) return 'warn';
+    return 'info';
+  },
+}));
 
 // ManyChat webhook must receive raw body for HMAC verification - mount BEFORE express.json()
 const manychatRouter = require('./api/routes/manychat');
@@ -101,6 +147,7 @@ const billingWebhookRouter = require('./api/routes/billingWebhook');
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billingWebhookRouter);
 
 app.use(express.json());
+app.use(cookieParser());
 
 // ManyChat External Request endpoint for voice reply (public, no auth)
 const manychatVoiceReplyRouter = require('./api/routes/manychatVoiceReply');
@@ -144,7 +191,8 @@ app.get('/public/attachments/:id/:token/{:filename}', async (req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/me', apiLimiter, meRouter);
 
-const protectedStack = [authMiddleware, tenantMiddleware, requireCompany, checkSubscription, apiLimiter];
+const companyRateLimit = require('./middleware/companyRateLimit');
+const protectedStack = [authMiddleware, tenantMiddleware, requireCompany, checkSubscription, companyRateLimit, apiLimiter];
 app.use('/api/onboarding', authMiddleware, tenantMiddleware, requireCompany, apiLimiter, require('./api/routes/onboarding'));
 
 app.use('/api/companies', ...protectedStack, companiesRouter);
@@ -187,10 +235,16 @@ app.use((req, res) => {
   }
 });
 
+// Sentry error handler (must be before other error handlers)
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
+
 app.use((err, req, res, next) => {
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ error: { code: 'CORS_ERROR', message: 'Origin not allowed' } });
   }
+  logger.error({ err }, 'Unhandled Express error');
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 });
 
@@ -203,8 +257,9 @@ const revenueSnapshotService = require('./services/revenueSnapshotService');
 const handoffService = require('./services/handoffService');
 
 const WARMING_CRON_MS = 60 * 60 * 1000;
-const HANDOFF_CRON_MS = 5 * 60 * 1000; // check every 5 minutes for auto-resume
-const REVENUE_CRON_MS = 60 * 60 * 1000; // check every hour, run at midnight
+const HANDOFF_CRON_MS = 5 * 60 * 1000;
+const REVENUE_CRON_MS = 60 * 60 * 1000;
+const SHUTDOWN_TIMEOUT_MS = 15_000;
 let warmingCronTimer = null;
 let handoffCronTimer = null;
 let revenueCronTimer = null;
@@ -239,20 +294,20 @@ async function runMigrations() {
       }
       const reapplied = await pool.query('SELECT filename FROM schema_migrations');
       appliedSet = new Set((reapplied.rows || []).map((r) => r.filename));
-      console.log('[migrations] Backfilled schema_migrations from _migrations:', legacy.rows.length, 'migration(s)');
+      logger.info({ count: legacy.rows.length }, 'Backfilled schema_migrations from _migrations');
     }
   }
   if (!fs.existsSync(MIGRATIONS_DIR)) {
-    console.log('[migrations] No migrations directory found, skipping.');
+    logger.info('No migrations directory found, skipping');
     return;
   }
   const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
   const pending = files.filter((f) => !appliedSet.has(f));
   if (pending.length === 0) {
-    console.log('[migrations] No pending migrations.');
+    logger.info('No pending migrations');
     return;
   }
-  console.log(`[migrations] ${pending.length} pending migration(s): ${pending.join(', ')}`);
+  logger.info({ count: pending.length, files: pending }, 'Running pending migrations');
   for (const filename of pending) {
     try {
       const filePath = path.join(MIGRATIONS_DIR, filename);
@@ -261,37 +316,61 @@ async function runMigrations() {
         await pool.query(sql);
       }
       await pool.query('INSERT INTO schema_migrations (filename, applied_at) VALUES ($1, NOW())', [filename]);
-      console.log(`[migrations] Applied: ${filename}`);
+      logger.info({ migration: filename }, 'Migration applied');
     } catch (err) {
-      console.error(`[migrations] FAILED: ${filename} —`, err.message);
-      console.error('[migrations] Server will start anyway. Fix the migration and redeploy.');
+      logger.error({ migration: filename, err }, 'Migration FAILED - server will start anyway');
     }
+  }
+}
+
+const { acquireCronLock, releaseCronLock } = require('./lib/redis');
+
+/**
+ * Run a cron job with Redis-based distributed lock.
+ * Prevents duplicate runs during deploy overlap (old + new instance both running).
+ */
+async function runWithCronLock(lockName, ttlSeconds, fn) {
+  const acquired = await acquireCronLock(lockName, ttlSeconds);
+  if (!acquired) {
+    logger.debug({ lockName }, 'Cron lock held by another instance, skipping');
+    return;
+  }
+  try {
+    await fn();
+  } finally {
+    await releaseCronLock(lockName).catch(() => {});
   }
 }
 
 function startServer() {
   server = app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+    logger.info({ port: PORT }, 'Server listening');
     reminderWorker.start();
     if (process.env.REDIS_URL) {
       incomingMessageWorker.start();
       followUpWorker.start();
       warmingWorker.start();
       warmingCronTimer = setInterval(() => {
-        warmingService.runHourlyNoReply72hEnrollment().catch((err) => console.error('[warming] cron error:', err.message));
+        runWithCronLock('warming-72h', 3000, () =>
+          warmingService.runHourlyNoReply72hEnrollment()
+        ).catch((err) => logger.error({ err }, 'Warming cron error'));
       }, WARMING_CRON_MS);
     } else {
-      console.warn('[index] REDIS_URL not set, follow-up worker not started');
+      logger.warn('REDIS_URL not set, queue workers not started');
     }
     handoffCronTimer = setInterval(() => {
-      handoffService.runAutoResumeCron().catch((err) => console.error('[handoff] auto-resume cron error:', err.message));
+      runWithCronLock('handoff-resume', 240, () =>
+        handoffService.runAutoResumeCron()
+      ).catch((err) => logger.error({ err }, 'Handoff auto-resume cron error'));
     }, HANDOFF_CRON_MS);
     revenueCronTimer = setInterval(() => {
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
       if (now.getHours() === 0 && lastRevenueSnapshotDate !== today) {
         lastRevenueSnapshotDate = today;
-        revenueSnapshotService.runDailySnapshot().catch((err) => console.error('[revenueSnapshot] error:', err.message));
+        runWithCronLock('revenue-snapshot', 3000, () =>
+          revenueSnapshotService.runDailySnapshot()
+        ).catch((err) => logger.error({ err }, 'Revenue snapshot error'));
       }
     }, REVENUE_CRON_MS);
   });
@@ -299,29 +378,63 @@ function startServer() {
 
 runMigrations()
   .catch((err) => {
-    console.error('[migrations] Error running migrations:', err.message);
+    logger.error({ err }, 'Error running migrations');
   })
   .finally(() => {
     startServer();
   });
 
-async function gracefulShutdown() {
-  console.log('[index] shutting down...');
-  if (warmingCronTimer) clearInterval(warmingCronTimer);
-  if (handoffCronTimer) clearInterval(handoffCronTimer);
-  if (revenueCronTimer) clearInterval(revenueCronTimer);
-  reminderWorker.stop();
-  await incomingMessageWorker.stop();
-  await followUpWorker.stop();
-  await warmingWorker.stop();
-  const queueService = require('../services/queueService');
-  const incomingMessageQueue = require('../services/incomingMessageQueue');
-  await queueService.close();
-  await incomingMessageQueue.close();
-  server.close(() => process.exit(0));
+// --- Graceful shutdown with timeout + pool drain ---
+async function gracefulShutdown(signal) {
+  logger.info({ signal }, 'Shutdown initiated');
+
+  const forceExit = setTimeout(() => {
+    logger.error('Shutdown timed out, forcing exit');
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+
+  try {
+    // 1. Clear cron timers
+    if (warmingCronTimer) clearInterval(warmingCronTimer);
+    if (handoffCronTimer) clearInterval(handoffCronTimer);
+    if (revenueCronTimer) clearInterval(revenueCronTimer);
+
+    // 2. Stop accepting HTTP connections
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+
+    // 3. Stop workers (finishes in-flight jobs)
+    reminderWorker.stop();
+    await Promise.allSettled([
+      incomingMessageWorker.stop(),
+      followUpWorker.stop(),
+      warmingWorker.stop(),
+    ]);
+
+    // 4. Close queues and Redis
+    const queueService = require('../services/queueService');
+    const incomingMessageQueue = require('../services/incomingMessageQueue');
+    await Promise.allSettled([
+      queueService.close(),
+      incomingMessageQueue.close(),
+    ]);
+
+    // 5. Drain DB pool
+    const { pool } = require('../db');
+    await pool.end();
+
+    logger.info('Shutdown complete');
+    clearTimeout(forceExit);
+    process.exit(0);
+  } catch (err) {
+    logger.error({ err }, 'Error during shutdown');
+    clearTimeout(forceExit);
+    process.exit(1);
+  }
 }
 
-process.on('SIGTERM', () => gracefulShutdown());
-process.on('SIGINT', () => gracefulShutdown());
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 module.exports = { app, server, gracefulShutdown };

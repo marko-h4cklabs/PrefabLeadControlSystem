@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -27,7 +28,7 @@ router.get('/rules', async (req, res) => {
     }));
     return res.json({ items });
   } catch (err) {
-    console.error('[autoresponder] list:', err.message);
+    logger.error('[autoresponder] list:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list rules');
   }
 });
@@ -57,7 +58,7 @@ router.post('/rules', async (req, res) => {
     );
     return res.status(201).json(r.rows[0]);
   } catch (err) {
-    console.error('[autoresponder] create:', err.message);
+    logger.error('[autoresponder] create:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create rule');
   }
 });
@@ -114,7 +115,7 @@ router.put('/rules/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Rule not found');
     return res.json(r.rows[0]);
   } catch (err) {
-    console.error('[autoresponder] update:', err.message);
+    logger.error('[autoresponder] update:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update rule');
   }
 });
@@ -131,7 +132,7 @@ router.delete('/rules/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Rule not found');
     return res.json({ success: true, id });
   } catch (err) {
-    console.error('[autoresponder] delete:', err.message);
+    logger.error('[autoresponder] delete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete rule');
   }
 });
@@ -153,7 +154,7 @@ router.put('/rules/reorder', async (req, res) => {
     );
     return res.json({ items: r.rows || [] });
   } catch (err) {
-    console.error('[autoresponder] reorder:', err.message);
+    logger.error('[autoresponder] reorder:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to reorder rules');
   }
 });

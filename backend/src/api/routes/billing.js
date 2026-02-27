@@ -2,6 +2,7 @@
  * Stripe billing.
  * Env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRO_PRICE_ID, STRIPE_ENTERPRISE_PRICE_ID
  */
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -50,7 +51,7 @@ router.get('/status', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[billing/status]', err.message);
+    logger.error('[billing/status]', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get billing status');
   }
 });
@@ -95,7 +96,7 @@ router.post('/checkout', async (req, res) => {
     );
     return res.json({ checkout_url: session.url });
   } catch (err) {
-    console.error('[billing/checkout]', err.message);
+    logger.error('[billing/checkout]', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create checkout session');
   }
 });
@@ -118,7 +119,7 @@ router.post('/portal', async (req, res) => {
     );
     return res.json({ portal_url: session.url });
   } catch (err) {
-    console.error('[billing/portal]', err.message);
+    logger.error('[billing/portal]', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create portal session');
   }
 });

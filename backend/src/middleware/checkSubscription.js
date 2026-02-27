@@ -1,14 +1,22 @@
 /**
  * Trial and subscription enforcement. Allow auth, billing, settings, health, onboarding.
  * Trial expired -> 402. Cancelled/past_due -> block non-GET with 402.
+ * Message limits enforced: warn at 80%, block at 100%.
  * Do NOT apply on webhook routes (clients need webhooks to keep working).
  */
 const { pool } = require('../../db');
+const logger = require('../lib/logger');
+
+const PLAN_LIMITS = {
+  trial: 100,
+  pro: 2000,
+  enterprise: 999999,
+};
 
 async function getCompanyById(companyId) {
   if (!companyId) return null;
   const r = await pool.query(
-    `SELECT id, subscription_status, trial_ends_at FROM companies WHERE id = $1`,
+    `SELECT id, subscription_status, trial_ends_at, subscription_plan, monthly_message_count FROM companies WHERE id = $1`,
     [companyId]
   );
   return r.rows[0] || null;
@@ -55,7 +63,42 @@ async function checkSubscription(req, res, next) {
     });
   }
 
+  // Attach message limit info for downstream use (e.g., webhook handlers)
+  const plan = company.subscription_plan || 'trial';
+  const limit = PLAN_LIMITS[plan] ?? PLAN_LIMITS.trial;
+  const used = company.monthly_message_count || 0;
+  req.messageLimitInfo = { plan, limit, used, exceeded: used >= limit };
+
   next();
 }
 
-module.exports = { checkSubscription, getCompanyById };
+/**
+ * Check if a company has exceeded its message limit. Returns { allowed, used, limit, plan }.
+ * Use this in webhook handlers and workers to block AI replies when limit is reached.
+ */
+async function checkMessageLimit(companyId) {
+  const r = await pool.query(
+    `SELECT subscription_plan, monthly_message_count FROM companies WHERE id = $1`,
+    [companyId]
+  );
+  const row = r.rows[0];
+  if (!row) return { allowed: false, used: 0, limit: 0, plan: 'unknown' };
+
+  const plan = row.subscription_plan || 'trial';
+  const limit = PLAN_LIMITS[plan] ?? PLAN_LIMITS.trial;
+  const used = row.monthly_message_count || 0;
+
+  if (used >= limit) {
+    logger.warn({ companyId, plan, used, limit }, 'Message limit exceeded - blocking');
+    return { allowed: false, used, limit, plan };
+  }
+
+  // Warn at 80%
+  if (used >= limit * 0.8) {
+    logger.info({ companyId, plan, used, limit }, 'Message limit approaching 80%');
+  }
+
+  return { allowed: true, used, limit, plan };
+}
+
+module.exports = { checkSubscription, getCompanyById, checkMessageLimit, PLAN_LIMITS };

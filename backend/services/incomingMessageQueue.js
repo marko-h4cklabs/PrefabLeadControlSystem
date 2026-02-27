@@ -8,6 +8,7 @@
  * - Per-lead deduplication via messageId
  */
 
+const logger = require('../src/lib/logger');
 const IORedis = require('ioredis');
 const { Queue } = require('bullmq');
 
@@ -74,7 +75,7 @@ async function enqueueMessage(payload, messageId) {
 
     return { queued: true, jobId: job.id ?? jobId };
   } catch (err) {
-    console.error('[incomingMessageQueue] enqueue error:', err.message);
+    logger.error('[incomingMessageQueue] enqueue error:', err.message);
     throw err;
   }
 }
@@ -94,7 +95,7 @@ async function getQueueStats() {
     ]);
     return { waiting, active, completed, failed, delayed };
   } catch (err) {
-    console.error('[incomingMessageQueue] getQueueStats error:', err.message);
+    logger.error('[incomingMessageQueue] getQueueStats error:', err.message);
     return { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 };
   }
 }
@@ -110,7 +111,7 @@ async function close() {
       connection = null;
     }
   } catch (err) {
-    console.error('[incomingMessageQueue] close error:', err.message);
+    logger.error('[incomingMessageQueue] close error:', err.message);
   }
 }
 

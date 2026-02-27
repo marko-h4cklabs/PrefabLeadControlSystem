@@ -3,6 +3,7 @@
  * Called from lead creation flows. Does not block; errors are caught.
  */
 
+const logger = require('../src/lib/logger');
 const { notificationRepository, notificationSettingsRepository, companyRepository } = require('../db/repositories');
 const { sendNewLeadEmail } = require('./emailService');
 const { getCollectedInfosForLead } = require('./collectedInfoService');
@@ -60,7 +61,7 @@ async function notifyNewLeadCreated(companyId, lead, opts = {}) {
   try {
     settings = await notificationSettingsRepository.get(companyId);
   } catch (err) {
-    console.error('[newLeadNotifier] Failed to load settings:', err.message);
+    logger.error('[newLeadNotifier] Failed to load settings:', err.message);
     return;
   }
 
@@ -79,7 +80,7 @@ async function notifyNewLeadCreated(companyId, lead, opts = {}) {
   try {
     collectedInfos = await getCollectedInfosForLead(companyId, lead.id);
   } catch (err) {
-    console.error('[newLeadNotifier] Failed to load collected info:', err.message);
+    logger.error('[newLeadNotifier] Failed to load collected info:', err.message);
   }
 
   const baseUrl = process.env.FRONTEND_ORIGIN ? process.env.FRONTEND_ORIGIN.split(',')[0]?.trim() : null;

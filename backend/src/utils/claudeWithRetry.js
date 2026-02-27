@@ -2,6 +2,7 @@
  * Claude with retry and OpenAI fallback.
  * Env: ANTHROPIC_API_KEY, OPENAI_API_KEY=your_openai_key (optional fallback when Claude is overloaded)
  */
+const logger = require('../lib/logger');
 const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 
@@ -13,7 +14,7 @@ async function claudeWithRetry(claudeParams, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const response = await anthropic.messages.create(claudeParams);
-      if (attempt > 0) console.log(`[claude] Succeeded on retry ${attempt + 1}`);
+      if (attempt > 0) logger.info(`[claude] Succeeded on retry ${attempt + 1}`);
       const text = response.content?.[0]?.text ?? '';
       return { provider: 'claude', content: text };
     } catch (err) {
@@ -24,17 +25,17 @@ async function claudeWithRetry(claudeParams, maxRetries = 3) {
         err.status === 502 ||
         err.error?.error?.type === 'overloaded_error';
       if (!isRetryable) {
-        console.error(`[claude] Non-retryable error: ${err.status}`);
+        logger.error(`[claude] Non-retryable error: ${err.status}`);
         break;
       }
       const delay = Math.pow(2, attempt) * 1000 + Math.random() * 500;
-      console.warn(
+      logger.warn(
         `[claude] Overloaded, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`
       );
       await new Promise((r) => setTimeout(r, delay));
     }
   }
-  console.warn('[claude] All retries exhausted. Falling back to OpenAI GPT-4o...');
+  logger.warn('[claude] All retries exhausted. Falling back to OpenAI GPT-4o...');
   try {
     const openaiMessages = [];
     if (claudeParams.system) {
@@ -55,11 +56,18 @@ async function claudeWithRetry(claudeParams, maxRetries = 3) {
       max_tokens: claudeParams.max_tokens || 1000,
       temperature: 0.7,
     });
-    console.log('[openai] Fallback succeeded via GPT-4o');
+    logger.info('[openai] Fallback succeeded via GPT-4o');
     const text = response.choices?.[0]?.message?.content ?? '';
     return { provider: 'openai', content: text };
   } catch (openaiErr) {
-    console.error('[openai] Fallback also failed:', openaiErr.message);
+    logger.error('[openai] Fallback also failed:', openaiErr.message);
+    // Alert: both AI providers are down
+    const { sendAdminAlert } = require('../services/adminAlertService');
+    sendAdminAlert(
+      'ai:both_failed',
+      'Both Claude and OpenAI failed',
+      { claudeError: lastError?.message, openaiError: openaiErr.message }
+    ).catch(() => {});
     throw new Error(
       `Both Claude and OpenAI failed. Claude: ${lastError?.message}. OpenAI: ${openaiErr.message}`
     );

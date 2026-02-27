@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -21,7 +22,7 @@ router.get('/callback', async (req, res) => {
     const redirectBase = process.env.FRONTEND_ORIGIN?.split(',')[0]?.trim() || '/';
     return res.redirect(`${redirectBase.replace(/\/$/, '')}/settings?google=connected`);
   } catch (err) {
-    console.error('[google/callback]', err.message);
+    logger.error('[google/callback]', err.message);
     const redirectBase = process.env.FRONTEND_ORIGIN?.split(',')[0]?.trim() || '/';
     return res.redirect(`${redirectBase.replace(/\/$/, '')}/settings?google=error`);
   }
@@ -41,7 +42,7 @@ router.get('/auth', async (req, res) => {
     const auth_url = googleCalendarService.getAuthUrl(companyId);
     return res.json({ auth_url });
   } catch (err) {
-    console.error('[googleCalendar] Auth URL generation failed:', err.message);
+    logger.error('[googleCalendar] Auth URL generation failed:', err.message);
     return res.status(500).json({ error: 'Failed to generate auth URL' });
   }
 });
@@ -62,7 +63,7 @@ router.delete('/disconnect', async (req, res) => {
     );
     return res.json({ disconnected: true });
   } catch (err) {
-    console.error('[google/disconnect]', err.message);
+    logger.error('[google/disconnect]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to disconnect');
   }
 });
@@ -93,7 +94,7 @@ router.get('/status', async (req, res) => {
       upcoming_events_count: upcomingCount,
     });
   } catch (err) {
-    console.error('[google/status]', err.message);
+    logger.error('[google/status]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get status');
   }
 });
@@ -113,7 +114,7 @@ router.get('/upcoming', async (req, res) => {
     const events = await googleCalendarService.getUpcomingEvents(fullRow, 7);
     return res.json({ items: events });
   } catch (err) {
-    console.error('[google/upcoming]', err.message);
+    logger.error('[google/upcoming]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get upcoming events');
   }
 });
@@ -135,7 +136,7 @@ router.get('/busy', async (req, res) => {
     const busy = await googleCalendarService.getBusySlots(fullRow, dateStr);
     return res.json({ busy });
   } catch (err) {
-    console.error('[google/busy]', err.message);
+    logger.error('[google/busy]', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get busy slots');
   }
 });

@@ -2,10 +2,11 @@
  * Google Calendar two-way sync.
  * Env: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI (e.g. https://your-railway-url/api/integrations/google/callback)
  */
+const logger = require('../lib/logger');
 const { google } = require('googleapis');
 const { pool } = require('../../db');
 
-console.log('[googleCalendar] Config check:', {
+logger.info('[googleCalendar] Config check:', {
   hasClientId: !!process.env.GOOGLE_CLIENT_ID,
   hasClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
   redirectUri: process.env.GOOGLE_REDIRECT_URI,
@@ -124,7 +125,7 @@ async function getUpcomingEvents(company, days = 30) {
   const calendar = google.calendar({ version: 'v3', auth });
   const now = new Date();
   const future = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
-  console.log('[googleCalendar] Fetching events from', now.toISOString(), 'to', future.toISOString());
+  logger.info('[googleCalendar] Fetching events from', now.toISOString(), 'to', future.toISOString());
   const response = await calendar.events.list({
     calendarId: company.google_calendar_id || 'primary',
     timeMin: now.toISOString(),
@@ -170,9 +171,9 @@ async function syncNewAppointmentToGoogle(companyId, appointment, lead) {
       'UPDATE appointments SET google_event_id = $1, google_meet_link = $2, synced_to_google = true, sync_error = NULL WHERE id = $3 AND company_id = $4',
       [google_event_id, google_meet_link, appointment.id, companyId]
     );
-    console.log('[googleCalendar] Event created:', google_event_id);
+    logger.info('[googleCalendar] Event created:', google_event_id);
   } catch (err) {
-    console.error('[googleCalendar] Sync failed:', err.message);
+    logger.error('[googleCalendar] Sync failed:', err.message);
     await pool.query('UPDATE appointments SET sync_error = $1 WHERE id = $2 AND company_id = $3', [err.message, appointment.id, companyId]).catch(() => {});
   }
 }

@@ -1,3 +1,4 @@
+const logger = require('../lib/logger');
 function getTwilioClient() {
   const sid = (process.env.TWILIO_ACCOUNT_SID || '').trim();
   const token = (process.env.TWILIO_AUTH_TOKEN || '').trim();
@@ -13,7 +14,7 @@ function generateSmsCode() {
 async function sendVerificationSms(phoneNumber, code) {
   const client = getTwilioClient();
   if (!client) {
-    console.warn('[sms] Twilio not configured — skipping SMS verification');
+    logger.warn('[sms] Twilio not configured — skipping SMS verification');
     return false;
   }
   await client.messages.create({

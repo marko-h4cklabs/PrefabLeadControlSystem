@@ -2,6 +2,7 @@
  * Copilot mode: generate 3 reply suggestions for human to choose and send.
  */
 
+const logger = require('../src/lib/logger');
 const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const { pool } = require('../db');
@@ -12,6 +13,7 @@ const {
   chatbotQuoteFieldsRepository,
 } = require('../db/repositories');
 const { buildSystemPrompt } = require('../src/services/systemPromptBuilder');
+const { decrypt } = require('../src/lib/encryption');
 const { companyRepository } = require('../db/repositories');
 const { sendInstagramMessage } = require('../src/services/manychatService');
 
@@ -121,7 +123,7 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     const cleaned = raw.replace(/```json|```/g, '').trim();
     suggestions = parseSuggestionsJson(cleaned);
   } catch (e) {
-    console.error('[replySuggestions] Failed to parse LLM JSON response, skipping');
+    logger.error('[replySuggestions] Failed to parse LLM JSON response, skipping');
     return [];
   }
 
@@ -158,7 +160,7 @@ async function sendSuggestion(suggestionId, suggestionIndex, companyId) {
   const lead = leadRow.rows[0];
   if (!lead?.external_id || !lead?.manychat_api_key) return null;
 
-  await sendInstagramMessage(lead.external_id, chosen.text, lead.manychat_api_key).catch((err) => {
+  await sendInstagramMessage(lead.external_id, chosen.text, decrypt(lead.manychat_api_key)).catch((err) => {
     throw err;
   });
 

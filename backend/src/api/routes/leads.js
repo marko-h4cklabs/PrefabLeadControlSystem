@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const multer = require('multer');
 const router = express.Router({ mergeParams: true });
@@ -298,7 +299,7 @@ router.get('/:leadId/conversation', async (req, res) => {
       collected: Array.isArray(collected) ? collected : [],
     });
   } catch (err) {
-    console.error('[conversation] GET error', requestId, err.stack);
+    logger.error('[conversation] GET error', requestId, err.stack);
     res.status(500).json({
       error: 'internal_error',
       message: 'Conversation failed',
@@ -415,7 +416,7 @@ router.post('/:leadId/ai-reply', async (req, res) => {
       messages: conversation?.messages ?? [],
     });
   } catch (err) {
-    console.error('[conversation] POST ai-reply error', requestId, err.stack);
+    logger.error('[conversation] POST ai-reply error', requestId, err.stack);
     res.status(500).json({
       error: 'internal_error',
       message: 'Conversation failed',
@@ -515,7 +516,7 @@ router.post('/:leadId/messages', async (req, res) => {
       collected: Array.isArray(collected) ? collected : [],
     });
   } catch (err) {
-    console.error('[conversation] POST messages error', requestId, err.stack);
+    logger.error('[conversation] POST messages error', requestId, err.stack);
     res.status(500).json({
       error: 'internal_error',
       message: 'Conversation failed',

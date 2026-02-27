@@ -1,6 +1,7 @@
 /**
  * Lead import (CSV, manual) and export (CSV). Mount under /api/leads.
  */
+const logger = require('../../lib/logger');
 const express = require('express');
 const multer = require('multer');
 const { parse } = require('csv-parse/sync');
@@ -89,7 +90,7 @@ router.post('/import/csv', csvUpload.single('file'), async (req, res) => {
     }
     return res.json({ imported, failed: records.length - imported, errors: errors.slice(0, 50) });
   } catch (err) {
-    console.error('[leadImport] csv:', err.message);
+    logger.error('[leadImport] csv:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Import failed');
   }
 });
@@ -107,7 +108,7 @@ router.post('/import/manual', async (req, res) => {
     }
     return res.json({ imported, failed: leads.length - imported, errors: errors.slice(0, 50) });
   } catch (err) {
-    console.error('[leadImport] manual:', err.message);
+    logger.error('[leadImport] manual:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Import failed');
   }
 });
@@ -139,7 +140,7 @@ router.get('/export/csv', async (req, res) => {
     res.set('Content-Disposition', 'attachment; filename=leads.csv');
     return res.send(lines.join('\n'));
   } catch (err) {
-    console.error('[leadImport] export:', err.message);
+    logger.error('[leadImport] export:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Export failed');
   }
 });

@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const {
@@ -54,7 +55,7 @@ router.get('/config', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[chatbot/scheduling] config error:', err.message);
+    logger.error('[chatbot/scheduling] config error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to load chatbot scheduling config');
   }
 });
@@ -136,7 +137,7 @@ router.post('/intake', async (req, res) => {
       nextMessageHint,
     });
   } catch (err) {
-    console.error('[chatbot/scheduling] intake error:', err.message);
+    logger.error('[chatbot/scheduling] intake error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to process scheduling intake');
   }
 });
@@ -213,7 +214,7 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
     });
 
     googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
-      console.error('[chatbot/scheduling] Google sync:', err.message)
+      logger.error('[chatbot/scheduling] Google sync:', err.message)
     );
 
     const slotLabel = startDate.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' })
@@ -248,7 +249,7 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       timezone: cfg.timezone,
     }).catch(() => {});
 
-    console.info('[chatbot/book-slot] CONFIRMED', { conversationId, appointmentId: appointment.id, leadId: resolvedLeadId });
+    logger.info('[chatbot/book-slot] CONFIRMED', { conversationId, appointmentId: appointment.id, leadId: resolvedLeadId });
 
     res.status(201).json({
       assistant_message: confirmMsg,
@@ -256,7 +257,7 @@ router.post('/conversations/:conversationId/book-slot', async (req, res) => {
       booking: buildBookingPayload('confirmed', { appointment }),
     });
   } catch (err) {
-    console.error('[chatbot/book-slot] error:', err.message);
+    logger.error('[chatbot/book-slot] error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to book slot');
   }
 });

@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const {
@@ -89,7 +90,7 @@ function quotePresetsValidationError(res, parsed, body) {
     ? `Preset '${presetName}': invalid ${pathKey}`
     : parsed.error?.message ?? 'Validation failed';
   const cfg = idx != null && (body?.presets?.[idx] ?? body?.fields?.[idx]) ? (body.presets?.[idx] ?? body.fields?.[idx]).config : undefined;
-  console.info('[quote-presets] validation failed', { presetName: presetName ?? 'unknown', config: cfg != null ? String(JSON.stringify(cfg)).slice(0, 120) : undefined });
+  logger.info('[quote-presets] validation failed', { presetName: presetName ?? 'unknown', config: cfg != null ? String(JSON.stringify(cfg)).slice(0, 120) : undefined });
   return res.status(400).json({
     error: { code: 'VALIDATION_ERROR', message: msg, details: parsed.error?.flatten?.()?.fieldErrors },
   });
@@ -108,7 +109,7 @@ router.get('/identity', async (req, res) => {
       companyRepository.findById(companyId),
       chatbotCompanyInfoRepository.get(companyId),
     ]);
-    console.log('[chatbot/GET identity]', { behavior: behavior ? { agent_name: behavior.agent_name, agent_backstory: behavior.agent_backstory } : null });
+    logger.info('[chatbot/GET identity]', { behavior: behavior ? { agent_name: behavior.agent_name, agent_backstory: behavior.agent_backstory } : null });
     res.json({
       agent_name: behavior?.agent_name ?? '',
       agent_backstory: behavior?.agent_backstory ?? '',
@@ -147,7 +148,7 @@ router.put('/identity', async (req, res) => {
 router.get('/guardrails', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
-    console.log('[chatbot/GET guardrails]', behavior ? { bot_deny_response: behavior.bot_deny_response, prohibited_topics: behavior.prohibited_topics, handoff_trigger: behavior.handoff_trigger, human_fallback_message: behavior.human_fallback_message, max_messages_before_handoff: behavior.max_messages_before_handoff } : null);
+    logger.info('[chatbot/GET guardrails]', behavior ? { bot_deny_response: behavior.bot_deny_response, prohibited_topics: behavior.prohibited_topics, handoff_trigger: behavior.handoff_trigger, human_fallback_message: behavior.human_fallback_message, max_messages_before_handoff: behavior.max_messages_before_handoff } : null);
     res.json({
       bot_deny_response: behavior?.bot_deny_response ?? '',
       prohibited_topics: behavior?.prohibited_topics ?? '',
@@ -179,7 +180,7 @@ router.put('/guardrails', async (req, res) => {
 router.get('/strategy', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
-    console.log('[chatbot/GET strategy]', behavior ? { conversation_goal: behavior.conversation_goal, follow_up_style: behavior.follow_up_style, closing_style: behavior.closing_style, competitor_mentions: behavior.competitor_mentions, price_reveal: behavior.price_reveal } : null);
+    logger.info('[chatbot/GET strategy]', behavior ? { conversation_goal: behavior.conversation_goal, follow_up_style: behavior.follow_up_style, closing_style: behavior.closing_style, competitor_mentions: behavior.competitor_mentions, price_reveal: behavior.price_reveal } : null);
     res.json({
       primary_goal: behavior?.conversation_goal ?? '',
       follow_up_style: behavior?.follow_up_style ?? 'gentle',
@@ -211,7 +212,7 @@ router.put('/strategy', async (req, res) => {
 router.get('/social-proof', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
-    console.log('[chatbot/GET social-proof]', behavior ? { social_proof_enabled: behavior.social_proof_enabled, social_proof_examples: behavior.social_proof_examples } : null);
+    logger.info('[chatbot/GET social-proof]', behavior ? { social_proof_enabled: behavior.social_proof_enabled, social_proof_examples: behavior.social_proof_examples } : null);
     res.json({
       enabled: behavior?.social_proof_enabled ?? false,
       examples: behavior?.social_proof_examples ?? '',
@@ -255,12 +256,20 @@ router.post('/social-proof-images', upload.single('image'), async (req, res) => 
     let url = bodyUrl;
 
     if (req.file) {
-      const dir = path.join(__dirname, '../../../public/uploads/social-proof');
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const r2 = require('../../lib/storage');
       const filename = `${companyId}_${Date.now()}_${(req.file.originalname || 'image').replace(/[^a-zA-Z0-9.]/g, '_')}`;
-      fs.writeFileSync(path.join(dir, filename), req.file.buffer);
-      const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'http://localhost:3000';
-      url = `${backendUrl.replace(/\/+$/, '')}/uploads/social-proof/${filename}`;
+
+      if (r2.isConfigured()) {
+        const key = `social-proof/${filename}`;
+        url = await r2.upload(key, req.file.buffer, req.file.mimetype || 'image/jpeg');
+      } else {
+        // Fallback: local disk
+        const dir = path.join(__dirname, '../../../public/uploads/social-proof');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, filename), req.file.buffer);
+        const backendUrl = process.env.BACKEND_URL || process.env.RAILWAY_STATIC_URL || 'http://localhost:3000';
+        url = `${backendUrl.replace(/\/+$/, '')}/uploads/social-proof/${filename}`;
+      }
     }
 
     if (!url || !String(url).trim()) {
@@ -347,7 +356,7 @@ router.get('/languages', (req, res) => {
 router.get('/behavior', async (req, res) => {
   try {
     const behavior = await chatbotBehaviorRepository.get(req.tenantId);
-    console.log('[chatbot/GET behavior]', behavior);
+    logger.info('[chatbot/GET behavior]', behavior);
     res.json(behavior);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -454,7 +463,7 @@ router.get('/booking-settings', async (req, res) => {
         [companyId]
       ),
     ]);
-    console.log('[chatbot/GET booking-settings]', behavior ? { booking_trigger_enabled: behavior.booking_trigger_enabled, booking_trigger_score: behavior.booking_trigger_score, booking_platform: behavior.booking_platform, calendly_url: behavior.calendly_url, booking_offer_message: behavior.booking_offer_message, booking_required_fields: behavior.booking_required_fields } : null);
+    logger.info('[chatbot/GET booking-settings]', behavior ? { booking_trigger_enabled: behavior.booking_trigger_enabled, booking_trigger_score: behavior.booking_trigger_score, booking_platform: behavior.booking_platform, calendly_url: behavior.calendly_url, booking_offer_message: behavior.booking_offer_message, booking_required_fields: behavior.booking_required_fields } : null);
     res.json({
       booking_trigger_enabled: behavior?.booking_trigger_enabled ?? false,
       booking_trigger_score: behavior?.booking_trigger_score ?? 60,
@@ -585,7 +594,7 @@ router.put('/quote-fields', async (req, res) => {
     const presets = parsed.data?.presets;
     if (!Array.isArray(presets) || presets.length === 0) {
       if (process.env.NODE_ENV !== 'production') {
-        console.info('[quote-fields] PUT missing presets array, body keys:', req.body ? Object.keys(req.body) : 'null');
+        logger.info('[quote-fields] PUT missing presets array, body keys:', req.body ? Object.keys(req.body) : 'null');
       }
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'presets array required' },
@@ -635,7 +644,7 @@ router.put('/quote-presets', async (req, res) => {
     }
     const presets = parsed.data?.presets;
     if (!Array.isArray(presets) || presets.length === 0) {
-      console.info('[quote-presets] invalid payload', req.body);
+      logger.info('[quote-presets] invalid payload', req.body);
       return res.status(400).json({
         error: { code: 'VALIDATION_ERROR', message: 'presets array required' },
       });
@@ -684,12 +693,12 @@ router.post('/chat', async (req, res) => {
       chatbotCompanyInfoRepository.get(companyId),
       chatbotQuoteFieldsRepository.list(companyId),
       schedulingSettingsRepository.get(companyId).catch((err) => {
-        console.error('[chat] SCHEDULING CONFIG LOAD FAILED:', err.message, { companyId, code: err.code, detail: err.detail });
+        logger.error('[chat] SCHEDULING CONFIG LOAD FAILED:', err.message, { companyId, code: err.code, detail: err.detail });
         return null;
       }),
     ]);
     if (!schedulingConfig) {
-      console.warn('[chat] schedulingConfig is NULL — booking offers will not trigger', { companyId });
+      logger.warn('[chat] schedulingConfig is NULL — booking offers will not trigger', { companyId });
     }
 
     const enabledFields = chatbotQuoteFieldsRepository.getEnabledFields(quoteFields ?? []);
@@ -740,7 +749,7 @@ router.post('/chat', async (req, res) => {
     const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
     const missingFields = requiredInfos;
 
-    console.info('[chat]', {
+    logger.info('[chat]', {
       companyId, conversationId,
       quoteFieldsLoaded: { count: orderedQuoteFieldsForChat.length, names: orderedQuoteFieldsForChat.map((f) => f.name) },
       extractionOutput: extractedArr,
@@ -765,13 +774,13 @@ router.post('/chat', async (req, res) => {
       bookingState = fields.__booking || null;
     } catch (stateErr) {
       stateLoadFailed = true;
-      console.error('[chat-booking] STATE LOAD FAILED:', stateErr.message, { companyId, conversationId, code: stateErr.code });
+      logger.error('[chat-booking] STATE LOAD FAILED:', stateErr.message, { companyId, conversationId, code: stateErr.code });
     }
 
     // Reset terminal states for new explicit booking intent
     if (!stateLoadFailed && isTerminalBookingState(bookingPhase)) {
       if (looksLikeBookingIntent(message)) {
-        console.info('[chat-booking] resetting terminal state for new intent', { conversationId, was: bookingPhase });
+        logger.info('[chat-booking] resetting terminal state for new intent', { conversationId, was: bookingPhase });
         try { await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: null }); } catch (_) {}
         bookingPhase = null;
       }
@@ -832,7 +841,7 @@ router.post('/chat', async (req, res) => {
 
     let selectedReplyPath = 'generic_ai';
 
-    console.info(`[chat-booking] conv=${conversationId} trigger=${trigger.reason} shouldOffer=${trigger.shouldOfferBooking} phase=${bookingPhase} quoteComplete=${quoteComplete} msgsSinceOffer=${assistantCountSinceOffer}`);
+    logger.info(`[chat-booking] conv=${conversationId} trigger=${trigger.reason} shouldOffer=${trigger.shouldOfferBooking} phase=${bookingPhase} quoteComplete=${quoteComplete} msgsSinceOffer=${assistantCountSinceOffer}`);
 
     const collectedInfosForResponse = collectedInfos.map((c) => ({
       name: c.name, type: c.type ?? 'text', value: c.value, units: c.units ?? null,
@@ -845,7 +854,7 @@ router.post('/chat', async (req, res) => {
     function respond(assistantMessage, extra = {}) {
       bookingDebug.selectedReplyPath = selectedReplyPath;
       const { ui_action, booking, ...rest } = extra;
-      console.info(`[chat-booking] REPLY path=${selectedReplyPath} conv=${conversationId} phase=${bookingPhase}`);
+      logger.info(`[chat-booking] REPLY path=${selectedReplyPath} conv=${conversationId} phase=${bookingPhase}`);
 
       const bookingMeta = booking || (bookingActive ? {
         enabled: true,
@@ -968,7 +977,7 @@ router.post('/chat', async (req, res) => {
         await chatConversationRepository.updateBookingState(conversationId, companyId, { declined: true, declinedAt: new Date().toISOString() });
         await chatMessagesRepository.appendMessage(conversationId, 'assistant', decline);
         bookingDebug.reason = 'booking_declined';
-        console.info('[chat-booking] DECLINED', { conversationId });
+        logger.info('[chat-booking] DECLINED', { conversationId });
         return respond(decline, { ui_action: 'booking_declined', booking: buildBookingPayload('declined'), booking_declined: true });
       }
     }
@@ -1020,10 +1029,10 @@ router.post('/chat', async (req, res) => {
             const confirmMsg = `Your ${typeLabel} has been confirmed for ${slot.label}. We look forward to speaking with you!`;
             await chatMessagesRepository.appendMessage(conversationId, 'assistant', confirmMsg);
             const warmingService = require('../../services/warmingService');
-            warmingService.enrollLead(reqLeadId, companyId, 'call_booked').catch((err) => console.error('[chat-booking] warming enroll error:', err.message));
+            warmingService.enrollLead(reqLeadId, companyId, 'call_booked').catch((err) => logger.error('[chat-booking] warming enroll error:', err.message));
             const googleCalendarService = require('../../services/googleCalendarService');
-            googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) => console.error('[chat-booking] Google sync:', err.message));
-            console.info('[chat-booking] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
+            googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) => logger.error('[chat-booking] Google sync:', err.message));
+            logger.info('[chat-booking] CONFIRMED via chat', { conversationId, appointmentId: appointment.id });
             return respond(confirmMsg, { ui_action: 'booking_success', booking: buildBookingPayload('confirmed', { appointment, appointmentId: appointment.id }) });
           }
           // No leadId or slot taken — create scheduling request instead
@@ -1066,9 +1075,9 @@ router.post('/chat', async (req, res) => {
             availabilityMode: 'manual',
             metadata: { conversationId, customTimeText: message.trim() },
           });
-          console.info('[chat-booking] scheduling request created', { conversationId, requestId: createdRequest?.id });
+          logger.info('[chat-booking] scheduling request created', { conversationId, requestId: createdRequest?.id });
         } catch (srErr) {
-          console.warn('[chat-booking] scheduling request create failed (non-blocking):', srErr.message);
+          logger.warn('[chat-booking] scheduling request create failed (non-blocking):', srErr.message);
         }
       }
 
@@ -1086,7 +1095,7 @@ router.post('/chat', async (req, res) => {
     // This single block replaces both the "explicit intent" and "auto-after-quote" paths.
     if (trigger.shouldOfferBooking) {
       selectedReplyPath = trigger.reason === 'user_intent' ? 'booking_intent_entry' : 'booking_offer';
-      console.info('[chat-booking] OFFERING booking', { conversationId, reason: trigger.reason, quoteComplete });
+      logger.info('[chat-booking] OFFERING booking', { conversationId, reason: trigger.reason, quoteComplete });
 
       const missing = [];
       if (bkgConfig.requireName && !hasName) missing.push('full_name');
@@ -1121,7 +1130,7 @@ router.post('/chat', async (req, res) => {
             offerMsg = prependGreeting(offerMsg, greetingWords);
           }
         } catch (llmErr) {
-          console.warn('[chat-booking] LLM summary failed, using simple offer:', llmErr.message);
+          logger.warn('[chat-booking] LLM summary failed, using simple offer:', llmErr.message);
         }
       }
 
@@ -1145,7 +1154,7 @@ router.post('/chat', async (req, res) => {
       await chatMessagesRepository.appendMessage(conversationId, 'assistant', offerMsg);
       bookingDebug.offered = true;
       bookingDebug.reason = trigger.reason;
-      console.info('[chat-booking] OFFERED', { conversationId, reason: trigger.reason });
+      logger.info('[chat-booking] OFFERED', { conversationId, reason: trigger.reason });
       return respond(offerMsg, {
         ui_action: 'booking_offer',
         booking: buildBookingPayload('offer', {
@@ -1170,12 +1179,12 @@ router.post('/chat', async (req, res) => {
           return respond(refreshMsg, { ui_action: 'booking_slots', booking: buildBookingPayload('slots', { slots: refreshSlots, availableSlots: refreshSlots }) });
         }
       } catch (slErr) {
-        console.warn('[chat-booking] slot refresh failed:', slErr.message);
+        logger.warn('[chat-booking] slot refresh failed:', slErr.message);
       }
     }
 
     } catch (bookingOrchErr) {
-      console.error('[chat-booking] orchestration error, falling back to generic AI:', bookingOrchErr.message, bookingOrchErr.stack?.split('\n')[1]);
+      logger.error('[chat-booking] orchestration error, falling back to generic AI:', bookingOrchErr.message, bookingOrchErr.stack?.split('\n')[1]);
       selectedReplyPath = 'generic_ai_fallback';
       bookingDebug.reason = 'orchestration_error';
       bookingDebug.error = bookingOrchErr.message;
@@ -1201,7 +1210,7 @@ router.post('/chat', async (req, res) => {
 
     // ========= Default: LLM response (post-booking or booking disabled) =========
     if (selectedReplyPath !== 'generic_ai' && selectedReplyPath !== 'generic_ai_fallback') {
-      console.warn('[chat] unexpected fallthrough: selectedReplyPath=%s, returning generic AI anyway', selectedReplyPath);
+      logger.warn('[chat] unexpected fallthrough: selectedReplyPath=%s, returning generic AI anyway', selectedReplyPath);
     }
     selectedReplyPath = selectedReplyPath === 'generic_ai_fallback' ? 'generic_ai_fallback' : 'generic_ai';
     const systemPrompt = buildSystemPromptLegacy(behavior, companyInfo, orderedQuoteFieldsForChat, collectedMap, [], schedulingConfig);
@@ -1215,7 +1224,7 @@ router.post('/chat', async (req, res) => {
     // If booking SHOULD have been offered but fell back due to error, append booking question
     if (bookingActive && quoteComplete && !stateLoadFailed && bkgConfig.askAfterQuote
         && !isInBookingFlow(bookingPhase) && selectedReplyPath === 'generic_ai_fallback') {
-      console.warn('[chat-booking] injecting booking CTA into fallback response');
+      logger.warn('[chat-booking] injecting booking CTA into fallback response');
       assistantMessage += '\n\n' + buildBookingQuestion(bkgConfig);
       bookingDebug.reason = 'fallback_with_booking_cta';
       try { await chatConversationRepository.updateState(conversationId, companyId, { last_asked_field: BOOKING_STATES.OFFERED }); } catch (_) {}
@@ -1229,7 +1238,7 @@ router.post('/chat', async (req, res) => {
     await chatMessagesRepository.appendMessage(conversationId, 'assistant', assistantMessage);
     return respond(assistantMessage);
   } catch (err) {
-    console.error('[chat] error:', err.message, err.stack?.split('\n')[1]);
+    logger.error('[chat] error:', err.message, err.stack?.split('\n')[1]);
     return res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: err?.message ?? 'Chat failed' },
     });
@@ -1268,7 +1277,7 @@ router.get('/conversation/:conversationId/fields', async (req, res) => {
       highlights,
     });
   } catch (err) {
-    console.error('[chat] fields error:', err.message);
+    logger.error('[chat] fields error:', err.message);
     return res.status(500).json({
       error: { code: 'INTERNAL_ERROR', message: err?.message ?? 'Failed' },
     });
@@ -1498,7 +1507,7 @@ Return ONLY valid JSON in this exact format:
       style_summary: result.style_summary || '',
     });
   } catch (err) {
-    console.error('[chatbot/learn-style] Error:', err.message);
+    logger.error('[chatbot/learn-style] Error:', err.message);
     return res.status(500).json({ error: 'Style analysis failed: ' + (err.message || 'Unknown error') });
   }
 });
@@ -1626,7 +1635,7 @@ Return ONLY valid JSON in this exact format:
       style_summary: result.style_summary || '',
     });
   } catch (err) {
-    console.error('[chatbot/learn-style/upload] Error:', err.message);
+    logger.error('[chatbot/learn-style/upload] Error:', err.message);
     return res.status(500).json({ error: 'Document analysis failed: ' + (err.message || 'Unknown error') });
   }
 });

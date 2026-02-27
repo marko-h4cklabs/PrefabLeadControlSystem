@@ -1,6 +1,7 @@
 /**
  * Onboarding progress and completion. All routes require auth + tenant.
  */
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -49,7 +50,7 @@ router.get('/status', async (req, res) => {
       steps,
     });
   } catch (err) {
-    console.error('[onboarding] status:', err.message);
+    logger.error('[onboarding] status:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
@@ -63,7 +64,7 @@ router.post('/complete', async (req, res) => {
     );
     return res.json({ success: true, completed: true });
   } catch (err) {
-    console.error('[onboarding] complete:', err.message);
+    logger.error('[onboarding] complete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });

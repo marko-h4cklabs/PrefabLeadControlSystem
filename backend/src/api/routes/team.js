@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -23,7 +24,7 @@ router.get('/', async (req, res) => {
     }));
     return res.json({ items });
   } catch (err) {
-    console.error('[team] list:', err.message);
+    logger.error('[team] list:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list team');
   }
 });
@@ -53,7 +54,7 @@ router.post('/', async (req, res) => {
       created_at: row.created_at,
     });
   } catch (err) {
-    console.error('[team] create:', err.message);
+    logger.error('[team] create:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create team member');
   }
 });
@@ -99,7 +100,7 @@ router.put('/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Team member not found');
     return res.json(r.rows[0]);
   } catch (err) {
-    console.error('[team] update:', err.message);
+    logger.error('[team] update:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update team member');
   }
 });
@@ -116,7 +117,7 @@ router.delete('/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Team member not found');
     return res.json({ success: true, id });
   } catch (err) {
-    console.error('[team] delete:', err.message);
+    logger.error('[team] delete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete team member');
   }
 });
@@ -171,7 +172,7 @@ router.get('/performance', async (req, res) => {
     const items = Object.values(bySetter);
     return res.json({ items });
   } catch (err) {
-    console.error('[team] performance:', err.message);
+    logger.error('[team] performance:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get performance');
   }
 });
@@ -188,7 +189,7 @@ router.get('/:id/performance', async (req, res) => {
     );
     return res.json({ setter_id: id, rows: r.rows || [] });
   } catch (err) {
-    console.error('[team] performance detail:', err.message);
+    logger.error('[team] performance detail:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to get performance');
   }
 });

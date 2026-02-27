@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { getAvailability, isSlotAvailable } = require('../../../services/availabilityService');
@@ -18,7 +19,7 @@ router.get('/availability', async (req, res) => {
     const { startDate, endDate, appointmentType, limit } = req.query;
     const parsedLimit = limit ? Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50) : 10;
 
-    console.info('[scheduling/availability] request', { companyId, startDate, endDate, appointmentType, limit: parsedLimit });
+    logger.info('[scheduling/availability] request', { companyId, startDate, endDate, appointmentType, limit: parsedLimit });
 
     const result = await getAvailability(companyId, {
       startDate: startDate || undefined,
@@ -27,7 +28,7 @@ router.get('/availability', async (req, res) => {
       limit: parsedLimit,
     });
 
-    console.info('[scheduling/availability] returning', { slotCount: result.slots.length, reason: result.debug?.reason });
+    logger.info('[scheduling/availability] returning', { slotCount: result.slots.length, reason: result.debug?.reason });
 
     res.json({
       slots: result.slots,
@@ -39,7 +40,7 @@ router.get('/availability', async (req, res) => {
       debug: result.debug,
     });
   } catch (err) {
-    console.error('[scheduling/availability] error:', err.message);
+    logger.error('[scheduling/availability] error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to compute availability');
   }
 });
@@ -96,7 +97,7 @@ async function handleBookSlot(req, res) {
 
     const n = normalizeBookSlotBody(req.body);
 
-    console.info('[scheduling/book-slot] hit', {
+    logger.info('[scheduling/book-slot] hit', {
       companyId,
       hasLeadId: !!n.leadId, hasStartAt: !!n.startAt, hasEndAt: !!n.endAt,
       type: n.appointmentType, source: n.source,
@@ -155,7 +156,7 @@ async function handleBookSlot(req, res) {
 
     const available = await isSlotAvailable(companyId, startDate.toISOString(), endDate.toISOString());
     if (!available) {
-      console.info('[scheduling/book-slot] CONFLICT', { companyId, hasLeadId: true });
+      logger.info('[scheduling/book-slot] CONFLICT', { companyId, hasLeadId: true });
       return errorJson(res, 409, 'CONFLICT', 'This time slot is no longer available. Please choose another.');
     }
 
@@ -200,7 +201,7 @@ async function handleBookSlot(req, res) {
     }).catch(() => {});
 
     googleCalendarService.syncNewAppointmentToGoogle(companyId, appointment, lead).catch((err) =>
-      console.error('[scheduling/book-slot] Google sync:', err.message)
+      logger.error('[scheduling/book-slot] Google sync:', err.message)
     );
 
     sendAppointmentConfirmationEmail({
@@ -222,11 +223,11 @@ async function handleBookSlot(req, res) {
         });
         await chatMessagesRepository.appendMessage(n.conversationId, 'assistant', confirmationText);
       } catch (convErr) {
-        console.warn('[scheduling/book-slot] conversation state update failed (non-blocking):', convErr.message);
+        logger.warn('[scheduling/book-slot] conversation state update failed (non-blocking):', convErr.message);
       }
     }
 
-    console.info('[scheduling/book-slot] CREATED', { companyId, appointmentId: appointment.id });
+    logger.info('[scheduling/book-slot] CREATED', { companyId, appointmentId: appointment.id });
 
     const response = {
       success: true,
@@ -243,7 +244,7 @@ async function handleBookSlot(req, res) {
     if (typeWarning) response.warning = typeWarning;
     res.status(201).json(response);
   } catch (err) {
-    console.error('[scheduling/book-slot] error:', err.message, err.code, err.detail);
+    logger.error('[scheduling/book-slot] error:', err.message, err.code, err.detail);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to book appointment');
   }
 }

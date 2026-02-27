@@ -3,6 +3,7 @@
  * Supports direct buffer or download from URL (e.g. Instagram/ManyChat voice message URLs).
  */
 
+const logger = require('../src/lib/logger');
 const FormData = require('form-data');
 const fetch = require('node-fetch');
 const axios = require('axios');
@@ -13,7 +14,7 @@ async function transcribeAudio(audioBuffer, mimeType) {
     throw new Error('OPENAI_API_KEY is required for transcription');
   }
 
-  console.log('[whisper] transcribing audio, length:', audioBuffer?.length ?? 0, 'bytes');
+  logger.info('[whisper] transcribing audio, length:', audioBuffer?.length ?? 0, 'bytes');
 
   const form = new FormData();
   form.append('file', audioBuffer, {
@@ -73,7 +74,7 @@ async function transcribeAudioFromUrl(audioUrl) {
     const result = await transcribeAudio(buffer, contentType);
     return result.text || null;
   } catch (err) {
-    console.error('[whisper] Transcription from URL error for', audioUrl, '-', err.message);
+    logger.error('[whisper] Transcription from URL error for', audioUrl, '-', err.message);
     return null;
   }
 }

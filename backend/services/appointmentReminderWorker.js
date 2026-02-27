@@ -1,3 +1,4 @@
+const logger = require('../src/lib/logger');
 const { appointmentRepository, notificationRepository } = require('../db/repositories');
 
 const POLL_INTERVAL_MS = 60_000;
@@ -35,14 +36,14 @@ async function tick() {
 
         await appointmentRepository.markReminderSent(row.appointment_id, row.reminder_minutes_before);
       } catch (err) {
-        console.error('[reminderWorker] failed to send reminder:', { appointmentId: row.appointment_id, error: err.message });
+        logger.error('[reminderWorker] failed to send reminder:', { appointmentId: row.appointment_id, error: err.message });
       }
     }
     if (due.length > 0) {
-      console.info(`[reminderWorker] sent ${due.length} reminder(s)`);
+      logger.info(`[reminderWorker] sent ${due.length} reminder(s)`);
     }
   } catch (err) {
-    console.error('[reminderWorker] tick error:', err.message);
+    logger.error('[reminderWorker] tick error:', err.message);
   } finally {
     running = false;
   }
@@ -50,7 +51,7 @@ async function tick() {
 
 function start() {
   if (timer) return;
-  console.info('[reminderWorker] started, polling every', POLL_INTERVAL_MS / 1000, 's');
+  logger.info('[reminderWorker] started, polling every', POLL_INTERVAL_MS / 1000, 's');
   tick();
   timer = setInterval(tick, POLL_INTERVAL_MS);
 }
@@ -59,7 +60,7 @@ function stop() {
   if (timer) {
     clearInterval(timer);
     timer = null;
-    console.info('[reminderWorker] stopped');
+    logger.info('[reminderWorker] stopped');
   }
 }
 
@@ -87,11 +88,11 @@ async function runOnce() {
         await appointmentRepository.markReminderSent(row.appointment_id, row.reminder_minutes_before);
         count++;
       } catch (err) {
-        console.error('[reminderWorker] runOnce single:', { appointmentId: row.appointment_id, error: err.message });
+        logger.error('[reminderWorker] runOnce single:', { appointmentId: row.appointment_id, error: err.message });
       }
     }
   } catch (err) {
-    console.error('[reminderWorker] runOnce error:', err.message);
+    logger.error('[reminderWorker] runOnce error:', err.message);
   } finally {
     running = false;
   }

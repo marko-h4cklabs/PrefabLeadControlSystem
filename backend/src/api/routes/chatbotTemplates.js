@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../../../db');
@@ -34,7 +35,7 @@ router.get('/', async (req, res) => {
     }
     return res.json({ by_category: byCategory });
   } catch (err) {
-    console.error('[chatbot/templates] list:', err.message);
+    logger.error('[chatbot/templates] list:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list templates');
   }
 });
@@ -59,7 +60,7 @@ router.post('/', async (req, res) => {
     );
     return res.status(201).json(r.rows[0]);
   } catch (err) {
-    console.error('[chatbot/templates] create:', err.message);
+    logger.error('[chatbot/templates] create:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create template');
   }
 });
@@ -104,7 +105,7 @@ router.put('/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Template not found');
     return res.json(r.rows[0]);
   } catch (err) {
-    console.error('[chatbot/templates] update:', err.message);
+    logger.error('[chatbot/templates] update:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update template');
   }
 });
@@ -121,7 +122,7 @@ router.delete('/:id', async (req, res) => {
     if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Template not found');
     return res.json({ success: true, id });
   } catch (err) {
-    console.error('[chatbot/templates] delete:', err.message);
+    logger.error('[chatbot/templates] delete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete template');
   }
 });
@@ -141,7 +142,7 @@ router.post('/:id/use', async (req, res) => {
     const variables = Array.isArray(row.variables) ? row.variables : [];
     return res.json({ content: row.content, variables });
   } catch (err) {
-    console.error('[chatbot/templates] use:', err.message);
+    logger.error('[chatbot/templates] use:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to use template');
   }
 });

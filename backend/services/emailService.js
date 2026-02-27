@@ -3,6 +3,7 @@
  * Does not crash if env vars missing; logs warning and skips sending.
  */
 
+const logger = require('../src/lib/logger');
 let resendClient = null;
 
 function initResend() {
@@ -11,7 +12,7 @@ function initResend() {
   const from = process.env.EMAIL_FROM;
   if (!apiKey || !from) {
     if (!process.env.EMAIL_PROVIDER) return null;
-    console.warn('[emailService] RESEND_API_KEY or EMAIL_FROM not set; email notifications disabled');
+    logger.warn('[emailService] RESEND_API_KEY or EMAIL_FROM not set; email notifications disabled');
     return null;
   }
   try {
@@ -19,7 +20,7 @@ function initResend() {
     resendClient = new Resend(apiKey);
     return resendClient;
   } catch (err) {
-    console.warn('[emailService] Resend init failed:', err.message);
+    logger.warn('[emailService] Resend init failed:', err.message);
     return null;
   }
 }
@@ -201,10 +202,10 @@ async function sendNewLeadEmail(to, lead, opts = {}) {
       text,
     });
     if (error) {
-      console.error('[emailService] Resend error:', error);
+      logger.error('[emailService] Resend error:', error);
     }
   } catch (err) {
-    console.error('[emailService] Send failed:', err.message);
+    logger.error('[emailService] Send failed:', err.message);
   }
 }
 

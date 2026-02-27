@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const logger = require('../src/lib/logger');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -6,21 +7,24 @@ const pool = new Pool({
   min: parseInt(process.env.DB_POOL_MIN, 10) || 2,
   idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT_MS, 10) || 30000,
   connectionTimeoutMillis: parseInt(process.env.DB_CONNECT_TIMEOUT_MS, 10) || 5000,
+  statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30000,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
 pool.on('error', (err) => {
-  console.error('[pool] Unexpected error:', err.message);
+  logger.error({ err }, 'Unexpected PostgreSQL pool error');
 });
 
 if (process.env.NODE_ENV === 'production') {
   setInterval(() => {
     try {
-      console.log(
-        `[pool] total=${pool.totalCount} idle=${pool.idleCount} waiting=${pool.waitingCount}`
-      );
+      logger.info({
+        total: pool.totalCount,
+        idle: pool.idleCount,
+        waiting: pool.waitingCount,
+      }, 'DB pool stats');
     } catch (e) {
-      console.warn('[pool] stats log failed:', e.message);
+      logger.warn({ err: e }, 'Pool stats log failed');
     }
   }, 5 * 60 * 1000);
 }

@@ -2,6 +2,7 @@
  * Daily revenue snapshot: inserts revenue_snapshots for each company with that day's totals.
  */
 
+const logger = require('../lib/logger');
 const { pool } = require('../../db');
 
 async function runDailySnapshot(snapshotDate = null) {
@@ -47,11 +48,11 @@ async function runDailySnapshot(snapshotDate = null) {
       );
       inserted++;
     } catch (err) {
-      console.error('[revenueSnapshot] company', companyId, err.message);
+      logger.error('[revenueSnapshot] company', companyId, err.message);
     }
   }
 
-  if (inserted > 0) console.info('[revenueSnapshot] ran for', inserted, 'companies, date=', dateStr);
+  if (inserted > 0) logger.info('[revenueSnapshot] ran for', inserted, 'companies, date=', dateStr);
   return inserted;
 }
 

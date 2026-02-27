@@ -1,3 +1,4 @@
+const logger = require('../../lib/logger');
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
@@ -103,7 +104,7 @@ router.get('/', async (req, res) => {
     if (!parsed.success) {
       const err = parsed.error.flatten();
       if (process.env.NODE_ENV !== 'production') {
-        console.info('[leads] rejected query params:', req.query, 'errors:', err.fieldErrors);
+        logger.info('[leads] rejected query params:', req.query, 'errors:', err.fieldErrors);
       }
       const msg = err.formErrors?.join?.(' ') || 'Invalid query parameters';
       return res.status(400).json({ error: msg });
@@ -151,7 +152,7 @@ router.get('/', async (req, res) => {
       total: typeof total === 'number' ? total : 0,
     });
   } catch (err) {
-    console.error('[leads] list error:', err.message);
+    logger.error('[leads] list error:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -200,7 +201,7 @@ router.get('/search', async (req, res) => {
     });
     res.json({ leads, total: leads.length });
   } catch (err) {
-    console.error('[leads] search:', err.message);
+    logger.error('[leads] search:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -265,7 +266,7 @@ router.get('/filter', async (req, res) => {
     const leads = (r.rows || []).map((row) => toLeadResponse({ ...row, status_name: row.status_name }));
     res.json({ leads });
   } catch (err) {
-    console.error('[leads] filter:', err.message);
+    logger.error('[leads] filter:', err.message);
     res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -279,7 +280,7 @@ async function ensureLeadForCrm(req, res, next) {
   const leadId = req.params.leadId;
   if (!leadId || !UUID_REGEX.test(String(leadId))) {
     if (process.env.NODE_ENV !== 'production') {
-      console.warn('[crm] invalid leadId:', { leadId, params: req.params });
+      logger.warn('[crm] invalid leadId:', { leadId, params: req.params });
     }
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Valid lead ID (UUID) required' } });
   }
@@ -290,7 +291,7 @@ async function ensureLeadForCrm(req, res, next) {
   const lead = await leadRepository.findById(companyId, leadId);
   if (!lead) {
     if (process.env.NODE_ENV !== 'production') {
-      console.warn('[crm] lead not found:', { companyId, leadId });
+      logger.warn('[crm] lead not found:', { companyId, leadId });
     }
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Lead not found' } });
   }
@@ -326,7 +327,7 @@ router.get('/:leadId/activity', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     if (process.env.NODE_ENV !== 'production') {
-      console.info('[crm] GET activity', { leadId, tenantId: req.tenantId });
+      logger.info('[crm] GET activity', { leadId, tenantId: req.tenantId });
     }
     const parsed = crmActivityQuerySchema.safeParse(req.query);
     const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
@@ -342,7 +343,7 @@ router.get('/:leadId/notes', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     if (process.env.NODE_ENV !== 'production') {
-      console.info('[crm] GET notes', { leadId, tenantId: req.tenantId });
+      logger.info('[crm] GET notes', { leadId, tenantId: req.tenantId });
     }
     const parsed = crmNotesQuerySchema.safeParse(req.query);
     const { limit, offset } = parsed.success ? parsed.data : { limit: 50, offset: 0 };
@@ -358,7 +359,7 @@ router.get('/:leadId/tasks', ensureLeadForCrm, async (req, res) => {
   try {
     const leadId = req.crmLeadId;
     if (process.env.NODE_ENV !== 'production') {
-      console.info('[crm] GET tasks', { leadId, tenantId: req.tenantId });
+      logger.info('[crm] GET tasks', { leadId, tenantId: req.tenantId });
     }
     const parsed = crmTasksQuerySchema.safeParse(req.query);
     const { limit, offset, status } = parsed.success ? parsed.data : { limit: 50, offset: 0, status: undefined };
@@ -470,7 +471,7 @@ router.post('/:leadId/block', ensureLeadForCrm, async (req, res) => {
     await leadRepository.update(companyId, leadId, { status: 'disqualified', pipeline_stage: 'disqualified' });
     return res.json({ success: true, blocked: true });
   } catch (err) {
-    console.error('[leads] block:', err.message);
+    logger.error('[leads] block:', err.message);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -493,7 +494,7 @@ router.put('/:leadId/assign', ensureLeadForCrm, async (req, res) => {
     const updated = await leadRepository.findById(companyId, leadId);
     return res.json(toLeadResponse(updated));
   } catch (err) {
-    console.error('[leads] assign:', err.message);
+    logger.error('[leads] assign:', err.message);
     return res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
@@ -973,7 +974,7 @@ router.get('/:leadId/appointments', ensureLeadForCrm, async (req, res) => {
 
     res.json({ items, total, range: { from: from ?? null, to: to ?? null } });
   } catch (err) {
-    console.error('[leads/:leadId/appointments] list error:', err.message);
+    logger.error('[leads/:leadId/appointments] list error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list lead appointments');
   }
 });
@@ -1010,7 +1011,7 @@ router.get('/:leadId/scheduling-requests', ensureLeadForCrm, async (req, res) =>
 
     res.json({ items, total });
   } catch (err) {
-    console.error('[leads/:leadId/scheduling-requests] list error:', err.message);
+    logger.error('[leads/:leadId/scheduling-requests] list error:', err.message);
     errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list lead scheduling requests');
   }
 });
