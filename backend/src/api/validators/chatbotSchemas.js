@@ -157,12 +157,14 @@ const presetUpdateSchema = z
     is_enabled: z.boolean().optional(),
     priority: z.number().int().min(0).optional(),
     config: z.unknown().optional(),
+    qualification_prompt: z.string().trim().max(2000).nullable().optional(),
   })
   .transform((d) => ({
     name: d.name,
     is_enabled: d.is_enabled,
     priority: d.priority,
     config: normalizePresetConfig(d.name, d.config),
+    qualification_prompt: d.qualification_prompt,
   }));
 
 const quotePresetsBodySchema = z.preprocess(

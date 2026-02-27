@@ -99,12 +99,13 @@ function toPresetDto(row, name) {
     is_custom: false,
     variable_name: row?.variable_name ?? sanitizeVariableName(n),
     field_type: typeVal,
+    qualification_prompt: row?.qualification_prompt ?? null,
   };
 }
 
 async function listAllPresets(companyId) {
   const result = await pool.query(
-    `SELECT id, name, type, units, priority, required, is_enabled, config
+    `SELECT id, name, type, units, priority, required, is_enabled, config, qualification_prompt
      FROM chatbot_quote_fields
      WHERE company_id = $1 AND name = ANY($2::text[])
      ORDER BY priority ASC, name ASC`,
@@ -191,10 +192,10 @@ async function updatePresets(companyId, updates) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const { name, is_enabled, priority, config } of updates) {
+    for (const { name, is_enabled, priority, config, qualification_prompt } of updates) {
       if (!PRESET_NAMES.includes(name)) continue;
       const existing = await client.query(
-        'SELECT id, is_enabled, config, priority FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2',
+        'SELECT id, is_enabled, config, priority, qualification_prompt FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2',
         [companyId, name]
       );
       const row = existing.rows[0];
@@ -203,19 +204,21 @@ async function updatePresets(companyId, updates) {
         const newEnabled = is_enabled !== undefined ? is_enabled : row.is_enabled;
         const newConfig = config !== undefined ? { ...defaultCfg, ...config } : row.config;
         const newPriority = priority !== undefined ? priority : (row.priority ?? getPresetPriority(name));
+        const newQualPrompt = qualification_prompt !== undefined ? (qualification_prompt || null) : (row.qualification_prompt ?? null);
         await client.query(
-          'UPDATE chatbot_quote_fields SET is_enabled = $3, config = $4::jsonb, priority = $5 WHERE company_id = $1 AND name = $2',
-          [companyId, name, newEnabled, JSON.stringify(newConfig), newPriority]
+          'UPDATE chatbot_quote_fields SET is_enabled = $3, config = $4::jsonb, priority = $5, qualification_prompt = $6 WHERE company_id = $1 AND name = $2',
+          [companyId, name, newEnabled, JSON.stringify(newConfig), newPriority, newQualPrompt]
         );
       } else {
         const typeVal = getPresetType(name);
         const unitsVal = getPresetUnits(name);
         const priorityVal = priority !== undefined ? priority : getPresetPriority(name);
         const mergedConfig = config !== undefined ? { ...defaultCfg, ...config } : defaultCfg;
+        const qualPrompt = qualification_prompt || null;
         await client.query(
-          `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config)
-           VALUES ($1, $2, $3, $4, $5, true, $6, $7::jsonb)`,
-          [companyId, name, typeVal, unitsVal, priorityVal, is_enabled ?? false, JSON.stringify(mergedConfig)]
+          `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, qualification_prompt)
+           VALUES ($1, $2, $3, $4, $5, true, $6, $7::jsonb, $8)`,
+          [companyId, name, typeVal, unitsVal, priorityVal, is_enabled ?? false, JSON.stringify(mergedConfig), qualPrompt]
         );
       }
     }
@@ -235,7 +238,7 @@ async function list(companyId) {
 
 async function listCustomFields(companyId) {
   const result = await pool.query(
-    `SELECT id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label
+    `SELECT id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label, qualification_prompt
      FROM chatbot_quote_fields
      WHERE company_id = $1 AND is_custom = true
      ORDER BY priority ASC, name ASC`,
@@ -268,6 +271,7 @@ async function listCustomFields(companyId) {
       is_custom: true,
       variable_name: row.variable_name || row.name,
       field_type: typeVal,
+      qualification_prompt: row.qualification_prompt ?? null,
     };
   });
 }
@@ -284,18 +288,19 @@ async function listWithCustom(companyId) {
   return combined;
 }
 
-async function createCustom(companyId, { label, field_type = 'text' }) {
+async function createCustom(companyId, { label, field_type = 'text', qualification_prompt = null }) {
   const variable_name = sanitizeVariableName(label) || 'custom_field';
   const countResult = await pool.query(
     'SELECT COUNT(*)::int AS n FROM chatbot_quote_fields WHERE company_id = $1',
     [companyId]
   );
   const priority = (countResult.rows[0]?.n ?? 0) + 1;
+  const qualPrompt = qualification_prompt || null;
   const result = await pool.query(
-    `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, is_custom, variable_name, field_type, label)
-     VALUES ($1, $2, $3, NULL, $4, true, true, '{}'::jsonb, true, $5, $6, $7)
-     RETURNING id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label`,
-    [companyId, variable_name, field_type, priority, variable_name, field_type, (label || '').trim()]
+    `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, is_custom, variable_name, field_type, label, qualification_prompt)
+     VALUES ($1, $2, $3, NULL, $4, true, true, '{}'::jsonb, true, $5, $6, $7, $8)
+     RETURNING id, name, type, units, priority, required, is_enabled, config, variable_name, field_type, label, qualification_prompt`,
+    [companyId, variable_name, field_type, priority, variable_name, field_type, (label || '').trim(), qualPrompt]
   );
   const row = result.rows[0];
   return {
@@ -312,7 +317,24 @@ async function createCustom(companyId, { label, field_type = 'text' }) {
     config: row.config || {},
     units: row.units,
     description: '',
+    qualification_prompt: row.qualification_prompt ?? null,
   };
+}
+
+async function updateCustomField(companyId, id, { qualification_prompt }) {
+  const sets = [];
+  const vals = [id, companyId];
+  let idx = 3;
+  if (qualification_prompt !== undefined) {
+    sets.push(`qualification_prompt = $${idx++}`);
+    vals.push(qualification_prompt || null);
+  }
+  if (sets.length === 0) return null;
+  const result = await pool.query(
+    `UPDATE chatbot_quote_fields SET ${sets.join(', ')} WHERE id = $1 AND company_id = $2 AND is_custom = true RETURNING id, qualification_prompt`,
+    vals
+  );
+  return result.rows[0] ?? null;
 }
 
 async function deleteCustomById(companyId, id) {
@@ -355,6 +377,7 @@ module.exports = {
   getEnabledFields,
   getFields,
   createCustom,
+  updateCustomField,
   deleteCustomById,
   PRESET_NAMES,
   getPresetType,

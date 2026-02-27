@@ -517,7 +517,7 @@ router.get('/quote-fields', async (req, res) => {
 
 router.post('/quote-fields/custom', async (req, res) => {
   try {
-    const { label, field_type = 'text' } = req.body ?? {};
+    const { label, field_type = 'text', qualification_prompt } = req.body ?? {};
     const trimmedLabel = label ? String(label).trim() : '';
     if (!trimmedLabel || trimmedLabel.length < 1) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Label is required' } });
@@ -530,15 +530,35 @@ router.post('/quote-fields/custom', async (req, res) => {
     if (!VALID_FIELD_TYPES.includes(ft)) {
       return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: `field_type must be one of: ${VALID_FIELD_TYPES.join(', ')}` } });
     }
+    const qualPrompt = qualification_prompt ? String(qualification_prompt).trim().substring(0, 2000) : null;
     const created = await chatbotQuoteFieldsRepository.createCustom(req.tenantId, {
       label: trimmedLabel,
       field_type: ft,
+      qualification_prompt: qualPrompt,
     });
     res.status(201).json(created);
   } catch (err) {
     if (err.code === '23505') {
       return res.status(409).json({ error: { code: 'CONFLICT', message: 'A field with this name already exists' } });
     }
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.patch('/quote-fields/custom/:id', async (req, res) => {
+  try {
+    const { qualification_prompt } = req.body ?? {};
+    const qualPrompt = qualification_prompt !== undefined
+      ? (qualification_prompt ? String(qualification_prompt).trim().substring(0, 2000) : null)
+      : undefined;
+    const updated = await chatbotQuoteFieldsRepository.updateCustomField(req.tenantId, req.params.id, {
+      qualification_prompt: qualPrompt,
+    });
+    if (!updated) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Custom field not found' } });
+    }
+    res.json(updated);
+  } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });

@@ -185,7 +185,8 @@ Only offer booking ONCE per conversation. If they decline, respect it and contin
     .map((f) => {
       const label = f.label || f.name.replace(/_/g, ' ');
       const suffix = f.units ? ` (${f.units})` : '';
-      return `- ${label}${suffix}`;
+      const qualPrompt = f.qualification_prompt ? ` → Qualification: ${f.qualification_prompt}` : '';
+      return `- ${label}${suffix}${qualPrompt}`;
     })
     .join('\n');
 
