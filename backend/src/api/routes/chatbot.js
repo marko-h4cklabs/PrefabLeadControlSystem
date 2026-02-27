@@ -48,12 +48,14 @@ const {
   quotePresetsBodySchema,
 } = require('../validators/chatbotSchemas');
 const { errorJson } = require('../middleware/errors');
+const { parseDocument } = require('../../services/documentParser');
 const { pool } = require('../../../db');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function validationError(res, parsed) {
   return res.status(400).json({
@@ -1548,6 +1550,133 @@ Return ONLY valid JSON in this exact format:
   } catch (err) {
     console.error('[chatbot/learn-style] Error:', err.message);
     return res.status(500).json({ error: 'Style analysis failed: ' + (err.message || 'Unknown error') });
+  }
+});
+
+/**
+ * POST /api/chatbot/learn-style/upload
+ * Accepts .docx/.xlsx document + optional text/image fields via multipart form.
+ * Extracts document text, combines with any provided texts/images, and runs the same
+ * style analysis as the JSON /learn-style endpoint.
+ */
+router.post('/learn-style/upload', docUpload.single('document'), async (req, res) => {
+  try {
+    let documentText = '';
+    if (req.file) {
+      const ALLOWED_MIMES = [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+      ];
+      if (!ALLOWED_MIMES.includes(req.file.mimetype)) {
+        return res.status(400).json({ error: 'Only .docx and .xlsx files are supported' });
+      }
+      documentText = await parseDocument(req.file.buffer, req.file.mimetype, req.file.originalname);
+    }
+
+    // Parse optional texts from form body (JSON string or array)
+    let texts = [];
+    if (req.body.texts) {
+      try {
+        texts = typeof req.body.texts === 'string' ? JSON.parse(req.body.texts) : req.body.texts;
+      } catch { texts = []; }
+    }
+    if (!Array.isArray(texts)) texts = [];
+    texts = texts.filter(t => typeof t === 'string' && t.trim());
+
+    // Parse optional images from form body
+    let images = [];
+    if (req.body.images) {
+      try {
+        images = typeof req.body.images === 'string' ? JSON.parse(req.body.images) : req.body.images;
+      } catch { images = []; }
+    }
+    if (!Array.isArray(images)) images = [];
+
+    // Combine document text with any additional texts
+    const allTexts = [documentText, ...texts].filter(Boolean);
+    if (allTexts.length === 0 || !allTexts.some(t => t.trim())) {
+      return res.status(400).json({ error: 'No content found. Upload a document or provide text samples.' });
+    }
+
+    const combinedText = allTexts.join('\n\n---\n\n');
+    const { claudeWithRetry: claude } = require('../../utils/claudeWithRetry');
+
+    const analysisPrompt = `You are an expert at analyzing communication styles and creating AI persona profiles.
+
+Analyze the following conversation examples / sales scripts / business documents and extract:
+1. **Tone**: Is it professional, friendly, confident, or relatable?
+2. **Response Length**: Does this person write short (1-2 sentences), medium (2-4), or long messages?
+3. **Vocabulary**: What kind of words do they use? Formal? Casual? Slang?
+4. **Sentence Structure**: Short punchy? Long flowing? Mixed?
+5. **Personality Traits**: What personality comes through? Humor? Directness? Empathy?
+6. **Common Phrases**: What phrases or expressions do they repeat?
+7. **Opener Style**: How do they start conversations?
+8. **Closing Style**: How do they close or transition?
+
+Based on your analysis, generate:
+- A detailed **agent backstory** (2-3 paragraphs) that would make an AI write in this exact style
+- A recommended **tone** setting (one of: professional, friendly, confident, relatable)
+- A recommended **response_length** (one of: short, medium, long)
+- A recommended **opener_style** (one of: casual, formal, question, statement)
+- Whether **emojis** are used (true/false)
+
+Return ONLY valid JSON in this exact format:
+{
+  "agent_backstory": "...",
+  "tone": "...",
+  "response_length": "...",
+  "opener_style": "...",
+  "emojis_enabled": true/false,
+  "style_summary": "A 1-2 sentence summary of the detected communication style"
+}`;
+
+    const userContent = [];
+    userContent.push({ type: 'text', text: `Here are the documents / scripts to analyze:\n\n${combinedText}` });
+
+    // Add images if provided (base64 data URLs)
+    for (const img of images.slice(0, 10)) {
+      if (typeof img === 'string' && img.startsWith('data:image/')) {
+        const match = img.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+        if (match) {
+          userContent.push({
+            type: 'image',
+            source: { type: 'base64', media_type: match[1], data: match[2] },
+          });
+        }
+      }
+    }
+
+    const { content } = await claude({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      system: analysisPrompt,
+      messages: [{ role: 'user', content: userContent }],
+    });
+
+    let result;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      result = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch {
+      result = null;
+    }
+
+    if (!result || !result.agent_backstory) {
+      return res.status(500).json({ error: 'Failed to analyze document. Try a different file or add more text samples.' });
+    }
+
+    return res.json({
+      agent_backstory: result.agent_backstory,
+      tone: result.tone || 'friendly',
+      response_length: result.response_length || 'medium',
+      opener_style: result.opener_style || 'casual',
+      emojis_enabled: result.emojis_enabled ?? false,
+      style_summary: result.style_summary || '',
+    });
+  } catch (err) {
+    console.error('[chatbot/learn-style/upload] Error:', err.message);
+    return res.status(500).json({ error: 'Document analysis failed: ' + (err.message || 'Unknown error') });
   }
 });
 

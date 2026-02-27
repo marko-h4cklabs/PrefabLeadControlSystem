@@ -174,6 +174,8 @@ const autoresponderRouter = require('./api/routes/autoresponder');
 app.use('/api/autoresponder', ...protectedStack, autoresponderRouter);
 const queueRouter = require('./api/routes/queue');
 app.use('/api/queue', ...protectedStack, queueRouter);
+const copilotRouter = require('./api/routes/copilot');
+app.use('/api/copilot', ...protectedStack, copilotRouter);
 
 app.use((req, res) => {
   if (!res.headersSent) {

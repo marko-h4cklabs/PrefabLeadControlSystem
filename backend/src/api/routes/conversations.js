@@ -208,4 +208,63 @@ router.post('/:conversationId/suggestions/:suggestionId/send', async (req, res) 
   }
 });
 
+/**
+ * POST /api/conversations/:conversationId/suggestions/:suggestionId/send-edited
+ * Send a user-edited version of a suggestion. Body: { text: "edited message" }
+ */
+router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { suggestionId } = req.params;
+    const { text } = req.body || {};
+
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
+    }
+    if (suggestionId && !UUID_REGEX.test(suggestionId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid suggestion ID required');
+    }
+
+    // Verify suggestion belongs to this company
+    const sugRow = await pool.query(
+      `SELECT rs.id, rs.lead_id FROM reply_suggestions rs
+       JOIN leads l ON l.id = rs.lead_id
+       WHERE rs.id = $1 AND l.company_id = $2`,
+      [suggestionId, companyId]
+    );
+    const suggestion = sugRow.rows[0];
+    if (!suggestion) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Suggestion not found');
+    }
+
+    // Get lead + ManyChat API key for sending
+    const leadRow = await pool.query(
+      `SELECT l.external_id, c.manychat_api_key FROM leads l
+       JOIN companies c ON c.id = l.company_id
+       WHERE l.id = $1 AND l.company_id = $2`,
+      [suggestion.lead_id, companyId]
+    );
+    const lead = leadRow.rows[0];
+    if (!lead?.external_id || !lead?.manychat_api_key) {
+      return errorJson(res, 400, 'SEND_FAILED', 'Lead missing external ID or ManyChat API key');
+    }
+
+    const { sendInstagramMessage } = require('../../services/manychatService');
+    await sendInstagramMessage(lead.external_id, text.trim(), lead.manychat_api_key);
+
+    // Append to conversation history
+    await conversationRepository.appendMessage(suggestion.lead_id, 'assistant', text.trim());
+
+    // Mark suggestion as used (edited)
+    await pool.query(
+      `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1 WHERE id = $1`,
+      [suggestionId]
+    );
+
+    res.json({ success: true, message_sent: text.trim() });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 module.exports = router;
