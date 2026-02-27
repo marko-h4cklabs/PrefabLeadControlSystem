@@ -66,6 +66,12 @@ const behaviorBodySchema = z
     urgency_style: z.string().trim().max(20).optional(),
     social_proof_enabled: z.boolean().optional(),
     social_proof_examples: z.string().trim().max(3000).nullable().optional(),
+    human_error_enabled: z.boolean().optional(),
+    human_error_types: z.array(z.string().trim().max(30)).max(10).optional(),
+    human_error_random: z.boolean().optional(),
+    delay_min_seconds: z.number().int().min(0).max(120).optional(),
+    delay_max_seconds: z.number().int().min(0).max(120).optional(),
+    delay_random_enabled: z.boolean().optional(),
   })
   .transform((d) => {
     const topics = d.forbidden_topics

@@ -14,17 +14,31 @@
 
 const pendingReplies = new Map();
 
-function waitOrReset(leadId, delaySeconds) {
+/**
+ * @param {string} leadId
+ * @param {number} delaySeconds - fixed delay (used when random is off)
+ * @param {object} [opts]
+ * @param {number} [opts.minSeconds] - minimum random delay
+ * @param {number} [opts.maxSeconds] - maximum random delay
+ * @param {boolean} [opts.randomEnabled] - whether to use random interval
+ */
+function waitOrReset(leadId, delaySeconds, opts = {}) {
   const existing = pendingReplies.get(leadId);
   if (existing) {
     existing.abort();
+  }
+
+  let actualDelay = delaySeconds;
+  if (opts.randomEnabled && opts.minSeconds != null && opts.maxSeconds != null && opts.maxSeconds > opts.minSeconds) {
+    actualDelay = opts.minSeconds + Math.random() * (opts.maxSeconds - opts.minSeconds);
+    console.log(`[messageDelay] Random delay for lead ${leadId}: ${actualDelay.toFixed(1)}s (range ${opts.minSeconds}-${opts.maxSeconds}s)`);
   }
 
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pendingReplies.delete(leadId);
       resolve(true);
-    }, delaySeconds * 1000);
+    }, actualDelay * 1000);
 
     pendingReplies.set(leadId, {
       abort: () => {

@@ -1428,4 +1428,107 @@ router.get('/booking-diagnostic', async (req, res) => {
   return res.json(diag);
 });
 
+/**
+ * POST /api/chatbot/learn-style
+ * Analyzes user-provided scripts, conversation examples, and images
+ * to generate an AI persona that matches their communication style.
+ */
+router.post('/learn-style', async (req, res) => {
+  const companyId = req.tenantId;
+  try {
+    const { texts = [], images = [] } = req.body || {};
+
+    if (!Array.isArray(texts) || texts.length === 0) {
+      return res.status(400).json({ error: 'Provide at least one text sample in the "texts" array' });
+    }
+
+    const combinedText = texts.filter(t => typeof t === 'string' && t.trim()).join('\n\n---\n\n');
+    if (!combinedText.trim()) {
+      return res.status(400).json({ error: 'All text samples are empty' });
+    }
+
+    const { claudeWithRetry } = require('../../../src/utils/claudeWithRetry');
+
+    const analysisPrompt = `You are an expert at analyzing communication styles and creating AI persona profiles.
+
+Analyze the following conversation examples / sales scripts and extract:
+1. **Tone**: Is it professional, friendly, confident, or relatable?
+2. **Response Length**: Does this person write short (1-2 sentences), medium (2-4), or long messages?
+3. **Vocabulary**: What kind of words do they use? Formal? Casual? Slang?
+4. **Sentence Structure**: Short punchy? Long flowing? Mixed?
+5. **Personality Traits**: What personality comes through? Humor? Directness? Empathy?
+6. **Common Phrases**: What phrases or expressions do they repeat?
+7. **Opener Style**: How do they start conversations?
+8. **Closing Style**: How do they close or transition?
+
+Based on your analysis, generate:
+- A detailed **agent backstory** (2-3 paragraphs) that would make an AI write in this exact style
+- A recommended **tone** setting (one of: professional, friendly, confident, relatable)
+- A recommended **response_length** (one of: short, medium, long)
+- A recommended **opener_style** (one of: casual, formal, question, statement)
+- Whether **emojis** are used (true/false)
+
+Return ONLY valid JSON in this exact format:
+{
+  "agent_backstory": "...",
+  "tone": "...",
+  "response_length": "...",
+  "opener_style": "...",
+  "emojis_enabled": true/false,
+  "style_summary": "A 1-2 sentence summary of the detected communication style"
+}`;
+
+    // Build messages array — text + optional images
+    const userContent = [];
+    userContent.push({ type: 'text', text: `Here are the conversation examples / scripts to analyze:\n\n${combinedText}` });
+
+    // Add images if provided (base64 data URLs)
+    if (Array.isArray(images)) {
+      for (const img of images.slice(0, 10)) {
+        if (typeof img === 'string' && img.startsWith('data:image/')) {
+          const match = img.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+          if (match) {
+            userContent.push({
+              type: 'image',
+              source: { type: 'base64', media_type: match[1], data: match[2] },
+            });
+          }
+        }
+      }
+    }
+
+    const { content } = await claudeWithRetry({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      system: analysisPrompt,
+      messages: [{ role: 'user', content: userContent }],
+    });
+
+    // Parse JSON from response
+    let result;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      result = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+    } catch {
+      result = null;
+    }
+
+    if (!result || !result.agent_backstory) {
+      return res.status(500).json({ error: 'Failed to analyze style. Try adding more text samples.' });
+    }
+
+    return res.json({
+      agent_backstory: result.agent_backstory,
+      tone: result.tone || 'friendly',
+      response_length: result.response_length || 'medium',
+      opener_style: result.opener_style || 'casual',
+      emojis_enabled: result.emojis_enabled ?? false,
+      style_summary: result.style_summary || '',
+    });
+  } catch (err) {
+    console.error('[chatbot/learn-style] Error:', err.message);
+    return res.status(500).json({ error: 'Style analysis failed: ' + (err.message || 'Unknown error') });
+  }
+});
+
 module.exports = router;

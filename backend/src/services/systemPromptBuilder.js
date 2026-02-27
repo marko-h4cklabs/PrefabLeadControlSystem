@@ -4,42 +4,8 @@
  */
 
 const toneInstruction = `You are having a real conversation via direct message. You text like a real human salesperson on their phone — not a corporate chatbot.
-
 Before you write any reply, ask yourself: "Would a real person actually type this in a DM?" If the answer is no, rewrite it.
-
-Study these examples and internalize them completely:
-
-WRONG: "What's on your mind? Moving forward"
-RIGHT: "What's on your mind?"
-
-WRONG: "Yeah still here. What were you trying to send? Standing by"
-RIGHT: "Yeah still here, what were you trying to send?"
-
-WRONG: "Noted. I'll get back to you on that."
-RIGHT: "Ok give me a sec"
-
-WRONG: "Absolutely! I'd be happy to help you with that today."
-RIGHT: "For sure, what do you need?"
-
-WRONG: "Thank you for reaching out! Moving forward, let's discuss your needs."
-RIGHT: "Hey! What's up?"
-
-WRONG: "What is your phone_number?"
-RIGHT: "What's a good number to reach you at?"
-
-WRONG: "What is your email_address?"
-RIGHT: "What's your email?"
-
-The pattern you must recognize and eliminate: you are adding words at the END of sentences that serve no purpose — they don't add meaning, don't ask a question, don't move the conversation forward. They are verbal padding. A real human texting never adds padding at the end of a message. They finish their thought and stop typing.
-
-CRITICAL: When asking for information, NEVER output raw field variable names like "phone_number", "email_address", "full_name", etc. Always use natural human language. Ask "What's your phone number?" not "What is your phone_number?". Ask "What's your name?" not "What is your full_name?".
-
-Never append anything to the end of a sentence unless it is:
-- A follow-up question
-- New information
-- A direct call to action
-
-If you finish a sentence and the next thing you're about to write is a transitional phrase, a sign-off, an acknowledgment, or a filler — stop. Send the message without it.`;
+CRITICAL: When asking for information, NEVER output raw field variable names like "phone_number", "email_address", "full_name", etc. Always use natural human language. Ask "What's your phone number?" not "What is your phone_number?". Ask "What's your name?" not "What is your full_name?".`;
 
 function getLanguageName(code) {
   const languages = {
@@ -153,35 +119,31 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
     ? `\nNEVER discuss or engage with these topics: ${behavior.prohibited_topics}`
     : '';
 
-  const fillerRules = `
+  const fillerRules = '';
 
-CORE WRITING PRINCIPLE:
-Every word you type must earn its place. If a word, phrase, or sentence does not add new information, ask a specific question, or move the conversation toward the goal, do not type it. Finish your thought and stop typing instead of adding extra padding.
+  // Human Error Style — makes the bot write with small imperfections
+  let humanErrorInstructions = '';
+  if (behavior?.human_error_enabled) {
+    const types = Array.isArray(behavior.human_error_types) ? behavior.human_error_types : [];
+    const isRandom = behavior.human_error_random;
 
-ABSOLUTE FORBIDDEN PHRASES — never generate any of these under any circumstances:
-"Standing by" — banned
-"Moving forward" — banned
-"Noted" — banned as a standalone response
-"Go for it" — banned
-"Not supported here" — banned
-"Absolutely" as an opener — banned
-"Certainly" as an opener — banned
-"Of course" as an opener — banned
-"Don't hesitate to reach out" — banned
-"Feel free to ask" — banned
-"Hope this helps" — banned
-"Does that make sense?" — banned
-"Talk soon" as a closer — banned
-"Much appreciated" as a closer — banned
-"Thank you for reaching out" — banned
-"Looks like the link didn't come through" — banned
-"Cannot access links" — banned
-Any phrase that sounds like a call center script — banned
-Any phrase that sounds like a customer service template — banned
+    const errorDescriptions = {
+      typos: 'Make occasional small typos — swap a letter, miss a letter, or double-tap a key (e.g., "teh" instead of "the", "somethng", "realy"). Keep it subtle and natural, max 1 typo per message.',
+      no_periods: 'Do NOT end your messages with a period. Just stop typing after the last word. Sometimes skip punctuation between sentences too — use line breaks instead.',
+      lowercase_starts: 'Sometimes start your sentences with a lowercase letter instead of uppercase, like you are texting casually on your phone.',
+      short_forms: 'Use casual short forms naturally: "ur" instead of "your", "u" instead of "you", "rn" for "right now", "gonna" for "going to", "wanna" for "want to", "ngl" for "not gonna lie", "tbh" for "to be honest". Don\'t overdo it — sprinkle them in.',
+      double_messages: 'Sometimes split your thought into 2 separate short messages instead of 1 longer message. Put [SPLIT] between the two parts so the system can send them separately.',
+    };
 
-If you catch yourself about to write any of these, or any similar filler, delete it and rewrite using natural human DM language.
-You are texting someone on Instagram. Write exactly like a real human would text.
-`;
+    if (types.length > 0) {
+      const activeDescriptions = types.map(t => errorDescriptions[t]).filter(Boolean);
+      if (isRandom) {
+        humanErrorInstructions = `\n\nHUMAN WRITING STYLE:\nYou write like a real human texting on their phone — not perfectly. In every message, randomly apply at least 1 of these imperfections (pick randomly each time):\n${activeDescriptions.map((d, i) => `${i + 1}. ${d}`).join('\n')}\nDo NOT apply all of them every time — pick 1-2 randomly per message to keep it natural and unpredictable.`;
+      } else {
+        humanErrorInstructions = `\n\nHUMAN WRITING STYLE:\nYou write like a real human texting on their phone — not perfectly. Apply ALL of these imperfections in your messages:\n${activeDescriptions.map((d, i) => `${i + 1}. ${d}`).join('\n')}`;
+      }
+    }
+  }
 
   let bookingSection = '';
   if (behavior?.booking_trigger_enabled) {
@@ -248,7 +210,7 @@ ${prohibitedText}
 ${languageInstruction}
 ${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}` : ''}
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
-${fillerRules}
+${fillerRules}${humanErrorInstructions}
 ${bookingSection}
 `
     : `
@@ -284,7 +246,7 @@ CRITICAL RULES:
 8. Ask ONE question at a time. Never ask multiple questions in the same message.
 9. Always move the conversation forward toward: ${conversationGoal}, but do it by asking a specific next question or making a concrete suggestion — never with vague transition phrases like "moving forward", "standing by", or "noted".
 10. If the lead seems frustrated or upset, acknowledge it first before responding to their question.
-${fillerRules}
+${fillerRules}${humanErrorInstructions}
 ${bookingSection}
 
 ${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}` : ''}

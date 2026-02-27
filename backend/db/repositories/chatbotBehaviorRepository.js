@@ -31,6 +31,12 @@ const DEFAULTS = {
   calendly_url: null,
   booking_offer_message: null,
   booking_required_fields: ['full_name', 'email_address'],
+  human_error_enabled: false,
+  human_error_types: [],
+  human_error_random: false,
+  delay_min_seconds: 0,
+  delay_max_seconds: 0,
+  delay_random_enabled: false,
 };
 
 const COLUMNS = [
@@ -64,6 +70,12 @@ const COLUMNS = [
   'calendly_url',
   'booking_offer_message',
   'booking_required_fields',
+  'human_error_enabled',
+  'human_error_types',
+  'human_error_random',
+  'delay_min_seconds',
+  'delay_max_seconds',
+  'delay_random_enabled',
 ];
 
 function rowToObject(row) {
@@ -101,6 +113,12 @@ function rowToObject(row) {
     calendly_url: row.calendly_url ?? DEFAULTS.calendly_url,
     booking_offer_message: row.booking_offer_message ?? DEFAULTS.booking_offer_message,
     booking_required_fields: Array.isArray(row.booking_required_fields) ? row.booking_required_fields : DEFAULTS.booking_required_fields,
+    human_error_enabled: row.human_error_enabled ?? DEFAULTS.human_error_enabled,
+    human_error_types: Array.isArray(row.human_error_types) ? row.human_error_types : DEFAULTS.human_error_types,
+    human_error_random: row.human_error_random ?? DEFAULTS.human_error_random,
+    delay_min_seconds: row.delay_min_seconds ?? DEFAULTS.delay_min_seconds,
+    delay_max_seconds: row.delay_max_seconds ?? DEFAULTS.delay_max_seconds,
+    delay_random_enabled: row.delay_random_enabled ?? DEFAULTS.delay_random_enabled,
   };
 }
 

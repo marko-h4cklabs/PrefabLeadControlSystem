@@ -474,10 +474,18 @@ async function processManyChatPayload(payload, overrideCompany) {
 
         // Smart delay: wait before replying, reset if user sends another message
         const delaySeconds = Number(behavior.response_delay_seconds) || 0;
-        if (delaySeconds > 0) {
+        const delayRandomEnabled = !!behavior.delay_random_enabled;
+        const delayMin = Number(behavior.delay_min_seconds) || 0;
+        const delayMax = Number(behavior.delay_max_seconds) || 0;
+        const hasDelay = delayRandomEnabled ? (delayMax > 0) : (delaySeconds > 0);
+        if (hasDelay) {
           const messageDelayService = require('../../services/messageDelayService');
-          console.log('[manychat/webhook] Smart delay:', delaySeconds, 'sec for lead:', lead.id);
-          const shouldProceed = await messageDelayService.waitOrReset(lead.id, delaySeconds);
+          console.log('[manychat/webhook] Smart delay:', delayRandomEnabled ? `random ${delayMin}-${delayMax}s` : `${delaySeconds}s`, 'for lead:', lead.id);
+          const shouldProceed = await messageDelayService.waitOrReset(lead.id, delaySeconds, {
+            minSeconds: delayMin,
+            maxSeconds: delayMax,
+            randomEnabled: delayRandomEnabled,
+          });
           if (!shouldProceed) {
             console.log('[manychat/webhook] Smart delay: superseded by newer message, skipping reply for lead:', lead.id);
             return;
