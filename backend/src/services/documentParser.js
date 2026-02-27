@@ -1,8 +1,6 @@
-const mammoth = require('mammoth');
-const XLSX = require('xlsx');
-
 /**
  * Parse a .docx or .xlsx file buffer and extract its text content.
+ * Dependencies are lazy-loaded so the server starts even if they aren't installed.
  * @param {Buffer} buffer - File buffer from multer memoryStorage
  * @param {string} mimetype - MIME type of the uploaded file
  * @param {string} originalname - Original filename
@@ -12,6 +10,7 @@ async function parseDocument(buffer, mimetype, originalname) {
   const ext = (originalname || '').split('.').pop()?.toLowerCase();
 
   if (mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || ext === 'docx') {
+    const mammoth = require('mammoth');
     const result = await mammoth.extractRawText({ buffer });
     return (result.value || '').trim();
   }
@@ -22,6 +21,7 @@ async function parseDocument(buffer, mimetype, originalname) {
     ext === 'xlsx' ||
     ext === 'xls'
   ) {
+    const XLSX = require('xlsx');
     const workbook = XLSX.read(buffer, { type: 'buffer' });
     const sheets = [];
     for (const name of workbook.SheetNames) {

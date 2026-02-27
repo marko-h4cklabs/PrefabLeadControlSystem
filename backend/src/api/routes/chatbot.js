@@ -48,7 +48,6 @@ const {
   quotePresetsBodySchema,
 } = require('../validators/chatbotSchemas');
 const { errorJson } = require('../middleware/errors');
-const { parseDocument } = require('../../services/documentParser');
 const { pool } = require('../../../db');
 const multer = require('multer');
 const path = require('path');
@@ -1561,6 +1560,7 @@ Return ONLY valid JSON in this exact format:
  */
 router.post('/learn-style/upload', docUpload.single('document'), async (req, res) => {
   try {
+    const { parseDocument } = require('../../services/documentParser');
     let documentText = '';
     if (req.file) {
       const ALLOWED_MIMES = [
