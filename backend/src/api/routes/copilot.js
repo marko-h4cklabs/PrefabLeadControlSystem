@@ -30,7 +30,6 @@ router.get('/active-dms', async (req, res) => {
          l.score,
          l.channel,
          l.pipeline_stage,
-         l.profile_pic,
          c.id AS conversation_id,
          c.last_message_at,
          c.status AS conversation_status,
@@ -53,7 +52,7 @@ router.get('/active-dms', async (req, res) => {
       score: r.score ?? 0,
       channel: r.channel || 'instagram',
       pipeline_stage: r.pipeline_stage || 'new',
-      profile_pic: r.profile_pic || null,
+      profile_pic: null,
       conversation_id: r.conversation_id,
       last_message_at: r.last_message_at,
       last_message_preview: r.last_message_preview
@@ -123,10 +122,10 @@ router.get('/stats', async (req, res) => {
       [companyId]
     );
 
-    // Leads qualified today
+    // Leads qualified today (score >= 70 as proxy for qualified)
     const qualifiedResult = await pool.query(
       `SELECT COUNT(*)::int AS count FROM leads
-       WHERE company_id = $1 AND qualification_status = 'qualified' AND updated_at >= $2`,
+       WHERE company_id = $1 AND score >= 70 AND updated_at >= $2`,
       [companyId, todayStart.toISOString()]
     );
 
