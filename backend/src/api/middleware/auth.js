@@ -31,6 +31,9 @@ async function authMiddleware(req, res, next) {
       companyId: user.company_id,
       role: user.role,
       email: user.email,
+      full_name: user.full_name || '',
+      setter_status: user.setter_status || 'offline',
+      account_type: user.account_type || 'owner',
       is_admin: Boolean(user.is_admin),
     };
     next();
@@ -46,7 +49,12 @@ async function authMiddleware(req, res, next) {
 }
 
 function requireRole(...allowedRoles) {
-  const roleMap = { owner: ['owner', 'admin'], admin: ['admin'], member: ['admin', 'sales'] };
+  const roleMap = {
+    owner: ['owner'],
+    admin: ['owner', 'admin'],
+    setter: ['owner', 'admin', 'setter'],
+    member: ['owner', 'admin', 'sales', 'member', 'setter'],
+  };
   return (req, res, next) => {
     if (!req.user) {
       return errorResponse(res, 401, 'Authentication required', 'UNAUTHORIZED');

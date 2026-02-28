@@ -125,13 +125,27 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   // If no behavior passed, load copilot-specific behavior
   const effectiveBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
 
+  // Compute missing fields for field-aware suggestions
+  const parsedFields = conv?.parsed_fields ?? {};
+  const collectedKeys = new Set(Object.keys(parsedFields).filter((k) => !k.startsWith('__') && parsedFields[k] != null && parsedFields[k] !== ''));
+  const missingFields = orderedQuoteFields
+    .filter((f) => f.label && !collectedKeys.has(f.label))
+    .map((f) => f.label);
+
+  let fieldAwarenessPrompt = '';
+  if (missingFields.length > 0) {
+    fieldAwarenessPrompt = `\n\nIMPORTANT — Fields NOT yet collected from this lead: ${missingFields.join(', ')}.\nPrioritize naturally collecting these in your suggestions. Weave questions about these fields into the conversation flow without making it feel like a form.`;
+  } else if (orderedQuoteFields.length > 0) {
+    fieldAwarenessPrompt = `\n\nAll required data fields have been collected. Focus suggestions on advancing toward the goal (${effectiveBehavior?.conversation_goal || 'booking a call'}).`;
+  }
+
   const company = {
     name: companyRecord?.name || 'our company',
     business_description: companyInfo?.business_description ?? '',
     additional_notes: companyInfo?.additional_notes ?? '',
   };
   const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow);
-  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(effectiveBehavior);
+  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt;
   const userPrompt = buildUserPrompt(messages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);

@@ -102,15 +102,17 @@ async function registerCompanyAndUser(body) {
     const companyRes = await client.query(
       `INSERT INTO companies (
         name, contact_email, contact_phone, chatbot_style, scoring_config, channels_enabled,
-        subscription_status, subscription_plan, trial_ends_at, monthly_message_count, webhook_token
-      ) VALUES ($1, $2, NULL, '{}', '{}', '[]', 'trial', 'trial', NOW() + INTERVAL '14 days', 0, $3)
+        subscription_status, subscription_plan, trial_ends_at, monthly_message_count, webhook_token,
+        operating_mode, assignment_mode
+      ) VALUES ($1, $2, NULL, '{}', '{}', '[]', 'trial', 'trial', NOW() + INTERVAL '14 days', 0, $3,
+        'copilot', 'manual')
       RETURNING id, name, webhook_token`,
       [companyName, email, webhookToken]
     );
     company = companyRes.rows[0];
     const userRes = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, role, full_name)
-       VALUES ($1, $2, $3, 'admin', $4)
+      `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type)
+       VALUES ($1, $2, $3, 'owner', $4, 'owner')
        RETURNING id, email, role, full_name`,
       [company.id, email, passwordHash, fullName || null]
     );
@@ -571,9 +573,9 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
       const companyResult = await pool.query(
         `INSERT INTO companies (
            id, name, subscription_status, subscription_plan, trial_ends_at,
-           monthly_message_count, webhook_token, created_at
+           monthly_message_count, webhook_token, operating_mode, assignment_mode, created_at
          )
-         VALUES (gen_random_uuid(), $1, 'trial', 'trial', NOW() + INTERVAL '14 days', 0, $2, NOW())
+         VALUES (gen_random_uuid(), $1, 'trial', 'trial', NOW() + INTERVAL '14 days', 0, $2, 'copilot', 'manual', NOW())
          RETURNING id`,
         [companyName, webhookToken]
       );
@@ -582,9 +584,9 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
       const userResult = await pool.query(
         `INSERT INTO users (
            id, company_id, email, full_name, email_verified, google_id,
-           auth_provider, last_login_at, role, created_at
+           auth_provider, last_login_at, role, account_type, created_at
          )
-         VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), 'admin', NOW())
+         VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), 'owner', 'owner', NOW())
          RETURNING id`,
         [companyId, email, name, googleId]
       );
@@ -604,11 +606,14 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
       }
     }
 
-    const token = generateAccessToken({ id: userId, companyId, role: 'admin' });
+    // Fetch actual role from DB for returning users
+    const roleRow = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
+    const actualRole = roleRow.rows[0]?.role || 'owner';
+    const token = generateAccessToken({ id: userId, companyId, role: actualRole });
     const refreshToken = await generateRefreshToken(userId);
     setRefreshCookie(res, refreshToken);
 
-    const redirectPath = isNewUser ? '/onboarding' : '/dashboard';
+    const redirectPath = isNewUser ? '/onboarding' : '/copilot';
     return res.redirect(
       `${frontendUrl}/auth/callback?token=${token}&companyId=${companyId}&isNew=${isNewUser}&redirect=${redirectPath}`
     );
@@ -644,6 +649,9 @@ router.get('/me', authMiddleware, async (req, res) => {
       id: req.user.id,
       email: req.user.email,
       role: req.user.role,
+      full_name: req.user.full_name,
+      setter_status: req.user.setter_status,
+      account_type: req.user.account_type,
       companyId: req.user.companyId,
       company_name: company?.name ?? null,
       is_admin: Boolean(req.user.is_admin),
@@ -651,6 +659,152 @@ router.get('/me', authMiddleware, async (req, res) => {
       google_calendar_connected,
     });
   } catch (err) {
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+  }
+});
+
+// --- Invite validation (public, no auth) ---
+router.get('/invite/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+    if (!code || code.length > 8) {
+      return res.json({ valid: false });
+    }
+    const result = await pool.query(
+      `SELECT ti.id, ti.role, ti.expires_at, ti.max_uses, ti.used_count, ti.is_active,
+              c.name AS company_name
+       FROM team_invites ti
+       JOIN companies c ON c.id = ti.company_id
+       WHERE ti.code = $1 AND ti.is_active = true`,
+      [code.toUpperCase()]
+    );
+    const invite = result.rows[0];
+    if (!invite) {
+      return res.json({ valid: false });
+    }
+    if (new Date() > new Date(invite.expires_at)) {
+      return res.json({ valid: false, reason: 'expired' });
+    }
+    if (invite.max_uses !== null && invite.used_count >= invite.max_uses) {
+      return res.json({ valid: false, reason: 'max_uses_reached' });
+    }
+    res.json({
+      valid: true,
+      company_name: invite.company_name,
+      role: invite.role,
+      expires_at: invite.expires_at,
+    });
+  } catch (err) {
+    logger.error({ err }, '[auth/invite] Error validating invite');
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+  }
+});
+
+// --- Team member join (public, no auth) ---
+router.post('/join', authLimiter, async (req, res) => {
+  try {
+    const { code, email, password, full_name } = req.body || {};
+
+    if (!code || !email || !password || !full_name) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'code, email, password, and full_name are required' },
+      });
+    }
+    if (!EMAIL_REGEX.test(String(email).trim())) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Valid email is required' },
+      });
+    }
+    if (String(password).length < 8) {
+      return res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Password must be at least 8 characters' },
+      });
+    }
+
+    // Validate invite
+    const inviteResult = await pool.query(
+      `SELECT ti.*, c.name AS company_name
+       FROM team_invites ti
+       JOIN companies c ON c.id = ti.company_id
+       WHERE ti.code = $1 AND ti.is_active = true`,
+      [String(code).toUpperCase()]
+    );
+    const invite = inviteResult.rows[0];
+    if (!invite) {
+      return res.status(400).json({
+        error: { code: 'INVALID_INVITE', message: 'Invalid or expired invite code' },
+      });
+    }
+    if (new Date() > new Date(invite.expires_at)) {
+      return res.status(400).json({
+        error: { code: 'INVITE_EXPIRED', message: 'This invite has expired' },
+      });
+    }
+    if (invite.max_uses !== null && invite.used_count >= invite.max_uses) {
+      return res.status(400).json({
+        error: { code: 'INVITE_EXHAUSTED', message: 'This invite has reached its maximum uses' },
+      });
+    }
+
+    // Check if email already exists
+    const existing = await userRepository.findByEmailOnly(String(email).trim().toLowerCase());
+    if (existing) {
+      return res.status(409).json({
+        error: { code: 'CONFLICT', message: 'Email already in use' },
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(String(password), 10);
+    const client = await pool.connect();
+    let user;
+    try {
+      await client.query('BEGIN');
+
+      // Create user with invite's company and role
+      const userRes = await client.query(
+        `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, setter_status)
+         VALUES ($1, $2, $3, $4, $5, 'team_member', 'offline')
+         RETURNING id, email, role, full_name, company_id`,
+        [invite.company_id, String(email).trim().toLowerCase(), passwordHash, invite.role, String(full_name).trim()]
+      );
+      user = userRes.rows[0];
+
+      // Increment invite used_count
+      await client.query(
+        'UPDATE team_invites SET used_count = used_count + 1 WHERE id = $1',
+        [invite.id]
+      );
+
+      // Add to team_members
+      await client.query(
+        `INSERT INTO team_members (company_id, user_id, role, is_active)
+         VALUES ($1, $2, $3, true)
+         ON CONFLICT DO NOTHING`,
+        [invite.company_id, user.id, invite.role]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw txErr;
+    } finally {
+      client.release();
+    }
+
+    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, role: user.role, full_name: user.full_name },
+      company: { id: invite.company_id, name: invite.company_name },
+    });
+  } catch (err) {
+    logger.error({ err }, '[auth/join] Error joining team');
+    if (err.code === '23505') {
+      return res.status(409).json({ error: { code: 'CONFLICT', message: 'Email already in use' } });
+    }
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
   }
 });

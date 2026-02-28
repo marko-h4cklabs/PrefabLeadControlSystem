@@ -431,6 +431,14 @@ async function processManyChatPayload(payload, overrideCompany) {
         const replySuggestionsService = require('../../../services/replySuggestionsService');
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
         await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
+
+        // Auto-assign to setter if not already assigned
+        try {
+          const { autoAssign } = require('../../../services/assignmentService');
+          await autoAssign(companyId, lead.id);
+        } catch (assignErr) {
+          logger.warn({ err: assignErr.message }, '[manychat/webhook] Auto-assign failed');
+        }
       } else {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
 

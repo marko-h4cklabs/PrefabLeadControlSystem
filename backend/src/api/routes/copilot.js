@@ -20,99 +20,120 @@ const { sendSuggestion } = require('../../../services/replySuggestionsService');
 router.get('/active-dms', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const { sort = 'recent', limit = 50, filter = 'all' } = req.query;
+    const { sort = 'recent', limit = 50, filter = 'all', dm_status_filter } = req.query;
+    const userRole = req.user.role;
 
     let orderBy = 'c.last_updated DESC NULLS LAST';
     if (sort === 'score') orderBy = 'l.score DESC NULLS LAST, c.last_updated DESC NULLS LAST';
-    if (sort === 'waiting') orderBy = 'c.last_updated ASC NULLS LAST';
+    if (sort === 'waiting') orderBy = `CASE WHEN c.messages->-1->>'role' = 'user' THEN 0 ELSE 1 END ASC, c.last_updated ASC NULLS LAST`;
+    if (sort === 'urgency') orderBy = `CASE WHEN c.messages->-1->>'role' = 'user' THEN EXTRACT(EPOCH FROM NOW() - c.last_updated) ELSE 0 END DESC, c.last_updated ASC`;
 
     const limitVal = Math.min(Number(limit) || 50, 100);
-    let result;
 
-    try {
-      // Try with assigned_to column (requires migration 070)
-      let filterClause = '';
-      const params = [companyId, limitVal];
+    let filterClause = '';
+    const params = [companyId, limitVal];
+    let paramIdx = 3;
+
+    // Setter scoping: setters can only see Mine + Unassigned
+    if (userRole === 'setter') {
       if (filter === 'mine') {
-        filterClause = ' AND l.assigned_to = $3';
+        filterClause += ` AND l.assigned_to = $${paramIdx}`;
         params.push(req.user.id);
-      } else if (filter === 'unassigned') {
-        filterClause = ' AND l.assigned_to IS NULL';
-      }
-
-      result = await pool.query(
-        `SELECT
-           l.id AS lead_id,
-           l.name AS lead_name,
-           l.external_id,
-           l.score,
-           l.channel,
-           l.pipeline_stage,
-           l.assigned_to,
-           u.full_name AS assigned_to_name,
-           c.id AS conversation_id,
-           c.last_updated,
-           c.messages->-1->>'content' AS last_message_preview,
-           c.messages->-1->>'role' AS last_message_role,
-           (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
-         FROM leads l
-         JOIN conversations c ON c.lead_id = l.id
-         LEFT JOIN users u ON u.id = l.assigned_to
-         WHERE l.company_id = $1
-           ${filterClause}
-         ORDER BY ${orderBy}
-         LIMIT $2`,
-        params
-      );
-    } catch (colErr) {
-      if (colErr.message && colErr.message.includes('assigned_to')) {
-        // Fallback: assigned_to column doesn't exist yet
-        result = await pool.query(
-          `SELECT
-             l.id AS lead_id,
-             l.name AS lead_name,
-             l.external_id,
-             l.score,
-             l.channel,
-             l.pipeline_stage,
-             NULL AS assigned_to,
-             NULL AS assigned_to_name,
-             c.id AS conversation_id,
-             c.last_updated,
-             c.messages->-1->>'content' AS last_message_preview,
-             c.messages->-1->>'role' AS last_message_role,
-             (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
-           FROM leads l
-           JOIN conversations c ON c.lead_id = l.id
-           WHERE l.company_id = $1
-           ORDER BY ${orderBy}
-           LIMIT $2`,
-          [companyId, limitVal]
-        );
+        paramIdx++;
       } else {
-        throw colErr;
+        // Default for setter: mine + unassigned
+        filterClause += ` AND (l.assigned_to = $${paramIdx} OR l.assigned_to IS NULL)`;
+        params.push(req.user.id);
+        paramIdx++;
+      }
+    } else {
+      // Owner/admin: full filter options
+      if (filter === 'mine') {
+        filterClause += ` AND l.assigned_to = $${paramIdx}`;
+        params.push(req.user.id);
+        paramIdx++;
+      } else if (filter === 'unassigned') {
+        filterClause += ' AND l.assigned_to IS NULL';
       }
     }
 
-    const dms = result.rows.map((r) => ({
-      lead_id: r.lead_id,
-      lead_name: r.lead_name || 'Unknown',
-      external_id: r.external_id,
-      score: r.score ?? 0,
-      channel: r.channel || 'instagram',
-      pipeline_stage: r.pipeline_stage || 'new',
-      assigned_to: r.assigned_to || null,
-      assigned_to_name: r.assigned_to_name || null,
-      profile_pic: null,
-      conversation_id: r.conversation_id,
-      last_message_at: r.last_updated,
-      last_message_preview: r.last_message_preview
-        ? r.last_message_preview.substring(0, 120)
-        : '',
-      last_message_role: r.last_message_role || 'user',
-      needs_response: r.last_message_role === 'user',
-      has_suggestions: (r.pending_suggestions || 0) > 0,
-    }));
+    // DM status filter
+    if (dm_status_filter && ['active', 'booked', 'lost', 'done'].includes(dm_status_filter)) {
+      filterClause += ` AND COALESCE(l.dm_status, 'active') = $${paramIdx}`;
+      params.push(dm_status_filter);
+      paramIdx++;
+    } else {
+      // By default, only show active DMs (hide done/booked/lost)
+      filterClause += ` AND COALESCE(l.dm_status, 'active') = 'active'`;
+    }
+
+    const result = await pool.query(
+      `SELECT
+         l.id AS lead_id,
+         l.name AS lead_name,
+         l.external_id,
+         l.score,
+         l.channel,
+         l.pipeline_stage,
+         l.assigned_to,
+         COALESCE(l.dm_status, 'active') AS dm_status,
+         l.dm_status_updated_at,
+         u.full_name AS assigned_to_name,
+         u.setter_status AS assigned_setter_status,
+         c.id AS conversation_id,
+         c.last_updated,
+         c.messages->-1->>'content' AS last_message_preview,
+         c.messages->-1->>'role' AS last_message_role,
+         CASE
+           WHEN c.messages->-1->>'role' = 'user'
+           THEN EXTRACT(EPOCH FROM NOW() - c.last_updated)::int
+           ELSE 0
+         END AS waiting_seconds,
+         (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
+       FROM leads l
+       JOIN conversations c ON c.lead_id = l.id
+       LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.company_id = $1
+         ${filterClause}
+       ORDER BY ${orderBy}
+       LIMIT $2`,
+      params
+    );
+
+    const dms = result.rows.map((r) => {
+      const waitingSec = r.waiting_seconds || 0;
+      let urgency = 'none';
+      if (r.last_message_role === 'user') {
+        if (waitingSec > 900) urgency = 'critical';       // >15min
+        else if (waitingSec > 300) urgency = 'warning';    // >5min
+        else urgency = 'ok';                                // <5min
+      }
+
+      return {
+        lead_id: r.lead_id,
+        lead_name: r.lead_name || 'Unknown',
+        external_id: r.external_id,
+        score: r.score ?? 0,
+        channel: r.channel || 'instagram',
+        pipeline_stage: r.pipeline_stage || 'new',
+        assigned_to: r.assigned_to || null,
+        assigned_to_name: r.assigned_to_name || null,
+        assigned_setter_status: r.assigned_setter_status || null,
+        dm_status: r.dm_status || 'active',
+        dm_status_updated_at: r.dm_status_updated_at || null,
+        profile_pic: null,
+        conversation_id: r.conversation_id,
+        last_message_at: r.last_updated,
+        last_message_preview: r.last_message_preview
+          ? r.last_message_preview.substring(0, 120)
+          : '',
+        last_message_role: r.last_message_role || 'user',
+        needs_response: r.last_message_role === 'user',
+        has_suggestions: (r.pending_suggestions || 0) > 0,
+        waiting_seconds: waitingSec,
+        urgency,
+      };
+    });
 
     res.json({ dms });
   } catch (err) {
@@ -830,9 +851,14 @@ router.get('/team', async (req, res) => {
            u.full_name,
            u.email,
            u.role,
+           u.setter_status,
+           u.account_type,
+           u.max_concurrent_dms,
+           u.created_at,
            COALESCE(sm.dms_handled, 0)::int AS dms_handled,
            COALESCE(sm.avg_response_seconds, 0)::int AS avg_response_seconds,
-           COALESCE(sm.leads_qualified, 0)::int AS leads_qualified
+           COALESCE(sm.leads_qualified, 0)::int AS leads_qualified,
+           (SELECT COUNT(*)::int FROM leads lx WHERE lx.assigned_to = u.id AND lx.company_id = $1 AND COALESCE(lx.dm_status, 'active') = 'active') AS active_dms
          FROM users u
          LEFT JOIN setter_metrics sm ON sm.user_id = u.id AND sm.date = CURRENT_DATE
          WHERE u.company_id = $1
@@ -840,10 +866,9 @@ router.get('/team', async (req, res) => {
         [companyId]
       );
     } catch (tableErr) {
-      // setter_metrics table may not exist yet — return users without metrics
       result = await pool.query(
-        `SELECT id, full_name, email, role,
-           0 AS dms_handled, 0 AS avg_response_seconds, 0 AS leads_qualified
+        `SELECT id, full_name, email, role, setter_status, account_type, max_concurrent_dms, created_at,
+           0 AS dms_handled, 0 AS avg_response_seconds, 0 AS leads_qualified, 0 AS active_dms
          FROM users
          WHERE company_id = $1
          ORDER BY full_name ASC`,
@@ -912,6 +937,314 @@ router.get('/team/:userId/performance', async (req, res) => {
         avg_response_seconds: totals.days > 0 ? Math.round(totals.avg_response_seconds_sum / totals.days) : 0,
       },
     });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Team Invites
+// ---------------------------------------------------------------------------
+
+const crypto = require('crypto');
+
+/**
+ * POST /api/copilot/team/invite
+ * Create an invite code for a team member.
+ */
+router.post('/team/invite', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { role = 'setter', max_uses = null, expires_days = 7 } = req.body || {};
+
+    if (!['setter', 'admin'].includes(role)) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'role must be setter or admin');
+    }
+
+    const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const expiresAt = new Date(Date.now() + (Number(expires_days) || 7) * 24 * 60 * 60 * 1000);
+
+    const result = await pool.query(
+      `INSERT INTO team_invites (company_id, code, role, created_by, expires_at, max_uses)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [companyId, code, role, req.user.id, expiresAt, max_uses]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/team/invites
+ * List active invites for this company.
+ */
+router.get('/team/invites', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      `SELECT ti.*, u.full_name AS created_by_name
+       FROM team_invites ti
+       LEFT JOIN users u ON u.id = ti.created_by
+       WHERE ti.company_id = $1
+       ORDER BY ti.created_at DESC`,
+      [companyId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * DELETE /api/copilot/team/invites/:id
+ * Revoke (deactivate) an invite.
+ */
+router.delete('/team/invites/:id', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { id } = req.params;
+    const result = await pool.query(
+      `UPDATE team_invites SET is_active = false
+       WHERE id = $1 AND company_id = $2
+       RETURNING id`,
+      [id, companyId]
+    );
+    if (result.rowCount === 0) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Invite not found');
+    }
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * DELETE /api/copilot/team/:userId
+ * Remove a team member. Owner-only.
+ */
+router.delete('/team/:userId', requireRole('owner'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { userId } = req.params;
+
+    if (userId === req.user.id) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'Cannot remove yourself');
+    }
+
+    const result = await pool.query(
+      `DELETE FROM users WHERE id = $1 AND company_id = $2 AND account_type = 'team_member'
+       RETURNING id`,
+      [userId, companyId]
+    );
+    if (result.rowCount === 0) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Team member not found');
+    }
+
+    // Unassign their leads
+    await pool.query(
+      `UPDATE leads SET assigned_to = NULL, assigned_at = NULL WHERE assigned_to = $1 AND company_id = $2`,
+      [userId, companyId]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Setter Availability
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/copilot/me/status
+ * Get own setter status.
+ */
+router.get('/me/status', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT setter_status, setter_status_updated_at, max_concurrent_dms FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+    const row = result.rows[0];
+    res.json({
+      setter_status: row?.setter_status || 'offline',
+      setter_status_updated_at: row?.setter_status_updated_at || null,
+      max_concurrent_dms: row?.max_concurrent_dms || 20,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/me/status
+ * Set own status (active/away/offline).
+ */
+router.put('/me/status', async (req, res) => {
+  try {
+    const { setter_status } = req.body || {};
+    if (!['active', 'away', 'offline'].includes(setter_status)) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'setter_status must be active, away, or offline');
+    }
+
+    await pool.query(
+      `UPDATE users SET setter_status = $1, setter_status_updated_at = NOW() WHERE id = $2`,
+      [setter_status, req.user.id]
+    );
+
+    res.json({ setter_status });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DM Disposition
+// ---------------------------------------------------------------------------
+
+/**
+ * PUT /api/copilot/leads/:leadId/dm-status
+ * Set the DM disposition (active/booked/lost/done).
+ */
+router.put('/leads/:leadId/dm-status', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { leadId } = req.params;
+    const { dm_status } = req.body || {};
+
+    if (!['active', 'booked', 'lost', 'done'].includes(dm_status)) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'dm_status must be active, booked, lost, or done');
+    }
+
+    const result = await pool.query(
+      `UPDATE leads
+       SET dm_status = $1,
+           dm_status_updated_at = NOW(),
+           dm_status_updated_by = $2,
+           updated_at = NOW()
+       WHERE id = $3 AND company_id = $4
+       RETURNING id`,
+      [dm_status, req.user.id, leadId, companyId]
+    );
+
+    if (result.rowCount === 0) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    }
+
+    // If booked, increment setter_metrics.leads_qualified
+    if (dm_status === 'booked') {
+      try {
+        await pool.query(
+          `INSERT INTO setter_metrics (user_id, date, leads_qualified)
+           VALUES ($1, CURRENT_DATE, 1)
+           ON CONFLICT (user_id, date)
+           DO UPDATE SET leads_qualified = setter_metrics.leads_qualified + 1`,
+          [req.user.id]
+        );
+      } catch { /* setter_metrics may not exist yet */ }
+    }
+
+    res.json({ success: true, dm_status });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Assignment Configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/copilot/settings/assignment
+ * Get the company's assignment configuration.
+ */
+router.get('/settings/assignment', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const result = await pool.query(
+      `SELECT assignment_mode, default_max_concurrent_dms FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    const row = result.rows[0] || {};
+    res.json({
+      assignment_mode: row.assignment_mode || 'manual',
+      default_max_concurrent_dms: row.default_max_concurrent_dms || 20,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/assignment
+ * Update assignment configuration.
+ */
+router.put('/settings/assignment', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { assignment_mode, default_max_concurrent_dms } = req.body || {};
+
+    if (assignment_mode && !['manual', 'round_robin'].includes(assignment_mode)) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'assignment_mode must be manual or round_robin');
+    }
+
+    const updates = [];
+    const values = [];
+    let idx = 1;
+
+    if (assignment_mode) {
+      updates.push(`assignment_mode = $${idx}`);
+      values.push(assignment_mode);
+      idx++;
+    }
+    if (default_max_concurrent_dms !== undefined) {
+      updates.push(`default_max_concurrent_dms = $${idx}`);
+      values.push(Math.max(1, Math.min(100, Number(default_max_concurrent_dms) || 20)));
+      idx++;
+    }
+
+    if (updates.length === 0) {
+      return errorJson(res, 400, 'INVALID_INPUT', 'No fields to update');
+    }
+
+    values.push(companyId);
+    await pool.query(
+      `UPDATE companies SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx}`,
+      values
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/team/:userId/capacity
+ * Set per-setter max concurrent DMs.
+ */
+router.put('/team/:userId/capacity', requireRole('admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { userId } = req.params;
+    const { max_concurrent_dms } = req.body || {};
+
+    const cap = Math.max(1, Math.min(100, Number(max_concurrent_dms) || 20));
+
+    const result = await pool.query(
+      `UPDATE users SET max_concurrent_dms = $1 WHERE id = $2 AND company_id = $3 RETURNING id`,
+      [cap, userId, companyId]
+    );
+
+    if (result.rowCount === 0) {
+      return errorJson(res, 404, 'NOT_FOUND', 'User not found');
+    }
+
+    res.json({ success: true, max_concurrent_dms: cap });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -1081,6 +1414,135 @@ router.delete('/settings/calendly', requireRole('owner', 'admin'), async (req, r
       );
     } catch { /* column may not exist, that's fine */ }
     res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ===========================================================================
+// NOTIFICATION CHANNELS
+// ===========================================================================
+
+/**
+ * GET /api/copilot/me/notification-channels
+ * Returns the current user's notification channel configuration.
+ */
+router.get('/me/notification-channels', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { rows } = await pool.query(
+      `SELECT id, channel_type, channel_config, enabled, created_at
+       FROM notification_channels
+       WHERE user_id = $1
+       ORDER BY channel_type`,
+      [userId]
+    );
+    res.json({ channels: rows });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/me/notification-channels/:channelType
+ * Upsert a notification channel for the current user.
+ * Body: { enabled, channel_config }
+ */
+router.put('/me/notification-channels/:channelType', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const channelType = req.params.channelType;
+    const validTypes = ['slack', 'telegram', 'browser'];
+    if (!validTypes.includes(channelType)) {
+      return errorJson(res, 400, 'INVALID_CHANNEL', `Invalid channel type. Must be one of: ${validTypes.join(', ')}`);
+    }
+
+    const { enabled = true, channel_config = {} } = req.body;
+
+    const { rows } = await pool.query(
+      `INSERT INTO notification_channels (user_id, channel_type, channel_config, enabled)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, channel_type) DO UPDATE SET
+         channel_config = EXCLUDED.channel_config,
+         enabled = EXCLUDED.enabled
+       RETURNING id, channel_type, channel_config, enabled`,
+      [userId, channelType, JSON.stringify(channel_config), enabled]
+    );
+
+    res.json(rows[0]);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * DELETE /api/copilot/me/notification-channels/:channelType
+ * Remove a notification channel for the current user.
+ */
+router.delete('/me/notification-channels/:channelType', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const channelType = req.params.channelType;
+    await pool.query(
+      `DELETE FROM notification_channels WHERE user_id = $1 AND channel_type = $2`,
+      [userId, channelType]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/copilot/me/notification-channels/test
+ * Send a test notification through a specific channel.
+ * Body: { channel_type, channel_config }
+ */
+router.post('/me/notification-channels/test', async (req, res) => {
+  try {
+    const { channel_type, channel_config = {} } = req.body;
+    if (!channel_type) {
+      return errorJson(res, 400, 'MISSING_CHANNEL', 'channel_type is required');
+    }
+
+    const { dispatch } = require('../../../services/notificationDispatcher');
+
+    // Temporarily create/update the channel, send test, then rely on actual save
+    const title = 'Test Notification';
+    const message = `This is a test notification from your copilot app. Channel: ${channel_type}`;
+
+    if (channel_type === 'slack') {
+      const webhookUrl = channel_config.webhook_url;
+      if (!webhookUrl) return errorJson(res, 400, 'MISSING_CONFIG', 'webhook_url is required for Slack');
+
+      const payload = {
+        text: `*${title}*\n${message}`,
+        blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*${title}*\n${message}` } }],
+      };
+      const slackRes = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!slackRes.ok) return errorJson(res, 400, 'SLACK_ERROR', `Slack returned ${slackRes.status}`);
+    } else if (channel_type === 'telegram') {
+      const { bot_token, chat_id } = channel_config;
+      if (!bot_token || !chat_id) return errorJson(res, 400, 'MISSING_CONFIG', 'bot_token and chat_id are required for Telegram');
+
+      const tgRes = await fetch(`https://api.telegram.org/bot${bot_token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id, text: `${title}\n${message}`, parse_mode: 'HTML' }),
+      });
+      if (!tgRes.ok) {
+        const body = await tgRes.text().catch(() => '');
+        return errorJson(res, 400, 'TELEGRAM_ERROR', `Telegram returned ${tgRes.status}: ${body}`);
+      }
+    } else if (channel_type === 'browser') {
+      // Browser push is client-side; just acknowledge
+    }
+
+    res.json({ success: true, message: 'Test notification sent' });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
