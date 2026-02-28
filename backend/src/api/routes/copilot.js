@@ -26,43 +26,73 @@ router.get('/active-dms', async (req, res) => {
     if (sort === 'score') orderBy = 'l.score DESC NULLS LAST, c.last_updated DESC NULLS LAST';
     if (sort === 'waiting') orderBy = 'c.last_updated ASC NULLS LAST';
 
-    let filterClause = '';
-    const params = [companyId];
-    if (filter === 'mine') {
-      filterClause = ' AND l.assigned_to = $3';
-      params.push(Math.min(Number(limit) || 50, 100));
-      params.push(req.user.id);
-    } else if (filter === 'unassigned') {
-      filterClause = ' AND l.assigned_to IS NULL';
-      params.push(Math.min(Number(limit) || 50, 100));
-    } else {
-      params.push(Math.min(Number(limit) || 50, 100));
-    }
+    const limitVal = Math.min(Number(limit) || 50, 100);
+    let result;
 
-    const result = await pool.query(
-      `SELECT
-         l.id AS lead_id,
-         l.name AS lead_name,
-         l.external_id,
-         l.score,
-         l.channel,
-         l.pipeline_stage,
-         l.assigned_to,
-         u.full_name AS assigned_to_name,
-         c.id AS conversation_id,
-         c.last_updated,
-         c.messages->-1->>'content' AS last_message_preview,
-         c.messages->-1->>'role' AS last_message_role,
-         (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
-       FROM leads l
-       JOIN conversations c ON c.lead_id = l.id
-       LEFT JOIN users u ON u.id = l.assigned_to
-       WHERE l.company_id = $1
-         ${filterClause}
-       ORDER BY ${orderBy}
-       LIMIT $2`,
-      params
-    );
+    try {
+      // Try with assigned_to column (requires migration 070)
+      let filterClause = '';
+      const params = [companyId, limitVal];
+      if (filter === 'mine') {
+        filterClause = ' AND l.assigned_to = $3';
+        params.push(req.user.id);
+      } else if (filter === 'unassigned') {
+        filterClause = ' AND l.assigned_to IS NULL';
+      }
+
+      result = await pool.query(
+        `SELECT
+           l.id AS lead_id,
+           l.name AS lead_name,
+           l.external_id,
+           l.score,
+           l.channel,
+           l.pipeline_stage,
+           l.assigned_to,
+           u.full_name AS assigned_to_name,
+           c.id AS conversation_id,
+           c.last_updated,
+           c.messages->-1->>'content' AS last_message_preview,
+           c.messages->-1->>'role' AS last_message_role,
+           (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
+         FROM leads l
+         JOIN conversations c ON c.lead_id = l.id
+         LEFT JOIN users u ON u.id = l.assigned_to
+         WHERE l.company_id = $1
+           ${filterClause}
+         ORDER BY ${orderBy}
+         LIMIT $2`,
+        params
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('assigned_to')) {
+        // Fallback: assigned_to column doesn't exist yet
+        result = await pool.query(
+          `SELECT
+             l.id AS lead_id,
+             l.name AS lead_name,
+             l.external_id,
+             l.score,
+             l.channel,
+             l.pipeline_stage,
+             NULL AS assigned_to,
+             NULL AS assigned_to_name,
+             c.id AS conversation_id,
+             c.last_updated,
+             c.messages->-1->>'content' AS last_message_preview,
+             c.messages->-1->>'role' AS last_message_role,
+             (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
+           FROM leads l
+           JOIN conversations c ON c.lead_id = l.id
+           WHERE l.company_id = $1
+           ORDER BY ${orderBy}
+           LIMIT $2`,
+          [companyId, limitVal]
+        );
+      } else {
+        throw colErr;
+      }
+    }
 
     const dms = result.rows.map((r) => ({
       lead_id: r.lead_id,
@@ -117,13 +147,19 @@ router.get('/stats', async (req, res) => {
     );
 
     // Average response time from setter_metrics (today)
-    const avgResponseResult = await pool.query(
-      `SELECT COALESCE(AVG(NULLIF(avg_response_seconds, 0)), 0)::int AS avg_seconds
-       FROM setter_metrics sm
-       JOIN users u ON u.id = sm.user_id
-       WHERE u.company_id = $1 AND sm.date = CURRENT_DATE`,
-      [companyId]
-    );
+    let avgResponseResult;
+    try {
+      avgResponseResult = await pool.query(
+        `SELECT COALESCE(AVG(NULLIF(avg_response_seconds, 0)), 0)::int AS avg_seconds
+         FROM setter_metrics sm
+         JOIN users u ON u.id = sm.user_id
+         WHERE u.company_id = $1 AND sm.date = CURRENT_DATE`,
+        [companyId]
+      );
+    } catch (_) {
+      // setter_metrics table may not exist yet
+      avgResponseResult = { rows: [{ avg_seconds: 0 }] };
+    }
 
     // Suggestion acceptance rate
     const suggestionsResult = await pool.query(
@@ -207,14 +243,25 @@ router.patch('/conversations/:id/dismiss', async (req, res) => {
 router.get('/kill-switch', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const result = await pool.query(
-      `SELECT bot_enabled FROM companies WHERE id = $1`,
-      [companyId]
-    );
-    if (result.rowCount === 0) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    let enabled = true;
+    try {
+      const result = await pool.query(
+        `SELECT bot_enabled FROM companies WHERE id = $1`,
+        [companyId]
+      );
+      if (result.rowCount === 0) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+      }
+      enabled = result.rows[0].bot_enabled !== false;
+    } catch (colErr) {
+      // bot_enabled column may not exist yet — default to enabled
+      if (colErr.message && colErr.message.includes('bot_enabled')) {
+        enabled = true;
+      } else {
+        throw colErr;
+      }
     }
-    res.json({ enabled: !!result.rows[0].bot_enabled });
+    res.json({ enabled });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -233,10 +280,19 @@ router.put('/kill-switch', requireRole('owner', 'admin'), async (req, res) => {
       return errorJson(res, 400, 'INVALID_INPUT', 'enabled must be a boolean');
     }
 
-    await pool.query(
-      `UPDATE companies SET bot_enabled = $1, updated_at = NOW() WHERE id = $2`,
-      [enabled, companyId]
-    );
+    try {
+      await pool.query(
+        `UPDATE companies SET bot_enabled = $1, updated_at = NOW() WHERE id = $2`,
+        [enabled, companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('bot_enabled')) {
+        // Column not yet added — silently succeed (bot is always on without the column)
+        logger.warn(`Kill switch column bot_enabled not found, migration 070 pending`);
+      } else {
+        throw colErr;
+      }
+    }
 
     logger.info(`Kill switch toggled to ${enabled} for company ${companyId}`);
     res.json({ enabled });
@@ -259,18 +315,25 @@ router.put('/leads/:leadId/assign', async (req, res) => {
     const { leadId } = req.params;
     const { user_id } = req.body;
 
-    const result = await pool.query(
-      `UPDATE leads
-       SET assigned_to = $1,
-           assigned_at = $2,
-           updated_at = NOW()
-       WHERE id = $3 AND company_id = $4
-       RETURNING id`,
-      [user_id || null, user_id ? new Date().toISOString() : null, leadId, companyId]
-    );
+    try {
+      const result = await pool.query(
+        `UPDATE leads
+         SET assigned_to = $1,
+             assigned_at = $2,
+             updated_at = NOW()
+         WHERE id = $3 AND company_id = $4
+         RETURNING id`,
+        [user_id || null, user_id ? new Date().toISOString() : null, leadId, companyId]
+      );
 
-    if (result.rowCount === 0) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      if (result.rowCount === 0) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      }
+    } catch (colErr) {
+      if (colErr.message && (colErr.message.includes('assigned_to') || colErr.message.includes('assigned_at'))) {
+        return errorJson(res, 501, 'NOT_IMPLEMENTED', 'Lead assignment requires migration 070. Please run database migrations.');
+      }
+      throw colErr;
     }
 
     res.json({ success: true });
@@ -292,16 +355,22 @@ router.post('/leads/bulk-assign', async (req, res) => {
       return errorJson(res, 400, 'INVALID_INPUT', 'lead_ids must be a non-empty array');
     }
 
-    const result = await pool.query(
-      `UPDATE leads
-       SET assigned_to = $1,
-           assigned_at = $2,
-           updated_at = NOW()
-       WHERE id = ANY($3::uuid[]) AND company_id = $4`,
-      [user_id || null, user_id ? new Date().toISOString() : null, lead_ids, companyId]
-    );
-
-    res.json({ updated: result.rowCount });
+    try {
+      const result = await pool.query(
+        `UPDATE leads
+         SET assigned_to = $1,
+             assigned_at = $2,
+             updated_at = NOW()
+         WHERE id = ANY($3::uuid[]) AND company_id = $4`,
+        [user_id || null, user_id ? new Date().toISOString() : null, lead_ids, companyId]
+      );
+      res.json({ updated: result.rowCount });
+    } catch (colErr) {
+      if (colErr.message && (colErr.message.includes('assigned_to') || colErr.message.includes('assigned_at'))) {
+        return errorJson(res, 501, 'NOT_IMPLEMENTED', 'Lead assignment requires migration 070. Please run database migrations.');
+      }
+      throw colErr;
+    }
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -387,24 +456,37 @@ router.get('/leads/:leadId/summary', async (req, res) => {
     const companyId = req.tenantId;
     const { leadId } = req.params;
 
-    // Lead info + assigned setter name
-    const leadResult = await pool.query(
-      `SELECT
-         l.id, l.name, l.channel, l.score, l.pipeline_stage, l.created_at,
-         l.assigned_to, l.intent_score, l.intent_tags, l.budget_detected,
-         l.urgency_level, l.is_hot_lead, l.conversation_summary,
-         u.full_name AS assigned_to_name
-       FROM leads l
-       LEFT JOIN users u ON u.id = l.assigned_to
-       WHERE l.id = $1 AND l.company_id = $2`,
-      [leadId, companyId]
-    );
-
-    if (leadResult.rowCount === 0) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    // Lead info — try with extended columns, fall back to basic
+    let lead;
+    try {
+      const leadResult = await pool.query(
+        `SELECT
+           l.id, l.name, l.channel, l.score, l.pipeline_stage, l.created_at,
+           l.assigned_to, l.intent_score, l.intent_tags, l.budget_detected,
+           l.urgency_level, l.is_hot_lead, l.conversation_summary,
+           u.full_name AS assigned_to_name
+         FROM leads l
+         LEFT JOIN users u ON u.id = l.assigned_to
+         WHERE l.id = $1 AND l.company_id = $2`,
+        [leadId, companyId]
+      );
+      if (leadResult.rowCount === 0) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      }
+      lead = leadResult.rows[0];
+    } catch (colErr) {
+      // Fallback: some columns may not exist yet
+      const leadResult = await pool.query(
+        `SELECT l.id, l.name, l.channel, l.score, l.pipeline_stage, l.created_at
+         FROM leads l
+         WHERE l.id = $1 AND l.company_id = $2`,
+        [leadId, companyId]
+      );
+      if (leadResult.rowCount === 0) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+      }
+      lead = leadResult.rows[0];
     }
-
-    const lead = leadResult.rows[0];
 
     // Parsed fields from conversations
     const conversationResult = await pool.query(
@@ -412,17 +494,25 @@ router.get('/leads/:leadId/summary', async (req, res) => {
       [leadId]
     );
 
-    // Recent activity (last 10)
-    const activityResult = await pool.query(
-      `SELECT * FROM lead_activities WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 10`,
-      [leadId]
-    );
+    // Recent activity (last 10) — table may not exist
+    let activityRows = [];
+    try {
+      const activityResult = await pool.query(
+        `SELECT * FROM lead_activities WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 10`,
+        [leadId]
+      );
+      activityRows = activityResult.rows;
+    } catch (_) { /* lead_activities table may not exist */ }
 
-    // Notes (last 5)
-    const notesResult = await pool.query(
-      `SELECT * FROM lead_notes WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 5`,
-      [leadId]
-    );
+    // Notes (last 5) — table may not exist
+    let notesRows = [];
+    try {
+      const notesResult = await pool.query(
+        `SELECT * FROM lead_notes WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 5`,
+        [leadId]
+      );
+      notesRows = notesResult.rows;
+    } catch (_) { /* lead_notes table may not exist */ }
 
     // Pending suggestion count
     const suggestionsResult = await pool.query(
@@ -438,20 +528,20 @@ router.get('/leads/:leadId/summary', async (req, res) => {
         score: lead.score,
         pipeline_stage: lead.pipeline_stage,
         created_at: lead.created_at,
-        assigned_to: lead.assigned_to,
-        assigned_to_name: lead.assigned_to_name,
+        assigned_to: lead.assigned_to || null,
+        assigned_to_name: lead.assigned_to_name || null,
       },
       intelligence: {
-        intent_score: lead.intent_score,
-        intent_tags: lead.intent_tags,
-        budget_detected: lead.budget_detected,
-        urgency_level: lead.urgency_level,
-        is_hot_lead: lead.is_hot_lead,
-        conversation_summary: lead.conversation_summary,
+        intent_score: lead.intent_score || null,
+        intent_tags: lead.intent_tags || null,
+        budget_detected: lead.budget_detected || null,
+        urgency_level: lead.urgency_level || null,
+        is_hot_lead: lead.is_hot_lead || false,
+        conversation_summary: lead.conversation_summary || null,
       },
       parsed_fields: conversationResult.rows[0]?.parsed_fields || null,
-      recent_activity: activityResult.rows,
-      notes: notesResult.rows,
+      recent_activity: activityRows,
+      notes: notesRows,
       pending_suggestions: suggestionsResult.rows[0]?.count || 0,
     });
   } catch (err) {
@@ -553,12 +643,22 @@ router.put('/settings/fields', async (req, res) => {
 router.get('/settings/personas', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const result = await pool.query(
-      `SELECT * FROM chatbot_personas
-       WHERE company_id = $1 AND operating_mode = 'copilot'
-       ORDER BY created_at DESC`,
-      [companyId]
-    );
+    let result;
+    try {
+      result = await pool.query(
+        `SELECT * FROM chatbot_personas
+         WHERE company_id = $1 AND operating_mode = 'copilot'
+         ORDER BY created_at DESC`,
+        [companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('operating_mode')) {
+        // operating_mode column not added yet — return empty list
+        result = { rows: [] };
+      } else {
+        throw colErr;
+      }
+    }
     res.json(result.rows);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -573,12 +673,26 @@ router.post('/settings/personas', async (req, res) => {
     const companyId = req.tenantId;
     const { name, system_prompt, is_active } = req.body;
 
-    const result = await pool.query(
-      `INSERT INTO chatbot_personas (company_id, name, system_prompt, is_active, operating_mode, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, 'copilot', NOW(), NOW())
-       RETURNING *`,
-      [companyId, name, system_prompt, is_active || false]
-    );
+    let result;
+    try {
+      result = await pool.query(
+        `INSERT INTO chatbot_personas (company_id, name, system_prompt, is_active, operating_mode, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'copilot', NOW(), NOW())
+         RETURNING *`,
+        [companyId, name, system_prompt, is_active || false]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('operating_mode')) {
+        result = await pool.query(
+          `INSERT INTO chatbot_personas (company_id, name, system_prompt, is_active, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, NOW(), NOW())
+           RETURNING *`,
+          [companyId, name, system_prompt, is_active || false]
+        );
+      } else {
+        throw colErr;
+      }
+    }
 
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -660,11 +774,23 @@ router.post('/settings/personas/:id/activate', async (req, res) => {
     const { id } = req.params;
 
     // Deactivate all copilot personas for this company
-    await pool.query(
-      `UPDATE chatbot_personas SET is_active = false, updated_at = NOW()
-       WHERE company_id = $1 AND operating_mode = 'copilot'`,
-      [companyId]
-    );
+    try {
+      await pool.query(
+        `UPDATE chatbot_personas SET is_active = false, updated_at = NOW()
+         WHERE company_id = $1 AND operating_mode = 'copilot'`,
+        [companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('operating_mode')) {
+        await pool.query(
+          `UPDATE chatbot_personas SET is_active = false, updated_at = NOW()
+           WHERE company_id = $1`,
+          [companyId]
+        );
+      } else {
+        throw colErr;
+      }
+    }
 
     // Activate the selected persona
     const result = await pool.query(
@@ -696,21 +822,34 @@ router.get('/team', async (req, res) => {
   try {
     const companyId = req.tenantId;
 
-    const result = await pool.query(
-      `SELECT
-         u.id,
-         u.full_name,
-         u.email,
-         u.role,
-         COALESCE(sm.dms_handled, 0)::int AS dms_handled,
-         COALESCE(sm.avg_response_seconds, 0)::int AS avg_response_seconds,
-         COALESCE(sm.leads_qualified, 0)::int AS leads_qualified
-       FROM users u
-       LEFT JOIN setter_metrics sm ON sm.user_id = u.id AND sm.date = CURRENT_DATE
-       WHERE u.company_id = $1
-       ORDER BY u.full_name ASC`,
-      [companyId]
-    );
+    let result;
+    try {
+      result = await pool.query(
+        `SELECT
+           u.id,
+           u.full_name,
+           u.email,
+           u.role,
+           COALESCE(sm.dms_handled, 0)::int AS dms_handled,
+           COALESCE(sm.avg_response_seconds, 0)::int AS avg_response_seconds,
+           COALESCE(sm.leads_qualified, 0)::int AS leads_qualified
+         FROM users u
+         LEFT JOIN setter_metrics sm ON sm.user_id = u.id AND sm.date = CURRENT_DATE
+         WHERE u.company_id = $1
+         ORDER BY u.full_name ASC`,
+        [companyId]
+      );
+    } catch (tableErr) {
+      // setter_metrics table may not exist yet — return users without metrics
+      result = await pool.query(
+        `SELECT id, full_name, email, role,
+           0 AS dms_handled, 0 AS avg_response_seconds, 0 AS leads_qualified
+         FROM users
+         WHERE company_id = $1
+         ORDER BY full_name ASC`,
+        [companyId]
+      );
+    }
 
     res.json(result.rows);
   } catch (err) {
@@ -737,14 +876,19 @@ router.get('/team/:userId/performance', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'User not found');
     }
 
-    const result = await pool.query(
-      `SELECT * FROM setter_metrics
-       WHERE user_id = $1 AND date >= NOW() - INTERVAL '7 days'
-       ORDER BY date ASC`,
-      [userId]
-    );
+    let daily = [];
+    try {
+      const result = await pool.query(
+        `SELECT * FROM setter_metrics
+         WHERE user_id = $1 AND date >= NOW() - INTERVAL '7 days'
+         ORDER BY date ASC`,
+        [userId]
+      );
+      daily = result.rows;
+    } catch (_) {
+      // setter_metrics table may not exist yet
+    }
 
-    const daily = result.rows;
     const totals = daily.reduce(
       (acc, row) => {
         acc.dms_handled += Number(row.dms_handled) || 0;

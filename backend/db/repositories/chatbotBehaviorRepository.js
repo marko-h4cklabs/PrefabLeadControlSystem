@@ -123,13 +123,23 @@ function rowToObject(row) {
 }
 
 async function get(companyId, mode = 'autopilot') {
-  const result = await pool.query(
-    `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-    [companyId, mode]
-  );
-  const row = result.rows[0];
-  if (!row) return { ...DEFAULTS };
-  return rowToObject(row);
+  try {
+    const result = await pool.query(
+      `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
+      [companyId, mode]
+    );
+    return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
+  } catch (err) {
+    // Fallback: operating_mode column may not exist yet (migration pending)
+    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+      const result = await pool.query(
+        `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1`,
+        [companyId]
+      );
+      return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
+    }
+    throw err;
+  }
 }
 
 async function upsert(companyId, payload, mode = 'autopilot') {
@@ -141,18 +151,37 @@ async function upsert(companyId, payload, mode = 'autopilot') {
 
   const columns = fields.map(([col]) => col);
   const values = fields.map(([_, v]) => v);
-  // Offset by 3 because $1=companyId, $2=mode
-  const setClauses = columns.map((col, i) => `"${col}" = $${i + 3}`).join(', ');
-  const placeholders = columns.map((_, i) => `$${i + 3}`).join(', ');
-  const colsList = columns.map((c) => `"${c}"`).join(', ');
 
-  await pool.query(
-    `INSERT INTO chatbot_behavior (company_id, operating_mode, ${colsList}, updated_at)
-     VALUES ($1, $2, ${placeholders}, NOW())
-     ON CONFLICT (company_id, COALESCE(operating_mode, 'autopilot'))
-     DO UPDATE SET ${setClauses}, updated_at = NOW()`,
-    [companyId, mode, ...values]
-  );
+  try {
+    // Offset by 3 because $1=companyId, $2=mode
+    const setClauses = columns.map((col, i) => `"${col}" = $${i + 3}`).join(', ');
+    const placeholders = columns.map((_, i) => `$${i + 3}`).join(', ');
+    const colsList = columns.map((c) => `"${c}"`).join(', ');
+
+    await pool.query(
+      `INSERT INTO chatbot_behavior (company_id, operating_mode, ${colsList}, updated_at)
+       VALUES ($1, $2, ${placeholders}, NOW())
+       ON CONFLICT (company_id, COALESCE(operating_mode, 'autopilot'))
+       DO UPDATE SET ${setClauses}, updated_at = NOW()`,
+      [companyId, mode, ...values]
+    );
+  } catch (err) {
+    // Fallback: operating_mode column may not exist yet
+    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+      const setClauses = columns.map((col, i) => `"${col}" = $${i + 2}`).join(', ');
+      const placeholders = columns.map((_, i) => `$${i + 2}`).join(', ');
+      const colsList = columns.map((c) => `"${c}"`).join(', ');
+
+      await pool.query(
+        `INSERT INTO chatbot_behavior (company_id, ${colsList}, updated_at)
+         VALUES ($1, ${placeholders}, NOW())
+         ON CONFLICT (company_id) DO UPDATE SET ${setClauses}, updated_at = NOW()`,
+        [companyId, ...values]
+      );
+    } else {
+      throw err;
+    }
+  }
   return get(companyId, mode);
 }
 

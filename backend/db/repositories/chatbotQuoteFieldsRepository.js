@@ -104,13 +104,28 @@ function toPresetDto(row, name) {
 }
 
 async function listAllPresets(companyId, mode = 'autopilot') {
-  const result = await pool.query(
-    `SELECT id, name, type, units, priority, required, is_enabled, config, qualification_prompt
-     FROM chatbot_quote_fields
-     WHERE company_id = $1 AND name = ANY($2::text[]) AND COALESCE(operating_mode, 'autopilot') = $3
-     ORDER BY priority ASC, name ASC`,
-    [companyId, PRESET_NAMES, mode]
-  );
+  let result;
+  try {
+    result = await pool.query(
+      `SELECT id, name, type, units, priority, required, is_enabled, config, qualification_prompt
+       FROM chatbot_quote_fields
+       WHERE company_id = $1 AND name = ANY($2::text[]) AND COALESCE(operating_mode, 'autopilot') = $3
+       ORDER BY priority ASC, name ASC`,
+      [companyId, PRESET_NAMES, mode]
+    );
+  } catch (err) {
+    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+      result = await pool.query(
+        `SELECT id, name, type, units, priority, required, is_enabled, config, qualification_prompt
+         FROM chatbot_quote_fields
+         WHERE company_id = $1 AND name = ANY($2::text[])
+         ORDER BY priority ASC, name ASC`,
+        [companyId, PRESET_NAMES]
+      );
+    } else {
+      throw err;
+    }
+  }
   const byName = Object.fromEntries(result.rows.map((r) => [r.name, r]));
   return PRESET_NAMES.map((name) => {
     const row = byName[name];
@@ -192,12 +207,33 @@ async function updatePresets(companyId, updates, mode = 'autopilot') {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    let useFallback = false;
     for (const { name, is_enabled, priority, config, qualification_prompt } of updates) {
       if (!PRESET_NAMES.includes(name)) continue;
-      const existing = await client.query(
-        'SELECT id, is_enabled, config, priority, qualification_prompt FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2 AND COALESCE(operating_mode, \'autopilot\') = $3',
-        [companyId, name, mode]
-      );
+      let existing;
+      if (!useFallback) {
+        try {
+          existing = await client.query(
+            'SELECT id, is_enabled, config, priority, qualification_prompt FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2 AND COALESCE(operating_mode, \'autopilot\') = $3',
+            [companyId, name, mode]
+          );
+        } catch (colErr) {
+          if (mode === 'autopilot' && colErr.message && colErr.message.includes('operating_mode')) {
+            useFallback = true;
+            existing = await client.query(
+              'SELECT id, is_enabled, config, priority, qualification_prompt FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2',
+              [companyId, name]
+            );
+          } else {
+            throw colErr;
+          }
+        }
+      } else {
+        existing = await client.query(
+          'SELECT id, is_enabled, config, priority, qualification_prompt FROM chatbot_quote_fields WHERE company_id = $1 AND name = $2',
+          [companyId, name]
+        );
+      }
       const row = existing.rows[0];
       const defaultCfg = getDefaultConfig(name);
       if (row) {
@@ -205,22 +241,38 @@ async function updatePresets(companyId, updates, mode = 'autopilot') {
         const newConfig = config !== undefined ? { ...defaultCfg, ...config } : row.config;
         const newPriority = priority !== undefined ? priority : (row.priority ?? getPresetPriority(name));
         const newQualPrompt = qualification_prompt !== undefined ? (qualification_prompt || null) : (row.qualification_prompt ?? null);
-        await client.query(
-          `UPDATE chatbot_quote_fields SET is_enabled = $4, config = $5::jsonb, priority = $6, qualification_prompt = $7
-           WHERE company_id = $1 AND name = $2 AND COALESCE(operating_mode, 'autopilot') = $3`,
-          [companyId, name, mode, newEnabled, JSON.stringify(newConfig), newPriority, newQualPrompt]
-        );
+        if (useFallback) {
+          await client.query(
+            `UPDATE chatbot_quote_fields SET is_enabled = $3, config = $4::jsonb, priority = $5, qualification_prompt = $6
+             WHERE company_id = $1 AND name = $2`,
+            [companyId, name, newEnabled, JSON.stringify(newConfig), newPriority, newQualPrompt]
+          );
+        } else {
+          await client.query(
+            `UPDATE chatbot_quote_fields SET is_enabled = $4, config = $5::jsonb, priority = $6, qualification_prompt = $7
+             WHERE company_id = $1 AND name = $2 AND COALESCE(operating_mode, 'autopilot') = $3`,
+            [companyId, name, mode, newEnabled, JSON.stringify(newConfig), newPriority, newQualPrompt]
+          );
+        }
       } else {
         const typeVal = getPresetType(name);
         const unitsVal = getPresetUnits(name);
         const priorityVal = priority !== undefined ? priority : getPresetPriority(name);
         const mergedConfig = config !== undefined ? { ...defaultCfg, ...config } : defaultCfg;
         const qualPrompt = qualification_prompt || null;
-        await client.query(
-          `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, qualification_prompt, operating_mode)
-           VALUES ($1, $2, $3, $4, $5, true, $6, $7::jsonb, $8, $9)`,
-          [companyId, name, typeVal, unitsVal, priorityVal, is_enabled ?? false, JSON.stringify(mergedConfig), qualPrompt, mode]
-        );
+        if (useFallback) {
+          await client.query(
+            `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, qualification_prompt)
+             VALUES ($1, $2, $3, $4, $5, true, $6, $7::jsonb, $8)`,
+            [companyId, name, typeVal, unitsVal, priorityVal, is_enabled ?? false, JSON.stringify(mergedConfig), qualPrompt]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO chatbot_quote_fields (company_id, name, type, units, priority, required, is_enabled, config, qualification_prompt, operating_mode)
+             VALUES ($1, $2, $3, $4, $5, true, $6, $7::jsonb, $8, $9)`,
+            [companyId, name, typeVal, unitsVal, priorityVal, is_enabled ?? false, JSON.stringify(mergedConfig), qualPrompt, mode]
+          );
+        }
       }
     }
     await client.query('COMMIT');
