@@ -122,37 +122,38 @@ function rowToObject(row) {
   };
 }
 
-async function get(companyId) {
+async function get(companyId, mode = 'autopilot') {
   const result = await pool.query(
-    `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1`,
-    [companyId]
+    `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
+    [companyId, mode]
   );
   const row = result.rows[0];
   if (!row) return { ...DEFAULTS };
   return rowToObject(row);
 }
 
-async function upsert(companyId, payload) {
+async function upsert(companyId, payload, mode = 'autopilot') {
   // Only allow known columns; remove undefined so we explicitly set only what was passed
   const fields = Object.entries(payload)
     .filter(([k]) => COLUMNS.includes(k))
     .filter(([_, v]) => v !== undefined);
-  if (fields.length === 0) return get(companyId);
+  if (fields.length === 0) return get(companyId, mode);
 
   const columns = fields.map(([col]) => col);
   const values = fields.map(([_, v]) => v);
-  const setClauses = columns.map((col, i) => `"${col}" = $${i + 2}`).join(', ');
-  const placeholders = columns.map((_, i) => `$${i + 2}`).join(', ');
+  // Offset by 3 because $1=companyId, $2=mode
+  const setClauses = columns.map((col, i) => `"${col}" = $${i + 3}`).join(', ');
+  const placeholders = columns.map((_, i) => `$${i + 3}`).join(', ');
   const colsList = columns.map((c) => `"${c}"`).join(', ');
 
   await pool.query(
-    `INSERT INTO chatbot_behavior (company_id, ${colsList}, updated_at)
-     VALUES ($1, ${placeholders}, NOW())
-     ON CONFLICT (company_id)
+    `INSERT INTO chatbot_behavior (company_id, operating_mode, ${colsList}, updated_at)
+     VALUES ($1, $2, ${placeholders}, NOW())
+     ON CONFLICT (company_id, COALESCE(operating_mode, 'autopilot'))
      DO UPDATE SET ${setClauses}, updated_at = NOW()`,
-    [companyId, ...values]
+    [companyId, mode, ...values]
   );
-  return get(companyId);
+  return get(companyId, mode);
 }
 
 module.exports = { get, upsert };

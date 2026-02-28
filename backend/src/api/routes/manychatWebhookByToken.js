@@ -32,7 +32,7 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     }
 
     const companyResult = await pool.query(
-      `SELECT id, manychat_api_key, operating_mode,
+      `SELECT id, manychat_api_key, operating_mode, bot_enabled,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
               voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
               meta_page_access_token, instagram_account_id

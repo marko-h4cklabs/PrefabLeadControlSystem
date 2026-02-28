@@ -93,12 +93,21 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     throw new Error('leadId, conversationId, and companyId are required');
   }
 
+  // Kill switch check
+  const botCheck = await pool.query('SELECT bot_enabled FROM companies WHERE id = $1', [companyId]);
+  if (botCheck.rows[0]?.bot_enabled === false) {
+    logger.info({ companyId }, '[replySuggestions] Bot disabled (kill switch), skipping');
+    return [];
+  }
+
+  // Load copilot-mode-scoped config
+  const mode = 'copilot';
   const [companyInfo, companyRecord, quoteFields, convRow, personaRow] = await Promise.all([
-    chatbotCompanyInfoRepository.get(companyId),
+    chatbotCompanyInfoRepository.get(companyId, mode),
     companyRepository.findById(companyId),
-    chatbotQuoteFieldsRepository.list(companyId),
+    chatbotQuoteFieldsRepository.list(companyId, mode),
     pool.query('SELECT parsed_fields, quote_snapshot FROM conversations WHERE id = $1 AND lead_id = $2', [conversationId, leadId]),
-    pool.query('SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true LIMIT 1', [companyId]).then((r) => r.rows[0] ?? null),
+    pool.query(`SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true AND COALESCE(operating_mode, 'autopilot') = $2 LIMIT 1`, [companyId, mode]).then((r) => r.rows[0] ?? null),
   ]);
 
   const conv = convRow.rows[0];
@@ -108,13 +117,16 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
+  // If no behavior passed, load copilot-specific behavior
+  const effectiveBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
+
   const company = {
     name: companyRecord?.name || 'our company',
     business_description: companyInfo?.business_description ?? '',
     additional_notes: companyInfo?.additional_notes ?? '',
   };
-  const baseSystemPrompt = await buildSystemPrompt(company, behavior ?? {}, orderedQuoteFields, personaRow);
-  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(behavior ?? {});
+  const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow);
+  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(effectiveBehavior);
   const userPrompt = buildUserPrompt(messages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);

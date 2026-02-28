@@ -220,7 +220,7 @@ async function processManyChatPayload(payload, overrideCompany) {
       return;
     }
     const companyResult = await pool.query(
-      `SELECT id, manychat_api_key, operating_mode,
+      `SELECT id, manychat_api_key, operating_mode, bot_enabled,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
               voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
               meta_page_access_token, instagram_account_id
@@ -406,6 +406,13 @@ async function processManyChatPayload(payload, overrideCompany) {
       }
     } catch (handoffErr) {
       logger.warn({ err: handoffErr.message }, '[manychat/handoff] Rule evaluation error');
+    }
+
+    // Kill switch: if bot is disabled, store message but skip AI processing
+    if (companyRow.bot_enabled === false) {
+      logger.info({ companyId }, '[manychat/webhook] Bot disabled (kill switch), message stored only');
+      success = true;
+      return;
     }
 
     const mode = operating_mode ?? 'autopilot';
