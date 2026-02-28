@@ -17,7 +17,8 @@ const router = express.Router();
 
 // --- Refresh token helpers ---
 const REFRESH_TOKEN_TTL = 7 * 24 * 60 * 60; // 7 days in seconds
-const ACCESS_TOKEN_EXPIRY = '15m';
+// TODO: Reduce to '15m' once frontend implements refresh token flow (POST /api/auth/refresh)
+const ACCESS_TOKEN_EXPIRY = process.env.JWT_EXPIRES_IN || '7d';
 
 function generateAccessToken(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
