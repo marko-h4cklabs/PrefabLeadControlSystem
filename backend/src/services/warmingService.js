@@ -91,7 +91,7 @@ async function enrollLead(leadId, companyId, triggerEvent) {
         { jobId: `warming-${enrollmentId}-${first.id}`, delay: delayMs }
       );
     } catch (err) {
-      logger.error('[warming] schedule first step failed:', err.message);
+      logger.error({ err: err.message }, '[warming] schedule first step failed');
     }
   }
 
@@ -167,7 +167,7 @@ Output ONLY the message text, nothing else.`;
     const text = content?.[0]?.text || content?.text || null;
     return typeof text === 'string' ? text.trim() : null;
   } catch (err) {
-    logger.warn('[warming] AI follow-up generation failed:', err.message);
+    logger.warn({ err: err.message }, '[warming] AI follow-up generation failed');
     return null;
   }
 }
@@ -283,7 +283,7 @@ async function processWarmingStep(enrollmentId, stepId) {
       manychatResponse = await sendInstagramMessage(lead.external_id, message, apiKey);
     }
   } catch (err) {
-    logger.error('[warming] send message failed:', err.message);
+    logger.error({ err: err.message }, '[warming] send message failed');
     manychatResponse = { error: err.message };
   }
 
@@ -399,7 +399,7 @@ async function getLeadActiveWindow(leadId) {
     }
     return null;
   } catch (err) {
-    logger.warn('[warming] getLeadActiveWindow error:', err.message);
+    logger.warn({ err: err.message }, '[warming] getLeadActiveWindow error');
     return null;
   }
 }
@@ -673,7 +673,7 @@ async function recordLeadReply(leadId, messageText) {
 
     return { messageLogId: lastMsg.rows[0].id, enrollmentId: lastMsg.rows[0].enrollment_id, sentiment };
   } catch (err) {
-    logger.warn('[warming] recordLeadReply error:', err.message);
+    logger.warn({ err: err.message }, '[warming] recordLeadReply error');
     return null;
   }
 }
@@ -705,7 +705,7 @@ async function updateDailyAnalytics(companyId, sequenceId) {
       [companyId, sequenceId, today]
     );
   } catch (err) {
-    logger.warn('[warming] updateDailyAnalytics error:', err.message);
+    logger.warn({ err: err.message }, '[warming] updateDailyAnalytics error');
   }
 }
 
@@ -730,10 +730,10 @@ async function runHourlyNoReply72hEnrollment() {
       const result = await enrollLead(r.lead_id, r.company_id, 'no_reply_72h');
       if (result.enrolled) enrolled += result.enrolled;
     } catch (err) {
-      logger.error('[warming] hourly no_reply_72h enroll error:', err.message);
+      logger.error({ err: err.message }, '[warming] hourly no_reply_72h enroll error');
     }
   }
-  if (enrolled > 0) logger.info('[warming] hourly no_reply_72h enrolled', enrolled, 'lead(s)');
+  if (enrolled > 0) logger.info({ enrolled }, '[warming] hourly no_reply_72h enrolled leads');
   return enrolled;
 }
 

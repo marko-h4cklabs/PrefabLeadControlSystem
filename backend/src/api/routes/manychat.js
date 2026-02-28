@@ -120,9 +120,9 @@ router.post('/', rawJsonParser, async (req, res) => {
 
     if (rawBody) {
       try {
-        logger.info('[manychat/webhook] Raw body:', rawBody.toString('utf8'));
+        logger.info({ rawBody: rawBody.toString('utf8') }, '[manychat/webhook] Raw body');
       } catch (e) {
-        logger.warn('[manychat/webhook] Failed to log raw body:', e.message);
+        logger.warn({ err: e.message }, '[manychat/webhook] Failed to log raw body');
       }
     }
 
@@ -150,18 +150,18 @@ router.post('/', rawJsonParser, async (req, res) => {
     const messageId = payload.id ?? null;
     if (process.env.REDIS_URL) {
       incomingMessageQueue.enqueueMessage(payload, messageId).catch((err) => {
-        logger.error('[manychat/webhook] Queue enqueue failed, falling back to direct processing:', err.message);
+        logger.error({ err: err.message }, '[manychat/webhook] Queue enqueue failed, falling back to direct processing');
         processManyChatPayload(payload).catch((e) => {
-          logger.error('[manychat/webhook] Fallback processing error:', e);
+          logger.error({ err: e }, '[manychat/webhook] Fallback processing error');
         });
       });
     } else {
       processManyChatPayload(payload).catch((err) => {
-        logger.error('[manychat/webhook] Async processing error:', err);
+        logger.error({ err }, '[manychat/webhook] Async processing error');
       });
     }
   } catch (err) {
-    logger.error('[manychat/webhook] Error:', err);
+    logger.error({ err }, '[manychat/webhook] Error');
     if (!res.headersSent) {
       res.status(500).json({ error: 'Internal error' });
     }
@@ -199,15 +199,15 @@ async function processManyChatPayload(payload, overrideCompany) {
   }
 
   // IGSID discovery: log all subscriber fields and payload keys to find the Instagram-scoped user ID
-  logger.info('[manychat/igsid-discovery] payload keys:', Object.keys(payload));
-  logger.info('[manychat/igsid-discovery] subscriber fields:', JSON.stringify(subscriber));
-  logger.info('[manychat/igsid-discovery] page_id:', pageId, 'channel:', channel);
+  logger.info({ payloadKeys: Object.keys(payload) }, '[manychat/igsid-discovery] payload keys');
+  logger.info({ subscriber }, '[manychat/igsid-discovery] subscriber fields');
+  logger.info({ pageId, channel }, '[manychat/igsid-discovery] page_id and channel');
 
-  logger.info('[manychat/webhook] Extracted message:', {
+  logger.info({
     type: extracted?.type,
     hasContent: !!extracted?.content,
     audioUrl: extracted?.audioUrl || null,
-  });
+  }, '[manychat/webhook] Extracted message');
   if (!subscriberId) {
     logger.warn('[manychat/webhook] Missing subscriber.id');
     return;
@@ -229,7 +229,7 @@ async function processManyChatPayload(payload, overrideCompany) {
     );
     companyRow = companyResult.rows[0];
     if (!companyRow) {
-      logger.warn('[manychat/webhook] Unregistered ManyChat page_id:', pageId);
+      logger.warn({ pageId }, '[manychat/webhook] Unregistered ManyChat page_id');
       return;
     }
   }
@@ -285,15 +285,12 @@ async function processManyChatPayload(payload, overrideCompany) {
     if (process.env.OPENAI_API_KEY && extracted.audioUrl) {
       try {
         const { transcribeAudioFromUrl } = require('../../../services/whisperService');
-        logger.info('[manychat/webhook] Detected audio/voice message, url:', extracted.audioUrl);
+        logger.info({ audioUrl: extracted.audioUrl }, '[manychat/webhook] Detected audio/voice message');
         transcription = await transcribeAudioFromUrl(extracted.audioUrl);
         if (transcription) transcription = String(transcription).trim();
-        logger.info(
-          '[manychat/webhook] Whisper transcription result:',
-          transcription ? transcription.slice(0, 500) : null
-        );
+        logger.info({ transcription: transcription ? transcription.slice(0, 500) : null }, '[manychat/webhook] Whisper transcription result');
       } catch (err) {
-        logger.warn('[manychat/webhook] Whisper transcription failed:', err.message);
+        logger.warn({ err: err.message }, '[manychat/webhook] Whisper transcription failed');
       }
     }
     await conversationRepository.appendMessage(lead.id, 'user', transcription || '', {
@@ -325,7 +322,7 @@ async function processManyChatPayload(payload, overrideCompany) {
     success = true;
     return;
   } else if (extracted.type === 'unknown' || extracted.content === null) {
-    logger.info('[manychat/webhook] Non-text message type ignored:', extracted.type);
+    logger.info({ type: extracted.type }, '[manychat/webhook] Non-text message type ignored');
     messagePreview = extracted.type ? `[${extracted.type}]` : null;
     success = true;
     return;
@@ -342,7 +339,7 @@ async function processManyChatPayload(payload, overrideCompany) {
   const userMessageCount = (conversationForCount?.messages || []).filter((m) => m.role === 'user').length;
   const { evaluateAutoresponderRules } = require('../../services/autoresponderService');
   await evaluateAutoresponderRules(lead, { text: content }, companyRow, manychatApiKey, { messageCount: userMessageCount }).catch((err) => {
-    logger.warn('[manychat] autoresponder:', err.message);
+    logger.warn({ err: err.message }, '[manychat] autoresponder error');
   });
 
   await pool.query('UPDATE leads SET last_engagement_at = NOW() WHERE id = $1', [lead.id]);
@@ -365,7 +362,7 @@ async function processManyChatPayload(payload, overrideCompany) {
   const conversationAfter = await conversationRepository.getByLeadId(lead.id);
   const messagesForIntelligence = conversationAfter?.messages ?? [];
   analyzeInboundMessage(lead.id, conversationAfter?.id, companyId, messagesForIntelligence).catch((err) => {
-    logger.error('[manychat/webhook] lead intelligence error:', err.message);
+    logger.error({ err: err.message }, '[manychat/webhook] lead intelligence error');
   });
 
   const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
@@ -384,7 +381,7 @@ async function processManyChatPayload(payload, overrideCompany) {
     // --- HANDOFF: check if bot is paused for this conversation ---
     const isBotPaused = await conversationRepository.isPaused(lead.id);
     if (isBotPaused) {
-      logger.info('[manychat/handoff] Bot paused for lead:', lead.id, '— skipping AI reply, message already logged');
+      logger.info({ leadId: lead.id }, '[manychat/handoff] Bot paused for lead — skipping AI reply, message already logged');
       // Still create notification so owner knows lead sent another message
       createNotification(companyId, 'new_message', 'New message (bot paused)', `${lead.name || 'Lead'} sent a message while bot is paused`, lead.id).catch(() => {});
       success = true;
@@ -398,7 +395,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         messageCount: userMsgCount,
       });
       if (matchedRule) {
-        logger.info('[manychat/handoff] Rule triggered:', matchedRule.rule_type, ':', matchedRule.trigger_value, 'for lead:', lead.id);
+        logger.info({ ruleType: matchedRule.rule_type, triggerValue: matchedRule.trigger_value, leadId: lead.id }, '[manychat/handoff] Rule triggered');
         const handoffResult = await handoffService.executeHandoff(companyId, lead.id, conversationAfter?.id, matchedRule, lead.name);
         if (handoffResult.paused && handoffResult.bridgingMessage && manychatApiKey) {
           await sendInstagramMessage(subscriberId, handoffResult.bridgingMessage, manychatApiKey);
@@ -408,7 +405,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         return;
       }
     } catch (handoffErr) {
-      logger.warn('[manychat/handoff] Rule evaluation error:', handoffErr.message);
+      logger.warn({ err: handoffErr.message }, '[manychat/handoff] Rule evaluation error');
     }
 
     const mode = operating_mode ?? 'autopilot';
@@ -439,7 +436,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         const bookingData = parsedFields.__booking || null;
 
         if (isActiveBookingPhase(bookingPhase)) {
-          logger.info('[booking] Active phase:', bookingPhase, 'for lead:', lead.id);
+          logger.info({ bookingPhase, leadId: lead.id }, '[booking] Active phase');
           const bookingResult = await handleActiveBookingPhase({
             leadId: lead.id,
             companyId,
@@ -469,17 +466,17 @@ async function processManyChatPayload(payload, overrideCompany) {
         const hasDelay = delayRandomEnabled ? (delayMax > 0) : (delaySeconds > 0);
         if (hasDelay) {
           const messageDelayService = require('../../services/messageDelayService');
-          logger.info('[manychat/webhook] Smart delay:', delayRandomEnabled ? `random ${delayMin}-${delayMax}s` : `${delaySeconds}s`, 'for lead:', lead.id);
+          logger.info({ delay: delayRandomEnabled ? `random ${delayMin}-${delayMax}s` : `${delaySeconds}s`, leadId: lead.id }, '[manychat/webhook] Smart delay');
           const shouldProceed = await messageDelayService.waitOrReset(lead.id, delaySeconds, {
             minSeconds: delayMin,
             maxSeconds: delayMax,
             randomEnabled: delayRandomEnabled,
           });
           if (!shouldProceed) {
-            logger.info('[manychat/webhook] Smart delay: superseded by newer message, skipping reply for lead:', lead.id);
+            logger.info({ leadId: lead.id }, '[manychat/webhook] Smart delay: superseded by newer message, skipping reply');
             return;
           }
-          logger.info('[manychat/webhook] Smart delay: timer expired, proceeding with reply for lead:', lead.id);
+          logger.info({ leadId: lead.id }, '[manychat/webhook] Smart delay: timer expired, proceeding with reply');
         }
 
         const result = await aiReplyService.generateAiReply(companyId, lead.id);
@@ -503,7 +500,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         if (bookingOffer?.offerMessage) {
           result.assistant_message += bookingOffer.offerMessage;
           bookingOfferAppended = true;
-          logger.info('[booking] Offer appended, phase:', bookingOffer.bookingPhase);
+          logger.info({ bookingPhase: bookingOffer.bookingPhase }, '[booking] Offer appended');
         }
 
         await conversationRepository.appendMessage(lead.id, 'assistant', result.assistant_message);
@@ -537,7 +534,7 @@ async function processManyChatPayload(payload, overrideCompany) {
               const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
 
               // Step 1: Generate TTS audio via ElevenLabs (WAV format)
-              logger.info('[manychat/voice] Step 1: ElevenLabs TTS (WAV), voiceId:', companyRow.voice_selected_id);
+              logger.info({ voiceId: companyRow.voice_selected_id }, '[manychat/voice] Step 1: ElevenLabs TTS (WAV)');
               const ttsResult = await textToSpeechWav(companyRow.voice_selected_id, result.assistant_message, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
                 stability: parseFloat(companyRow.voice_stability) || 0.5,
@@ -545,7 +542,7 @@ async function processManyChatPayload(payload, overrideCompany) {
                 style: parseFloat(companyRow.voice_style) || 0,
                 speaker_boost: companyRow.voice_speaker_boost !== false,
               });
-              logger.info('[manychat/voice] Step 1 OK: WAV audio generated, base64 length:', ttsResult.audio_base64.length);
+              logger.info({ base64Length: ttsResult.audio_base64.length }, '[manychat/voice] Step 1 OK: WAV audio generated');
 
               // Step 2: Store attachment in DB
               const audioBuffer = Buffer.from(ttsResult.audio_base64, 'base64');
@@ -556,7 +553,7 @@ async function processManyChatPayload(payload, overrideCompany) {
                 buffer: audioBuffer,
                 conversationId: conversation?.id ?? null,
               });
-              logger.info('[manychat/voice] Step 2 OK: attachment id:', attachment.id, 'size:', audioBuffer.length, 'bytes');
+              logger.info({ attachmentId: attachment.id, sizeBytes: audioBuffer.length }, '[manychat/voice] Step 2 OK: attachment saved');
 
               const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
               const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-reply.wav`;
@@ -568,7 +565,7 @@ async function processManyChatPayload(payload, overrideCompany) {
                 logger.info('[manychat/voice] Step 3 OK: Voice sent via sendContent');
                 voiceSent = true;
               } catch (mcErr) {
-                logger.warn('[manychat/voice] Step 3 FAILED (sendContent):', mcErr.response?.status);
+                logger.warn({ status: mcErr.response?.status }, '[manychat/voice] Step 3 FAILED (sendContent)');
 
                 // Fallback: trigger ManyChat flow
                 const { sendFlow } = require('../../services/manychatService');
@@ -584,7 +581,7 @@ async function processManyChatPayload(payload, overrideCompany) {
             } catch (voiceErr) {
               const respData = voiceErr.response?.data;
               const respBody = respData instanceof Buffer ? respData.toString('utf8') : JSON.stringify(respData);
-              logger.error('[manychat/voice] FAILED. Status:', voiceErr.response?.status, 'Body:', respBody, 'Message:', voiceErr.message);
+              logger.error({ status: voiceErr.response?.status, body: respBody, err: voiceErr.message }, '[manychat/voice] FAILED');
             }
           }
 
@@ -594,7 +591,7 @@ async function processManyChatPayload(payload, overrideCompany) {
           }
 
           incrementMessageCountAndWarn(companyId).catch((err) =>
-            logger.warn('[manychat/webhook] message count increment:', err.message)
+            logger.warn({ err: err.message }, '[manychat/webhook] message count increment failed')
           );
 
           // Social proof images (only with text replies, not voice)
@@ -620,7 +617,7 @@ async function processManyChatPayload(payload, overrideCompany) {
             }
           }
         } else if (!manychatApiKey) {
-          logger.warn('[manychat/webhook] manychat_api_key not set for company', companyId);
+          logger.warn({ companyId }, '[manychat/webhook] manychat_api_key not set for company');
         }
 
         logLeadActivity({
@@ -634,7 +631,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         }).catch(() => {});
       }
     } catch (err) {
-      logger.error('[manychat/webhook] AI reply/suggestions failed:', err);
+      logger.error({ err }, '[manychat/webhook] AI reply/suggestions failed');
     } finally {
       await releaseDistributedLock(`lead:${lead.id}`);
     }
@@ -646,7 +643,7 @@ async function processManyChatPayload(payload, overrideCompany) {
       `INSERT INTO manychat_webhook_log (company_id, subscriber_id, message_preview, processing_time_ms, success)
        VALUES ($1, $2, $3, $4, $5)`,
       [companyId, subscriberId || null, messagePreview, processingTimeMs, success]
-    ).catch((e) => logger.warn('[manychat] webhook log insert failed:', e.message));
+    ).catch((e) => logger.warn({ err: e.message }, '[manychat] webhook log insert failed'));
   }
 }
 

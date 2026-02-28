@@ -302,18 +302,7 @@ async function generateAiReply(companyId, leadId) {
     }
     systemPrompt += '\n\nRespond with ONLY a JSON object: {"assistant_message": "your reply text", "field_updates": {}}. No other text.';
 
-    try {
-      logger.info(
-        '[aiReplyService] System prompt for company',
-        companyId,
-        'lead',
-        leadId,
-        ':\n',
-        systemPrompt
-      );
-    } catch (e) {
-      logger.warn('[aiReplyService] Failed to log system prompt:', e.message);
-    }
+    logger.info({ companyId, leadId, systemPromptLength: systemPrompt.length }, '[aiReplyService] System prompt built');
 
     const claudeMessages = buildClaudeMessages(conversation.messages, userText);
     const rawOutput = await callClaude(systemPrompt, claudeMessages);
@@ -325,7 +314,7 @@ async function generateAiReply(companyId, leadId) {
     rawReply = validateAndCleanReply(rawReply, behavior);
     const qualityIssues = checkReplyQuality(rawReply);
     if (qualityIssues.length > 0) {
-      logger.warn('[aiReply] Quality issues detected:', qualityIssues);
+      logger.warn({ qualityIssues }, '[aiReply] Quality issues detected');
     }
     assistantMessage = rawReply;
 

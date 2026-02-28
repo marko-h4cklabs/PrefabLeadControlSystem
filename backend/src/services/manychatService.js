@@ -79,7 +79,7 @@ async function sendManyChatImage(lead, imageUrl, caption, company) {
       }
     );
   } catch (err) {
-    logger.error('[manychat] sendManyChatImage error:', err.message);
+    logger.error({ err: err.message }, '[manychat] sendManyChatImage error');
   }
 }
 
