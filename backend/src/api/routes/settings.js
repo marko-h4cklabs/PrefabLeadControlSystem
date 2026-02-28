@@ -247,6 +247,22 @@ router.put('/manychat', requireRole('owner', 'admin'), async (req, res) => {
       });
     }
 
+    // Prevent duplicate page_id — another company using the same ManyChat page causes webhook routing collisions
+    if (resolvedPageId) {
+      const dupe = await pool.query(
+        'SELECT id, name FROM companies WHERE manychat_page_id = $1 AND id != $2',
+        [resolvedPageId, companyId]
+      );
+      if (dupe.rows.length > 0) {
+        return res.status(400).json({
+          error: {
+            code: 'DUPLICATE_PAGE_ID',
+            message: `This ManyChat page is already connected to another account ("${dupe.rows[0].name}"). Each ManyChat page can only be linked to one company. Please use a different ManyChat page or contact support.`,
+          },
+        });
+      }
+    }
+
     await pool.query(
       `UPDATE companies SET manychat_api_key = $2, manychat_page_id = $3, manychat_connected = true WHERE id = $1`,
       [companyId, encrypt(apiKey), resolvedPageId || null]
