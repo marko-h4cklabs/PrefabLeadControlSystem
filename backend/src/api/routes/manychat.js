@@ -429,7 +429,7 @@ async function processManyChatPayload(payload, overrideCompany) {
     try {
       if (mode === 'copilot') {
         const replySuggestionsService = require('../../../services/replySuggestionsService');
-        const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+        const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
         await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
       } else {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};

@@ -917,4 +917,173 @@ router.get('/team/:userId/performance', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────
+// Calendly Integration
+// ────────────────────────────────────────────────────────────
+
+const calendlyService = require('../../../services/calendlyService');
+const { encrypt, decrypt } = require('../../lib/encryption');
+
+/**
+ * GET /api/copilot/calendar/events
+ * Fetch scheduled events from Calendly.
+ * Query: ?min_date=ISO&max_date=ISO&status=active|canceled
+ */
+router.get('/calendar/events', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { min_date, max_date, status } = req.query;
+
+    // Get the Calendly API token from company settings
+    let tokenRow;
+    try {
+      tokenRow = await pool.query(
+        'SELECT calendly_api_token FROM companies WHERE id = $1',
+        [companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('calendly_api_token')) {
+        return errorJson(res, 400, 'NOT_CONFIGURED', 'Calendly integration not set up. Add your API token in Settings > Integrations.');
+      }
+      throw colErr;
+    }
+
+    const encryptedToken = tokenRow.rows[0]?.calendly_api_token;
+    if (!encryptedToken) {
+      return errorJson(res, 400, 'NOT_CONFIGURED', 'Calendly API token not configured. Add it in Settings > Integrations.');
+    }
+
+    const apiToken = decrypt(encryptedToken);
+    if (!apiToken) {
+      return errorJson(res, 400, 'NOT_CONFIGURED', 'Could not decrypt Calendly API token.');
+    }
+
+    const events = await calendlyService.getScheduledEvents(apiToken, {
+      minDate: min_date || undefined,
+      maxDate: max_date || undefined,
+      status: status || undefined,
+    });
+
+    res.json({ events });
+  } catch (err) {
+    logger.error({ err: err.message }, '[copilot/calendar] Failed to fetch Calendly events');
+    errorJson(res, 500, 'CALENDLY_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/calendly
+ * Save Calendly API token. Validates first, then encrypts and stores.
+ */
+router.put('/settings/calendly', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { api_token } = req.body || {};
+
+    if (!api_token || typeof api_token !== 'string' || !api_token.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'api_token is required');
+    }
+
+    // Validate the token
+    const validation = await calendlyService.validateToken(api_token.trim());
+    if (!validation.valid) {
+      return errorJson(res, 400, 'INVALID_TOKEN', `Invalid Calendly token: ${validation.error}`);
+    }
+
+    // Encrypt and store
+    const encrypted = encrypt(api_token.trim());
+
+    // Try to update the column; if it doesn't exist, create it
+    try {
+      await pool.query(
+        'UPDATE companies SET calendly_api_token = $2 WHERE id = $1',
+        [companyId, encrypted]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('calendly_api_token')) {
+        // Column doesn't exist — add it
+        await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS calendly_api_token TEXT');
+        await pool.query(
+          'UPDATE companies SET calendly_api_token = $2 WHERE id = $1',
+          [companyId, encrypted]
+        );
+      } else {
+        throw colErr;
+      }
+    }
+
+    res.json({
+      success: true,
+      calendly_name: validation.name,
+      calendly_email: validation.email,
+      scheduling_url: validation.scheduling_url,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/calendly
+ * Check if Calendly is connected.
+ */
+router.get('/settings/calendly', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+
+    let tokenRow;
+    try {
+      tokenRow = await pool.query(
+        'SELECT calendly_api_token FROM companies WHERE id = $1',
+        [companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('calendly_api_token')) {
+        return res.json({ connected: false });
+      }
+      throw colErr;
+    }
+
+    const encryptedToken = tokenRow.rows[0]?.calendly_api_token;
+    if (!encryptedToken) {
+      return res.json({ connected: false });
+    }
+
+    // Validate existing connection
+    const apiToken = decrypt(encryptedToken);
+    if (!apiToken) {
+      return res.json({ connected: false });
+    }
+
+    const validation = await calendlyService.validateToken(apiToken);
+    res.json({
+      connected: validation.valid,
+      calendly_name: validation.name || '',
+      calendly_email: validation.email || '',
+      scheduling_url: validation.scheduling_url || '',
+    });
+  } catch (err) {
+    res.json({ connected: false });
+  }
+});
+
+/**
+ * DELETE /api/copilot/settings/calendly
+ * Disconnect Calendly by removing the API token.
+ */
+router.delete('/settings/calendly', requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    try {
+      await pool.query(
+        'UPDATE companies SET calendly_api_token = NULL WHERE id = $1',
+        [companyId]
+      );
+    } catch { /* column may not exist, that's fine */ }
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 module.exports = router;

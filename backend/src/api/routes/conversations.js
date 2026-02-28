@@ -172,14 +172,17 @@ router.post('/:conversationId/suggestions', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
     }
     const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
-    const suggestions = await replySuggestionsService.generateSuggestions(
+    const result = await replySuggestionsService.generateSuggestions(
       conv.lead_id,
       conversationId,
       companyId,
       conv.messages ?? [],
       behavior
     );
-    res.json({ suggestions });
+    // result is now { suggestion_id, suggestions }
+    const suggestions = result?.suggestions || result || [];
+    const suggestion_id = result?.suggestion_id || null;
+    res.json({ suggestion_id, suggestions });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

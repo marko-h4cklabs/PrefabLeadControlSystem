@@ -94,10 +94,15 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   }
 
   // Kill switch check
-  const botCheck = await pool.query('SELECT bot_enabled FROM companies WHERE id = $1', [companyId]);
-  if (botCheck.rows[0]?.bot_enabled === false) {
-    logger.info({ companyId }, '[replySuggestions] Bot disabled (kill switch), skipping');
-    return [];
+  try {
+    const botCheck = await pool.query('SELECT bot_enabled FROM companies WHERE id = $1', [companyId]);
+    if (botCheck.rows[0]?.bot_enabled === false) {
+      logger.info({ companyId }, '[replySuggestions] Bot disabled (kill switch), skipping');
+      return { suggestion_id: null, suggestions: [] };
+    }
+  } catch (colErr) {
+    // bot_enabled column may not exist yet — proceed (bot is on by default)
+    if (!(colErr.message && colErr.message.includes('bot_enabled'))) throw colErr;
   }
 
   // Load copilot-mode-scoped config
@@ -146,7 +151,8 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     [conversationId, leadId, companyId, JSON.stringify(suggestions), null]
   );
   const row = result.rows[0];
-  return row ? (row.suggestions && typeof row.suggestions === 'object' ? row.suggestions : JSON.parse(row.suggestions || '[]')) : suggestions;
+  const parsedSuggestions = row ? (row.suggestions && typeof row.suggestions === 'object' ? row.suggestions : JSON.parse(row.suggestions || '[]')) : suggestions;
+  return { suggestion_id: row?.id || null, suggestions: parsedSuggestions };
 }
 
 /**
