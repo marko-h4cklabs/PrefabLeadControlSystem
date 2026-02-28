@@ -22,9 +22,9 @@ router.get('/active-dms', async (req, res) => {
     const companyId = req.tenantId;
     const { sort = 'recent', limit = 50, filter = 'all' } = req.query;
 
-    let orderBy = 'c.last_message_at DESC NULLS LAST';
-    if (sort === 'score') orderBy = 'l.score DESC NULLS LAST, c.last_message_at DESC NULLS LAST';
-    if (sort === 'waiting') orderBy = 'c.last_message_at ASC NULLS LAST';
+    let orderBy = 'c.last_updated DESC NULLS LAST';
+    if (sort === 'score') orderBy = 'l.score DESC NULLS LAST, c.last_updated DESC NULLS LAST';
+    if (sort === 'waiting') orderBy = 'c.last_updated ASC NULLS LAST';
 
     let filterClause = '';
     const params = [companyId];
@@ -50,16 +50,14 @@ router.get('/active-dms', async (req, res) => {
          l.assigned_to,
          u.full_name AS assigned_to_name,
          c.id AS conversation_id,
-         c.last_message_at,
-         c.status AS conversation_status,
-         (SELECT text FROM chat_messages WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) AS last_message_preview,
-         (SELECT role FROM chat_messages WHERE lead_id = l.id ORDER BY created_at DESC LIMIT 1) AS last_message_role,
+         c.last_updated,
+         c.messages->-1->>'content' AS last_message_preview,
+         c.messages->-1->>'role' AS last_message_role,
          (SELECT COUNT(*)::int FROM reply_suggestions rs WHERE rs.lead_id = l.id AND rs.used_at IS NULL) AS pending_suggestions
        FROM leads l
        JOIN conversations c ON c.lead_id = l.id
        LEFT JOIN users u ON u.id = l.assigned_to
        WHERE l.company_id = $1
-         AND c.status != 'closed'
          ${filterClause}
        ORDER BY ${orderBy}
        LIMIT $2`,
@@ -77,7 +75,7 @@ router.get('/active-dms', async (req, res) => {
       assigned_to_name: r.assigned_to_name || null,
       profile_pic: null,
       conversation_id: r.conversation_id,
-      last_message_at: r.last_message_at,
+      last_message_at: r.last_updated,
       last_message_preview: r.last_message_preview
         ? r.last_message_preview.substring(0, 120)
         : '',
@@ -102,11 +100,11 @@ router.get('/stats', async (req, res) => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
-    // Active conversations (not closed)
+    // Active conversations (leads with a conversation)
     const activeResult = await pool.query(
       `SELECT COUNT(*)::int AS count FROM conversations c
        JOIN leads l ON l.id = c.lead_id
-       WHERE l.company_id = $1 AND c.status != 'closed'`,
+       WHERE l.company_id = $1`,
       [companyId]
     );
 
@@ -118,19 +116,12 @@ router.get('/stats', async (req, res) => {
       [companyId, todayStart.toISOString()]
     );
 
-    // Average response time (seconds) — average time between user message and next assistant message, last 7 days
+    // Average response time from setter_metrics (today)
     const avgResponseResult = await pool.query(
-      `SELECT COALESCE(AVG(response_seconds), 0)::int AS avg_seconds FROM (
-         SELECT EXTRACT(EPOCH FROM (
-           (SELECT MIN(m2.created_at) FROM chat_messages m2
-            WHERE m2.lead_id = m1.lead_id AND m2.role = 'assistant' AND m2.created_at > m1.created_at)
-           - m1.created_at
-         )) AS response_seconds
-         FROM chat_messages m1
-         JOIN leads l ON l.id = m1.lead_id
-         WHERE l.company_id = $1 AND m1.role = 'user' AND m1.created_at >= NOW() - INTERVAL '7 days'
-         LIMIT 200
-       ) sub WHERE response_seconds > 0 AND response_seconds < 86400`,
+      `SELECT COALESCE(AVG(NULLIF(avg_response_seconds, 0)), 0)::int AS avg_seconds
+       FROM setter_metrics sm
+       JOIN users u ON u.id = sm.user_id
+       WHERE u.company_id = $1 AND sm.date = CURRENT_DATE`,
       [companyId]
     );
 
@@ -183,25 +174,23 @@ router.get('/stats', async (req, res) => {
 
 /**
  * PATCH /api/copilot/conversations/:id/dismiss
- * Mark a conversation as handled/dismissed without sending a reply.
+ * Mark pending suggestions as dismissed for this conversation.
  */
 router.patch('/conversations/:id/dismiss', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const { id } = req.params;
 
+    // Mark all unused suggestions for this conversation as dismissed
     const result = await pool.query(
-      `UPDATE conversations SET status = 'dismissed', updated_at = NOW()
-       WHERE id = $1 AND lead_id IN (SELECT id FROM leads WHERE company_id = $2)
+      `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1
+       WHERE conversation_id = $1 AND used_at IS NULL
+         AND company_id = $2
        RETURNING id`,
       [id, companyId]
     );
 
-    if (result.rowCount === 0) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
-    }
-
-    res.json({ success: true });
+    res.json({ success: true, dismissed: result.rowCount });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -372,9 +361,10 @@ router.post('/batch/dismiss', async (req, res) => {
     }
 
     const result = await pool.query(
-      `UPDATE conversations SET status = 'dismissed', updated_at = NOW()
-       WHERE id = ANY($1::uuid[])
-         AND lead_id IN (SELECT id FROM leads WHERE company_id = $2)`,
+      `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1
+       WHERE conversation_id = ANY($1::uuid[])
+         AND used_at IS NULL
+         AND company_id = $2`,
       [conversation_ids, companyId]
     );
 
