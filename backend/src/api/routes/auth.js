@@ -125,14 +125,18 @@ async function registerCompanyAndUser(body) {
     client.release();
   }
 
-  await chatbotBehaviorRepository.upsert(company.id, {
-    persona_style: 'professional',
-    response_length: 'medium',
-    emojis_enabled: true,
-    agent_name: 'Alex',
-    conversation_goal: 'Book a sales call',
-    opener_style: 'greeting',
-  });
+  try {
+    await chatbotBehaviorRepository.upsert(company.id, {
+      persona_style: 'explanational',
+      response_length: 'medium',
+      emojis_enabled: true,
+      agent_name: 'Alex',
+      conversation_goal: 'Book a sales call',
+      opener_style: 'greeting',
+    });
+  } catch (err) {
+    logger.error('[register] chatbot_behavior init failed:', err.message);
+  }
 
   const warmingService = require('../../services/warmingService');
   warmingService.ensureDefaultSequences(company.id).catch(() => {});
