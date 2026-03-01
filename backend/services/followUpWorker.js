@@ -10,6 +10,7 @@ const {
   leadRepository,
   conversationRepository,
   appointmentRepository,
+  chatbotBehaviorRepository,
 } = require('../db/repositories');
 const aiReplyService = require('./aiReplyService');
 const { logLeadActivity } = require('./activityLogger');
@@ -57,6 +58,13 @@ async function processJob(job) {
 
   if (lead.status === 'qualified' || lead.status === 'disqualified') {
     logger.info('[follow-up] lead status is qualified/disqualified, skipping');
+    return;
+  }
+
+  // Check master follow-ups toggle
+  const behavior = await chatbotBehaviorRepository.get(companyId);
+  if (behavior.follow_ups_enabled === false) {
+    logger.info('[follow-up] follow-ups disabled for company, skipping');
     return;
   }
 

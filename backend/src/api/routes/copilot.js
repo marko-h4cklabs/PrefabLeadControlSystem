@@ -670,12 +670,41 @@ router.put('/settings/identity', async (req, res) => {
 
 /**
  * GET /api/copilot/settings/fields
+ * Returns copilot-mode custom fields for this company.
  */
 router.get('/settings/fields', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const fields = await chatbotQuoteFieldsRepository.list(companyId, 'copilot');
-    res.json(fields || []);
+    let result;
+    try {
+      result = await pool.query(
+        `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt
+         FROM chatbot_quote_fields
+         WHERE company_id = $1 AND is_custom = true AND COALESCE(operating_mode, 'autopilot') = 'copilot'
+         ORDER BY priority ASC, name ASC`,
+        [companyId]
+      );
+    } catch (colErr) {
+      if (colErr.message && colErr.message.includes('operating_mode')) {
+        result = await pool.query(
+          `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt
+           FROM chatbot_quote_fields
+           WHERE company_id = $1 AND is_custom = true
+           ORDER BY priority ASC, name ASC`,
+          [companyId]
+        );
+      } else {
+        throw colErr;
+      }
+    }
+    const fields = (result.rows || []).map((f) => ({
+      id: f.id,
+      name: f.label || f.name,
+      type: f.field_type || f.type || 'text',
+      is_enabled: f.is_enabled !== false,
+      qualification_prompt: f.qualification_prompt || '',
+    }));
+    res.json(fields);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
@@ -683,7 +712,7 @@ router.get('/settings/fields', async (req, res) => {
 
 /**
  * PUT /api/copilot/settings/fields
- * Accepts { presets: [...] } where each item is { name, type, priority }.
+ * Accepts { presets: [...] } where each item is { name, type, is_enabled, qualification_prompt }.
  * Replaces all copilot-mode quote fields for this company.
  */
 router.put('/settings/fields', async (req, res) => {
@@ -707,7 +736,6 @@ router.put('/settings/fields', async (req, res) => {
           [companyId]
         );
       } catch (colErr) {
-        // operating_mode column may not exist — delete all for this company
         if (colErr.message && colErr.message.includes('operating_mode')) {
           await client.query(
             `DELETE FROM chatbot_quote_fields WHERE company_id = $1`,
@@ -725,20 +753,21 @@ router.put('/settings/fields', async (req, res) => {
         if (!name) continue;
         const fieldType = (f.type || 'text').toLowerCase();
         const priority = i + 1;
-        const required = f.priority === 'Required' || f.priority === 'required' || f.required === true;
+        const isEnabled = f.is_enabled !== false;
+        const qualPrompt = (f.qualification_prompt || '').trim() || null;
 
         try {
           await client.query(
-            `INSERT INTO chatbot_quote_fields (company_id, operating_mode, name, label, type, field_type, priority, required, is_enabled, config, is_custom)
-             VALUES ($1, 'copilot', $2, $3, $4, $5, $6, $7, true, '{}'::jsonb, true)`,
-            [companyId, name, name, fieldType, fieldType, priority, required]
+            `INSERT INTO chatbot_quote_fields (company_id, operating_mode, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt)
+             VALUES ($1, 'copilot', $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8)`,
+            [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt]
           );
         } catch (colErr) {
           if (colErr.message && colErr.message.includes('operating_mode')) {
             await client.query(
-              `INSERT INTO chatbot_quote_fields (company_id, name, label, type, field_type, priority, required, is_enabled, config, is_custom)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, true, '{}'::jsonb, true)`,
-              [companyId, name, name, fieldType, fieldType, priority, required]
+              `INSERT INTO chatbot_quote_fields (company_id, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt)
+               VALUES ($1, $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8)`,
+              [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt]
             );
           } else {
             throw colErr;
@@ -756,12 +785,11 @@ router.put('/settings/fields', async (req, res) => {
 
     // Return the saved fields
     const saved = fields.filter((f) => (f.name || f.label || '').trim()).map((f, i) => ({
+      id: f.id || null,
       name: (f.name || f.label || '').trim(),
-      label: (f.name || f.label || '').trim(),
       type: (f.type || 'text').toLowerCase(),
-      priority: i + 1,
-      required: f.priority === 'Required' || f.priority === 'required' || f.required === true,
-      is_enabled: true,
+      is_enabled: f.is_enabled !== false,
+      qualification_prompt: (f.qualification_prompt || '').trim(),
     }));
     res.json(saved);
   } catch (err) {
@@ -1464,6 +1492,14 @@ router.put('/settings/calendly', requireRole('owner', 'admin', 'setter'), async 
       }
     }
 
+    // Cache Calendly user info so GET doesn't need a live API call
+    await pool.query(
+      `UPDATE companies
+       SET calendly_name = $2, calendly_email = $3, calendly_scheduling_url = $4
+       WHERE id = $1`,
+      [companyId, validation.name || null, validation.email || null, validation.scheduling_url || null]
+    ).catch(() => {});
+
     // Also save the scheduling URL so AI prompts use the correct Calendly link
     if (validation.scheduling_url) {
       const { chatbotBehaviorRepository } = require('../../../db/repositories');
@@ -1496,36 +1532,20 @@ router.get('/settings/calendly', async (req, res) => {
   try {
     const companyId = req.tenantId;
 
-    let tokenRow;
-    try {
-      tokenRow = await pool.query(
-        'SELECT calendly_api_token FROM companies WHERE id = $1',
-        [companyId]
-      );
-    } catch (colErr) {
-      if (colErr.message && colErr.message.includes('calendly_api_token')) {
-        return res.json({ connected: false });
-      }
-      throw colErr;
-    }
+    const result = await pool.query(
+      `SELECT calendly_api_token, calendly_name, calendly_email, calendly_scheduling_url
+       FROM companies WHERE id = $1`,
+      [companyId]
+    );
 
-    const encryptedToken = tokenRow.rows[0]?.calendly_api_token;
-    if (!encryptedToken) {
-      return res.json({ connected: false });
-    }
+    const row = result.rows[0];
+    const hasToken = !!(row?.calendly_api_token);
 
-    // Validate existing connection
-    const apiToken = decrypt(encryptedToken);
-    if (!apiToken) {
-      return res.json({ connected: false });
-    }
-
-    const validation = await calendlyService.validateToken(apiToken);
     res.json({
-      connected: validation.valid,
-      calendly_name: validation.name || '',
-      calendly_email: validation.email || '',
-      scheduling_url: validation.scheduling_url || '',
+      connected: hasToken,
+      calendly_name: row?.calendly_name || '',
+      calendly_email: row?.calendly_email || '',
+      scheduling_url: row?.calendly_scheduling_url || '',
     });
   } catch (err) {
     res.json({ connected: false });
@@ -1541,7 +1561,9 @@ router.delete('/settings/calendly', requireRole('owner', 'admin', 'setter'), asy
     const companyId = req.tenantId;
     try {
       await pool.query(
-        'UPDATE companies SET calendly_api_token = NULL WHERE id = $1',
+        `UPDATE companies
+         SET calendly_api_token = NULL, calendly_name = NULL, calendly_email = NULL, calendly_scheduling_url = NULL
+         WHERE id = $1`,
         [companyId]
       );
     } catch { /* column may not exist, that's fine */ }

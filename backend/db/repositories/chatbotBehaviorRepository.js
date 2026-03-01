@@ -37,6 +37,7 @@ const DEFAULTS = {
   delay_min_seconds: 0,
   delay_max_seconds: 0,
   delay_random_enabled: false,
+  follow_ups_enabled: true,
 };
 
 const COLUMNS = [
@@ -76,6 +77,7 @@ const COLUMNS = [
   'delay_min_seconds',
   'delay_max_seconds',
   'delay_random_enabled',
+  'follow_ups_enabled',
 ];
 
 function rowToObject(row) {
@@ -119,6 +121,7 @@ function rowToObject(row) {
     delay_min_seconds: row.delay_min_seconds ?? DEFAULTS.delay_min_seconds,
     delay_max_seconds: row.delay_max_seconds ?? DEFAULTS.delay_max_seconds,
     delay_random_enabled: row.delay_random_enabled ?? DEFAULTS.delay_random_enabled,
+    follow_ups_enabled: row.follow_ups_enabled ?? DEFAULTS.follow_ups_enabled,
   };
 }
 

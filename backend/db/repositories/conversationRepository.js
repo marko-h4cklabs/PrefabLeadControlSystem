@@ -21,7 +21,7 @@ function toPlainConversation(row) {
   };
 }
 
-async function createIfNotExists(leadId, companyId = null) {
+async function createIfNotExists(leadId, companyId = null, mode = 'copilot') {
   const existing = await getByLeadId(leadId);
   if (existing) return existing;
 
@@ -29,7 +29,7 @@ async function createIfNotExists(leadId, companyId = null) {
   let settingsSnapshot = null;
   if (companyId) {
     const [fields, behavior] = await Promise.all([
-      chatbotQuoteFieldsRepository.list(companyId),
+      chatbotQuoteFieldsRepository.list(companyId, mode),
       chatbotBehaviorRepository.get(companyId),
     ]);
     const enabled = chatbotQuoteFieldsRepository.getEnabledFields(fields ?? []);

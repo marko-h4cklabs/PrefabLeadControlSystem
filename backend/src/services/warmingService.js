@@ -7,7 +7,7 @@ const logger = require('../lib/logger');
 const IORedis = require('ioredis');
 const { Queue } = require('bullmq');
 const { pool } = require('../../db');
-const { leadRepository, companyRepository, conversationRepository } = require('../../db/repositories');
+const { leadRepository, companyRepository, conversationRepository, chatbotBehaviorRepository } = require('../../db/repositories');
 const { sendInstagramMessage } = require('./manychatService');
 const { createNotification } = require('./notificationService');
 const { decrypt } = require('../lib/encryption');
@@ -213,6 +213,10 @@ async function processWarmingStep(enrollmentId, stepId) {
   const lead = await leadRepository.findById(enr.company_id, enr.lead_id);
   if (!lead) return;
   if (lead.status === 'qualified' || lead.status === 'disqualified') return;
+
+  // Check master follow-ups toggle
+  const behavior = await chatbotBehaviorRepository.get(enr.company_id);
+  if (behavior.follow_ups_enabled === false) return;
 
   // Check if the lead replied since last follow-up (for branching conditions)
   const lastLogResult = await pool.query(
