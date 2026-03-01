@@ -447,6 +447,36 @@ async function processManyChatPayload(payload, overrideCompany) {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
         await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
 
+        // Extract field values from user message (copilot mode needs this for Collected Fields)
+        try {
+          const copilotFields = await chatbotQuoteFieldsRepository.list(companyId, 'copilot');
+          if (Array.isArray(copilotFields) && copilotFields.length > 0) {
+            const { extractFieldsWithClaude, getAllowedFieldNames } = require('../../../src/chat/extractService');
+            const { extracted } = await extractFieldsWithClaude(content, copilotFields);
+            if (extracted && extracted.length > 0) {
+              const currentConv = await conversationRepository.getByLeadId(lead.id);
+              const currentParsed = currentConv?.parsed_fields ?? {};
+              const allowed = getAllowedFieldNames(copilotFields);
+              const updates = {};
+              for (const e of extracted) {
+                if (e?.name && e?.value != null && String(e.value).trim() !== '') {
+                  const key = String(e.name).toLowerCase().trim();
+                  if (allowed.has(key)) {
+                    updates[e.name] = e.type === 'number' ? Number(e.value) : String(e.value).trim();
+                  }
+                }
+              }
+              if (Object.keys(updates).length > 0) {
+                const merged = { ...currentParsed, ...updates };
+                await conversationRepository.updateParsedFields(lead.id, merged);
+                logger.info({ leadId: lead.id, fields: Object.keys(updates) }, '[manychat/copilot] Extracted fields from user message');
+              }
+            }
+          }
+        } catch (extractErr) {
+          logger.warn({ err: extractErr.message }, '[manychat/copilot] Field extraction error');
+        }
+
         // Auto-assign to setter if not already assigned
         try {
           const { autoAssign } = require('../../../services/assignmentService');

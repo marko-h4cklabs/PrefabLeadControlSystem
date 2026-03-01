@@ -129,22 +129,38 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
 
   // Compute missing fields for field-aware suggestions
   const parsedFields = conv?.parsed_fields ?? {};
-  const collectedKeys = new Set(Object.keys(parsedFields).filter((k) => !k.startsWith('__') && parsedFields[k] != null && parsedFields[k] !== ''));
+  const collectedKeysLower = new Set(
+    Object.keys(parsedFields)
+      .filter((k) => !k.startsWith('__') && parsedFields[k] != null && parsedFields[k] !== '')
+      .map((k) => k.toLowerCase())
+  );
   const missingFields = orderedQuoteFields
-    .filter((f) => f.label && !collectedKeys.has(f.label))
-    .map((f) => f.label);
+    .filter((f) => {
+      const name = (f.name || '').toLowerCase();
+      const label = (f.label || '').toLowerCase();
+      return (f.label || f.name) && !collectedKeysLower.has(name) && !collectedKeysLower.has(label);
+    })
+    .map((f) => f.label || f.name);
+
+  // Build already-collected context so AI doesn't re-ask answered questions
+  const collectedEntries = Object.entries(parsedFields)
+    .filter(([k, v]) => !k.startsWith('__') && v != null && v !== '')
+    .map(([k, v]) => `- ${k}: ${v}`);
+  const collectedContext = collectedEntries.length > 0
+    ? `\n\nALREADY COLLECTED (do NOT ask about these again):\n${collectedEntries.join('\n')}`
+    : '';
 
   const calendlyUrl = effectiveBehavior?.calendly_url || null;
 
   let fieldAwarenessPrompt = '';
   if (missingFields.length > 0) {
     const fieldList = missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n');
-    fieldAwarenessPrompt = `\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT go off-topic, do NOT discuss anything unrelated to collecting these fields. Stay focused and conversational.`;
+    fieldAwarenessPrompt = `${collectedContext}\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list. Stay focused and conversational.`;
   } else if (orderedQuoteFields.length > 0) {
     const bookingMsg = calendlyUrl
-      ? `All required fields have been collected! NOW suggest booking a call. Include this Calendly link in at least one suggestion: ${calendlyUrl}`
+      ? `All required fields have been collected! NOW suggest booking a call. Include this Calendly link in at least one suggestion: ${calendlyUrl}\nDo NOT ask what day or time works. Just share the link.`
       : `All required fields have been collected! Focus on advancing toward the goal: ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
-    fieldAwarenessPrompt = `\n\n${bookingMsg}`;
+    fieldAwarenessPrompt = `${collectedContext}\n\n${bookingMsg}`;
   }
 
   const company = {
@@ -192,7 +208,7 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
 async function sendSuggestion(suggestionId, suggestionIndex, companyId) {
   const row = await pool.query(
     `SELECT id, lead_id, company_id, conversation_id, suggestions FROM reply_suggestions
-     WHERE id = $1 AND company_id = $2`,
+     WHERE id = $1 AND company_id = $2 AND used_at IS NULL`,
     [suggestionId, companyId]
   );
   const rec = row.rows[0];

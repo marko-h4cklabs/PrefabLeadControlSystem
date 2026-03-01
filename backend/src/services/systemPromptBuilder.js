@@ -148,7 +148,6 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
   let bookingSection = '';
   if (behavior?.booking_trigger_enabled) {
     const calendlyUrl = behavior.calendly_url || null;
-    const requiredFields = behavior.booking_required_fields || ['full_name', 'email_address'];
     const offerMessage =
       behavior.booking_offer_message ||
       (calendlyUrl
@@ -158,9 +157,9 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
     bookingSection = `
 
 BOOKING TRIGGER RULES:
-Once you have collected: ${Array.isArray(requiredFields) ? requiredFields.join(', ') : requiredFields} AND the lead seems interested (asking real questions, showing intent), proactively offer to book a call.
+Once the lead seems interested (asking real questions, showing intent) and you have collected the required data fields listed in DATA TO COLLECT, proactively offer to book a call.
 Use this message to offer booking: "${offerMessage}"
-${calendlyUrl ? `If they accept, send them the Calendly link: ${calendlyUrl}` : 'If they accept, let them know the team will follow up to schedule.'}
+${calendlyUrl ? `If they accept, send them the Calendly link: ${calendlyUrl}\nNEVER ask what day or time works. NEVER negotiate scheduling. Just share the Calendly link and let them book directly.` : 'If they accept, let them know the team will follow up to schedule.'}
 NEVER show calendar time slots or available times in the chat. NEVER list numbered time options.
 Only offer booking ONCE per conversation. If they decline, respect it and continue naturally.
 `;
@@ -203,7 +202,7 @@ ${closingInstructions ? `Closing: ${closingInstructions}` : ''}
 ${socialProofText}
 ${prohibitedText}
 ${languageInstruction}
-${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}` : ''}
+${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
 ${fillerRules}${humanErrorInstructions}
 ${bookingSection}
@@ -246,7 +245,7 @@ CRITICAL RULES:
 ${fillerRules}${humanErrorInstructions}
 ${bookingSection}
 
-${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}` : ''}
+${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}
 
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
 

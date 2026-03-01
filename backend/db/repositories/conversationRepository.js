@@ -72,6 +72,17 @@ async function getByLeadId(leadId) {
 }
 
 async function appendMessage(leadId, role, content, meta = {}) {
+  // Dedup: skip if the last message has the same role + content (prevents double-send)
+  const existing = await pool.query(
+    'SELECT messages FROM conversations WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [leadId]
+  );
+  const msgs = existing.rows[0]?.messages ?? [];
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === role && last.content === (content ?? '')) {
+    return toPlainConversation(existing.rows[0]);
+  }
+
   const message = {
     role,
     content: content ?? '',

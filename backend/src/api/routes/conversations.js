@@ -231,16 +231,16 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid suggestion ID required');
     }
 
-    // Verify suggestion belongs to this company
+    // Verify suggestion belongs to this company and hasn't already been sent
     const sugRow = await pool.query(
       `SELECT rs.id, rs.lead_id FROM reply_suggestions rs
        JOIN leads l ON l.id = rs.lead_id
-       WHERE rs.id = $1 AND l.company_id = $2`,
+       WHERE rs.id = $1 AND l.company_id = $2 AND rs.used_at IS NULL`,
       [suggestionId, companyId]
     );
     const suggestion = sugRow.rows[0];
     if (!suggestion) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Suggestion not found');
+      return errorJson(res, 404, 'NOT_FOUND', 'Suggestion not found or already sent');
     }
 
     // Get lead + ManyChat API key for sending
