@@ -117,9 +117,10 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   ]);
 
   const conv = convRow.rows[0];
-  const quoteSnapshot = conv?.quote_snapshot ?? [];
+  const quoteSnapshot = conv?.quote_snapshot;
   const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
-  const orderedQuoteFields = (Array.isArray(quoteSnapshot) ? quoteSnapshot : quoteFields || [])
+  // Use quote_snapshot if it has entries, otherwise fall back to the live quoteFields config
+  const orderedQuoteFields = (Array.isArray(quoteSnapshot) && quoteSnapshot.length > 0 ? quoteSnapshot : quoteFields || [])
     .filter((f) => f && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
@@ -135,7 +136,8 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
 
   let fieldAwarenessPrompt = '';
   if (missingFields.length > 0) {
-    fieldAwarenessPrompt = `\n\nIMPORTANT — Fields NOT yet collected from this lead: ${missingFields.join(', ')}.\nPrioritize naturally collecting these in your suggestions. Weave questions about these fields into the conversation flow without making it feel like a form.`;
+    const fieldList = missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n');
+    fieldAwarenessPrompt = `\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
   } else if (orderedQuoteFields.length > 0) {
     fieldAwarenessPrompt = `\n\nAll required data fields have been collected. Focus suggestions on advancing toward the goal (${effectiveBehavior?.conversation_goal || 'booking a call'}).`;
   }
