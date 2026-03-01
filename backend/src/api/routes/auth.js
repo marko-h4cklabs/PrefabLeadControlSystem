@@ -545,12 +545,19 @@ router.post('/verify-phone', authMiddleware, async (req, res) => {
 
 // Google OAuth
 // GET /api/auth/google — redirect to Google
+// Accepts optional ?invite=CODE for team invite flow
 router.get('/google', oauthLimiter, (req, res) => {
   if (!isGoogleConfigured()) {
     const frontendUrl =
       process.env.FRONTEND_URL || 'https://app.eightpath.dev';
     return res.redirect(`${frontendUrl}/login?error=google_not_configured`);
   }
+  // Pass invite code through Google OAuth state parameter
+  const statePayload = {};
+  if (req.query.invite) statePayload.invite = String(req.query.invite);
+  const stateStr = Object.keys(statePayload).length > 0
+    ? Buffer.from(JSON.stringify(statePayload)).toString('base64url')
+    : '';
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID,
     redirect_uri: `${process.env.BACKEND_URL}/api/auth/google/callback`,
@@ -559,6 +566,7 @@ router.get('/google', oauthLimiter, (req, res) => {
     access_type: 'offline',
     prompt: 'select_account',
   });
+  if (stateStr) params.set('state', stateStr);
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
 
@@ -567,8 +575,17 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
   const frontendUrl =
     process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
     if (!code) return res.redirect(`${frontendUrl}/login?error=google_denied`);
+
+    // Parse invite code from state parameter
+    let inviteCode = null;
+    if (state) {
+      try {
+        const parsed = JSON.parse(Buffer.from(String(state), 'base64url').toString());
+        inviteCode = parsed.invite || null;
+      } catch { /* ignore invalid state */ }
+    }
 
     const tokenRes = await axios.post('https://oauth2.googleapis.com/token', {
       code,
@@ -592,6 +609,7 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
+      // Existing user — just log in
       const u = existing.rows[0];
       userId = u.id;
       companyId = u.company_id;
@@ -599,7 +617,54 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
         'UPDATE users SET google_id = $1, email_verified = true, last_login_at = NOW() WHERE id = $2',
         [googleId, userId]
       );
+    } else if (inviteCode) {
+      // New user joining via invite — add to existing company
+      isNewUser = true;
+      const inviteResult = await pool.query(
+        `SELECT ti.*, c.name AS company_name
+         FROM team_invites ti
+         JOIN companies c ON c.id = ti.company_id
+         WHERE ti.code = $1 AND ti.is_active = true`,
+        [String(inviteCode).toUpperCase()]
+      );
+      const invite = inviteResult.rows[0];
+      if (!invite || new Date() > new Date(invite.expires_at) ||
+          (invite.max_uses !== null && invite.used_count >= invite.max_uses)) {
+        return res.redirect(`${frontendUrl}/login?error=auth_failed`);
+      }
+
+      companyId = invite.company_id;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const userResult = await client.query(
+          `INSERT INTO users (
+             id, company_id, email, full_name, email_verified, google_id,
+             auth_provider, last_login_at, role, account_type, setter_status, created_at
+           )
+           VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), $5, 'team_member', 'offline', NOW())
+           RETURNING id`,
+          [companyId, email, name, googleId, invite.role]
+        );
+        userId = userResult.rows[0].id;
+        await client.query(
+          'UPDATE team_invites SET used_count = used_count + 1 WHERE id = $1',
+          [invite.id]
+        );
+        await client.query(
+          `INSERT INTO team_members (company_id, user_id, role, is_active)
+           VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`,
+          [companyId, userId, invite.role]
+        );
+        await client.query('COMMIT');
+      } catch (txErr) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw txErr;
+      } finally {
+        client.release();
+      }
     } else {
+      // New user — create company (owner signup via Google)
       isNewUser = true;
       const companyName = name ? `${name}'s Business` : 'My Business';
       const webhookToken = crypto.randomBytes(32).toString('hex');
@@ -647,7 +712,8 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
     const refreshToken = await generateRefreshToken(userId);
     setRefreshCookie(res, refreshToken);
 
-    const redirectPath = isNewUser ? '/onboarding' : '/copilot';
+    // Team members (invite join) go straight to copilot, owners go to onboarding if new
+    const redirectPath = inviteCode ? '/copilot' : (isNewUser ? '/onboarding' : '/copilot');
     return res.redirect(
       `${frontendUrl}/auth/callback?token=${token}&companyId=${companyId}&isNew=${isNewUser}&redirect=${redirectPath}`
     );
@@ -737,7 +803,7 @@ router.get('/invite/:code', async (req, res) => {
 // --- Team member join (public, no auth) ---
 router.post('/join', authLimiter, async (req, res) => {
   try {
-    const { code, email, password, full_name } = req.body || {};
+    const { code, email, password, full_name, phone_number, country_code } = req.body || {};
 
     if (!code || !email || !password || !full_name) {
       return res.status(400).json({
@@ -796,10 +862,10 @@ router.post('/join', authLimiter, async (req, res) => {
 
       // Create user with invite's company and role
       const userRes = await client.query(
-        `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, setter_status)
-         VALUES ($1, $2, $3, $4, $5, 'team_member', 'offline')
+        `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, setter_status, phone_number, country_code)
+         VALUES ($1, $2, $3, $4, $5, 'team_member', 'offline', $6, $7)
          RETURNING id, email, role, full_name, company_id`,
-        [invite.company_id, String(email).trim().toLowerCase(), passwordHash, invite.role, String(full_name).trim()]
+        [invite.company_id, String(email).trim().toLowerCase(), passwordHash, invite.role, String(full_name).trim(), phone_number || null, country_code || null]
       );
       user = userRes.rows[0];
 
