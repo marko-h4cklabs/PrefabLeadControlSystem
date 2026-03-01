@@ -652,9 +652,9 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
           [invite.id]
         );
         await client.query(
-          `INSERT INTO team_members (company_id, user_id, role, is_active)
-           VALUES ($1, $2, $3, true) ON CONFLICT DO NOTHING`,
-          [companyId, userId, invite.role]
+          `INSERT INTO team_members (company_id, name, email, role, is_active)
+           VALUES ($1, $2, $3, $4, true) ON CONFLICT DO NOTHING`,
+          [companyId, name || 'Team Member', email, invite.role]
         );
         await client.query('COMMIT');
       } catch (txErr) {
@@ -877,10 +877,10 @@ router.post('/join', authLimiter, async (req, res) => {
 
       // Add to team_members
       await client.query(
-        `INSERT INTO team_members (company_id, user_id, role, is_active)
-         VALUES ($1, $2, $3, true)
+        `INSERT INTO team_members (company_id, name, email, role, is_active)
+         VALUES ($1, $2, $3, $4, true)
          ON CONFLICT DO NOTHING`,
-        [invite.company_id, user.id, invite.role]
+        [invite.company_id, String(full_name).trim(), String(email).trim().toLowerCase(), invite.role]
       );
 
       await client.query('COMMIT');
