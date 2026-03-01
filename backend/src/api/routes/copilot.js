@@ -586,6 +586,32 @@ router.get('/leads/:leadId/summary', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/copilot/leads/:leadId
+ * Permanently delete a lead and all related data (conversations, suggestions, etc.).
+ * All child tables use ON DELETE CASCADE so a single DELETE suffices.
+ */
+router.delete('/leads/:leadId', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { leadId } = req.params;
+
+    const result = await pool.query(
+      'DELETE FROM leads WHERE id = $1 AND company_id = $2 RETURNING id, name',
+      [leadId, companyId]
+    );
+
+    if (result.rowCount === 0) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Lead not found');
+    }
+
+    logger.info({ leadId, companyId }, '[copilot] Lead deleted');
+    res.json({ success: true, deleted: result.rows[0] });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Copilot Settings (Mode-Scoped)
 // ---------------------------------------------------------------------------
