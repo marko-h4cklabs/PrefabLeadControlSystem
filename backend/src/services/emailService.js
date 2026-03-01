@@ -1,38 +1,56 @@
-const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const logger = require('../lib/logger');
 
 function isEmailConfigured() {
   return !!(process.env.SENDGRID_API_KEY || (process.env.SMTP_USER && process.env.SMTP_PASS));
 }
 
-function getTransporter() {
-  // Supports SendGrid, Mailgun, or any SMTP
+/**
+ * Send email using SendGrid HTTP API (preferred) or nodemailer SMTP fallback.
+ * Railway blocks outbound SMTP (port 587), so we use SendGrid's REST API on port 443.
+ */
+async function sendEmail({ to, subject, html }) {
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
+  const appName = process.env.APP_NAME || 'EightPath';
+
   if (process.env.SENDGRID_API_KEY) {
-    return nodemailer.createTransport({
-      host: 'smtp.sendgrid.net',
-      port: 587,
+    // Use SendGrid HTTP API — works on Railway (port 443 not blocked)
+    const sgMail = require('@sendgrid/mail');
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    await sgMail.send({
+      to,
+      from: { email: fromEmail, name: appName },
+      subject,
+      html,
+    });
+    return;
+  }
+
+  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+    // Fallback: nodemailer SMTP
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: parseInt(process.env.SMTP_PORT || '587', 10),
+      secure: false,
       auth: {
-        user: 'apikey',
-        pass: process.env.SENDGRID_API_KEY,
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 15000,
     });
+    await transporter.sendMail({
+      from: `"${appName}" <${fromEmail}>`,
+      to,
+      subject,
+      html,
+    });
+    return;
   }
-  // Generic SMTP fallback
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: false,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
-  });
+
+  throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
 }
 
 function generateVerifyToken() {
@@ -44,18 +62,11 @@ function generateVerificationCode() {
 }
 
 async function sendVerificationEmail(toEmail, userName, token) {
-  if (!isEmailConfigured()) {
-    throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
-  }
-  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
   const appName = process.env.APP_NAME || 'EightPath';
-  const backendUrl =
-    process.env.BACKEND_URL || 'https://api.eightpath.dev';
+  const backendUrl = process.env.BACKEND_URL || 'https://api.eightpath.dev';
   const verifyUrl = `${backendUrl}/api/auth/verify-email?token=${token}`;
 
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"${appName}" <${fromEmail}>`,
+  await sendEmail({
     to: toEmail,
     subject: `Verify your email — ${appName}`,
     html: `
@@ -77,15 +88,11 @@ async function sendVerificationEmail(toEmail, userName, token) {
 }
 
 async function sendPasswordResetEmail(toEmail, token) {
-  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
   const appName = process.env.APP_NAME || 'EightPath';
-  const frontendUrl =
-    process.env.FRONTEND_URL || 'https://app.eightpath.dev';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://app.eightpath.dev';
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
 
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"${appName}" <${fromEmail}>`,
+  await sendEmail({
     to: toEmail,
     subject: `Reset your password — ${appName}`,
     html: `
@@ -104,18 +111,12 @@ async function sendPasswordResetEmail(toEmail, token) {
 }
 
 async function sendVerificationCode(toEmail, userName, code) {
-  if (!isEmailConfigured()) {
-    throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
-  }
-  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
   const appName = process.env.APP_NAME || 'EightPath';
   const digits = code.split('').map(d =>
     `<span style="display:inline-block;width:44px;height:52px;line-height:52px;text-align:center;font-size:24px;font-weight:bold;background:#1a1a1a;border:1px solid #333;border-radius:8px;margin:0 3px;color:#fff;">${d}</span>`
   ).join('');
 
-  const transporter = getTransporter();
-  await transporter.sendMail({
-    from: `"${appName}" <${fromEmail}>`,
+  await sendEmail({
     to: toEmail,
     subject: `Your verification code — ${appName}`,
     html: `

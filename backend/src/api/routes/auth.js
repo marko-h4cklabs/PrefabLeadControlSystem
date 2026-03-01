@@ -217,13 +217,16 @@ router.post('/signup', authLimiter, async (req, res) => {
       ]);
     }
 
-    sendVerificationCode(
-      user.email,
-      body.full_name || body.fullName || companyName,
-      code
-    ).catch((err) => {
-      logger.error('[register] Failed to send verification code:', err.message);
-    });
+    try {
+      await sendVerificationCode(
+        user.email,
+        body.full_name || body.fullName || companyName,
+        code
+      );
+    } catch (emailErr) {
+      logger.error('[register] Failed to send verification code:', emailErr.message);
+      // User is created but email failed — they can use "Resend code" later
+    }
 
     // Do NOT return a token — user must verify email code first
     res.status(201).json({
@@ -501,7 +504,8 @@ router.post('/resend-code', authLimiter, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     logger.error('[auth] resend-code:', err.message);
-    res.status(500).json({ error: 'Failed to send verification code' });
+    // Still return success to prevent email enumeration, but log the error
+    res.json({ success: true });
   }
 });
 
@@ -998,13 +1002,15 @@ router.post('/join', authLimiter, async (req, res) => {
       [codeHash, codeExpires, user.id]
     );
 
-    sendVerificationCode(
-      user.email,
-      user.full_name,
-      verifyCode
-    ).catch((err) => {
-      logger.error('[join] Failed to send verification code:', err.message);
-    });
+    try {
+      await sendVerificationCode(
+        user.email,
+        user.full_name,
+        verifyCode
+      );
+    } catch (emailErr) {
+      logger.error('[join] Failed to send verification code:', emailErr.message);
+    }
 
     // Do NOT return token — team member must verify email first
     res.status(201).json({
