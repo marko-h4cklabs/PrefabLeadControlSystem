@@ -394,6 +394,14 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
+    // Block unverified email users
+    if (!user.email_verified) {
+      return res.status(403).json({
+        error: { code: 'EMAIL_NOT_VERIFIED', message: 'Please verify your email before signing in. Check your inbox for the verification link.' },
+        email: user.email,
+      });
+    }
+
     const company = await companyRepository.findById(user.company_id);
     await pool.query(
       'UPDATE users SET login_attempts = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1',
@@ -474,6 +482,36 @@ router.post('/resend-verification', authMiddleware, async (req, res) => {
     res.json({ success: true, message: 'Verification email sent' });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/auth/resend-verification-public — no auth required, accepts email
+router.post('/resend-verification-public', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const result = await pool.query(
+      'SELECT id, email, full_name, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
+      [email.trim().toLowerCase()]
+    );
+    const user = result.rows[0];
+    // Always return success to prevent email enumeration
+    if (!user || user.email_verified) {
+      return res.json({ success: true, message: 'If that email exists and is unverified, a verification link has been sent.' });
+    }
+
+    const token = generateVerifyToken();
+    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pool.query(
+      'UPDATE users SET email_verify_token = $1, email_verify_expires = $2 WHERE id = $3',
+      [token, expires, user.id]
+    );
+    await sendVerificationEmail(user.email, user.full_name, token);
+    res.json({ success: true, message: 'If that email exists and is unverified, a verification link has been sent.' });
+  } catch (err) {
+    logger.error('[auth] resend-verification-public:', err.message);
+    res.status(500).json({ error: 'Failed to send verification email' });
   }
 });
 
@@ -745,6 +783,8 @@ router.get('/me', authMiddleware, async (req, res) => {
     const company = await companyRepository.findById(req.user.companyId);
     const operating_mode = company?.operating_mode ?? null;
     const google_calendar_connected = company?.google_calendar_connected === true;
+    // Fetch email_verified from DB
+    const userRow = await pool.query('SELECT email_verified FROM users WHERE id = $1', [req.user.id]).then(r => r.rows[0]);
     res.json({
       id: req.user.id,
       email: req.user.email,
@@ -757,6 +797,7 @@ router.get('/me', authMiddleware, async (req, res) => {
       is_admin: Boolean(req.user.is_admin),
       operating_mode,
       google_calendar_connected,
+      email_verified: userRow?.email_verified ?? false,
     });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
