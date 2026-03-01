@@ -16,6 +16,7 @@ const { buildSystemPrompt } = require('../src/services/systemPromptBuilder');
 const { decrypt } = require('../src/lib/encryption');
 const { companyRepository } = require('../db/repositories');
 const { sendInstagramMessage } = require('../src/services/manychatService');
+const { publish: publishEvent } = require('../src/lib/eventBus');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
@@ -166,6 +167,15 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   );
   const row = result.rows[0];
   const parsedSuggestions = row ? (row.suggestions && typeof row.suggestions === 'object' ? row.suggestions : JSON.parse(row.suggestions || '[]')) : suggestions;
+
+  // Emit SSE event so setter sees suggestions in real-time
+  publishEvent(companyId, {
+    type: 'suggestion_ready',
+    leadId,
+    conversationId,
+    suggestionId: row?.id || null,
+  }).catch(() => {});
+
   return { suggestion_id: row?.id || null, suggestions: parsedSuggestions };
 }
 

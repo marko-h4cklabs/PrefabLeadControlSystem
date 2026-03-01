@@ -11,6 +11,7 @@ const { errorJson } = require('../middleware/errors');
 const { requireRole } = require('../middleware/auth');
 const { chatbotBehaviorRepository, chatbotCompanyInfoRepository, chatbotQuoteFieldsRepository } = require('../../../db/repositories');
 const { sendSuggestion } = require('../../../services/replySuggestionsService');
+const { publish: publishEvent } = require('../../lib/eventBus');
 
 /**
  * GET /api/copilot/active-dms
@@ -357,6 +358,12 @@ router.put('/leads/:leadId/assign', async (req, res) => {
       throw colErr;
     }
 
+    publishEvent(companyId, {
+      type: 'dm_assigned',
+      leadId,
+      assignedTo: user_id || null,
+    }).catch(() => {});
+
     res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -385,6 +392,15 @@ router.post('/leads/bulk-assign', async (req, res) => {
          WHERE id = ANY($3::uuid[]) AND company_id = $4`,
         [user_id || null, user_id ? new Date().toISOString() : null, lead_ids, companyId]
       );
+      // Emit SSE event for each affected lead
+      for (const lid of lead_ids) {
+        publishEvent(companyId, {
+          type: 'dm_assigned',
+          leadId: lid,
+          assignedTo: user_id || null,
+        }).catch(() => {});
+      }
+
       res.json({ updated: result.rowCount });
     } catch (colErr) {
       if (colErr.message && (colErr.message.includes('assigned_to') || colErr.message.includes('assigned_at'))) {
@@ -1147,6 +1163,14 @@ router.put('/leads/:leadId/dm-status', async (req, res) => {
         );
       } catch { /* setter_metrics may not exist yet */ }
     }
+
+    // Emit SSE event so other connected clients see the status change
+    publishEvent(companyId, {
+      type: 'lead_updated',
+      leadId,
+      dm_status,
+      updatedBy: req.user.id,
+    }).catch(() => {});
 
     res.json({ success: true, dm_status });
   } catch (err) {

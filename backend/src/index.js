@@ -149,6 +149,10 @@ app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billi
 app.use(express.json());
 app.use(cookieParser());
 
+// SSE endpoint for real-time events (uses own JWT auth via query param)
+const sseRouter = require('./api/routes/sse');
+app.use('/api/sse', sseRouter);
+
 // ManyChat External Request endpoint for voice reply (public, no auth)
 const manychatVoiceReplyRouter = require('./api/routes/manychatVoiceReply');
 app.use('/api/manychat/voice-reply-content', manychatVoiceReplyRouter);

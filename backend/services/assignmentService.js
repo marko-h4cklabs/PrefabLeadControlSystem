@@ -6,6 +6,7 @@
 const { pool } = require('../db');
 const logger = require('../src/lib/logger');
 const { dispatch, dispatchToRole } = require('./notificationDispatcher');
+const { publish: publishEvent } = require('../src/lib/eventBus');
 
 /**
  * Auto-assign a lead to the best available setter.
@@ -102,6 +103,14 @@ async function autoAssign(companyId, leadId) {
         metadata: { setter_id: setter.id, lead_name: leadName },
       });
     } catch { /* best effort */ }
+
+    // Emit SSE event so DM list updates in real-time
+    publishEvent(companyId, {
+      type: 'dm_assigned',
+      leadId,
+      assignedTo: setter.id,
+      assignedName: setter.full_name,
+    }).catch(() => {});
 
     return { assigned: true, userId: setter.id };
   } catch (err) {

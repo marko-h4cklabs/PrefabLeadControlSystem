@@ -26,6 +26,7 @@ const incomingMessageQueue = require('../../../services/incomingMessageQueue');
 const { checkMessageLimit } = require('../../middleware/checkSubscription');
 const { isMessageProcessed, acquireDistributedLock, releaseDistributedLock } = require('../../lib/redis');
 const { decrypt } = require('../../lib/encryption');
+const { publish: publishEvent } = require('../../lib/eventBus');
 
 const rawJsonParser = express.raw({ type: 'application/json' });
 
@@ -364,6 +365,17 @@ async function processManyChatPayload(payload, overrideCompany) {
   analyzeInboundMessage(lead.id, conversationAfter?.id, companyId, messagesForIntelligence).catch((err) => {
     logger.error({ err: err.message }, '[manychat/webhook] lead intelligence error');
   });
+
+  // Emit SSE event so connected clients see the new message in real-time
+  publishEvent(companyId, {
+    type: 'new_message',
+    leadId: lead.id,
+    conversationId: conversation?.id,
+    preview: messagePreview || content?.slice(0, 100) || '',
+    leadName: lead.name || subscriberName || null,
+    assignedTo: lead.assigned_to || null,
+    isNewLead,
+  }).catch(() => {});
 
   const quoteFields = await chatbotQuoteFieldsRepository.list(companyId);
   const hasChatbot = Array.isArray(quoteFields) && quoteFields.length > 0;
