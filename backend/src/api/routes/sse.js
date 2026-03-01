@@ -39,6 +39,16 @@ router.get('/events', async (req, res) => {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
+  // Track connection state to avoid writing to a closed stream
+  let closed = false;
+
+  // Swallow errors on the response stream — writing after client disconnect
+  // emits an async 'error' event that would otherwise become an uncaught exception.
+  res.on('error', (err) => {
+    logger.debug({ err: err.message, userId, companyId }, '[sse] Response stream error (client likely disconnected)');
+    closed = true;
+  });
+
   // Set SSE headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -47,29 +57,38 @@ router.get('/events', async (req, res) => {
     'X-Accel-Buffering': 'no', // Disable nginx buffering
   });
 
+  // Safe write helper — only writes if client is still connected
+  const safeWrite = (data) => {
+    if (closed) return false;
+    try {
+      res.write(data);
+      return true;
+    } catch {
+      closed = true;
+      return false;
+    }
+  };
+
   // Send initial connection event
-  res.write(`data: ${JSON.stringify({ type: 'connected', userId, companyId })}\n\n`);
+  safeWrite(`data: ${JSON.stringify({ type: 'connected', userId, companyId })}\n\n`);
 
   // Subscribe to company events via Redis Pub/Sub
   const subscription = subscribe(companyId, (event) => {
-    try {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    } catch {
-      // Client disconnected
-    }
+    safeWrite(`data: ${JSON.stringify(event)}\n\n`);
   });
 
   // Heartbeat to prevent proxy/load balancer timeouts
   const heartbeat = setInterval(() => {
-    try {
-      res.write(`: heartbeat\n\n`);
-    } catch {
-      // Client disconnected
+    if (!safeWrite(`: heartbeat\n\n`)) {
+      // Client gone — trigger cleanup
+      cleanup();
     }
   }, HEARTBEAT_INTERVAL_MS);
 
   // Cleanup on disconnect
   const cleanup = () => {
+    if (closed) return; // Prevent double cleanup
+    closed = true;
     clearInterval(heartbeat);
     subscription.unsubscribe();
     logger.debug({ userId, companyId }, '[sse] Client disconnected');
