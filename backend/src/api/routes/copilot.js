@@ -1438,6 +1438,19 @@ router.put('/settings/calendly', requireRole('owner', 'admin', 'setter'), async 
       }
     }
 
+    // Also save the scheduling URL so AI prompts use the correct Calendly link
+    if (validation.scheduling_url) {
+      const { chatbotBehaviorRepository } = require('../../../db/repositories');
+      await chatbotBehaviorRepository.upsert(companyId, {
+        calendly_url: validation.scheduling_url,
+        booking_trigger_enabled: true,
+      }).catch(() => {});
+      await pool.query(
+        'UPDATE companies SET calendly_url = $1 WHERE id = $2',
+        [validation.scheduling_url, companyId]
+      ).catch(() => {});
+    }
+
     res.json({
       success: true,
       calendly_name: validation.name,

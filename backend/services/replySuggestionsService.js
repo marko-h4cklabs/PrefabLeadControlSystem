@@ -134,12 +134,17 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     .filter((f) => f.label && !collectedKeys.has(f.label))
     .map((f) => f.label);
 
+  const calendlyUrl = effectiveBehavior?.calendly_url || null;
+
   let fieldAwarenessPrompt = '';
   if (missingFields.length > 0) {
     const fieldList = missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n');
-    fieldAwarenessPrompt = `\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
+    fieldAwarenessPrompt = `\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT go off-topic, do NOT discuss anything unrelated to collecting these fields. Stay focused and conversational.`;
   } else if (orderedQuoteFields.length > 0) {
-    fieldAwarenessPrompt = `\n\nAll required data fields have been collected. Focus suggestions on advancing toward the goal (${effectiveBehavior?.conversation_goal || 'booking a call'}).`;
+    const bookingMsg = calendlyUrl
+      ? `All required fields have been collected! NOW suggest booking a call. Include this Calendly link in at least one suggestion: ${calendlyUrl}`
+      : `All required fields have been collected! Focus on advancing toward the goal: ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
+    fieldAwarenessPrompt = `\n\n${bookingMsg}`;
   }
 
   const company = {
