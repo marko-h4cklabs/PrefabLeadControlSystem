@@ -366,12 +366,15 @@ async function processManyChatPayload(payload, overrideCompany) {
     logger.error({ err: err.message }, '[manychat/webhook] lead intelligence error');
   });
 
-  // Emit SSE event so connected clients see the new message in real-time
+  // Emit SSE event with full message data so frontend can display instantly
   publishEvent(companyId, {
     type: 'new_message',
     leadId: lead.id,
     conversationId: conversation?.id,
     preview: messagePreview || content?.slice(0, 100) || '',
+    role: 'user',
+    content: content || '',
+    messageTimestamp: new Date().toISOString(),
     leadName: lead.name || subscriberName || null,
     assignedTo: lead.assigned_to || null,
     isNewLead,

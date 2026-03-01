@@ -267,12 +267,15 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       [suggestionId]
     );
 
-    // Emit SSE event so chat and DM list update in real-time
+    // Emit SSE event with full message data so frontend can display instantly
     publishEvent(companyId, {
       type: 'new_message',
       leadId: suggestion.lead_id,
       conversationId: req.params.conversationId,
       preview: text.trim().slice(0, 100),
+      role: 'assistant',
+      content: text.trim(),
+      messageTimestamp: new Date().toISOString(),
     }).catch(() => {});
 
     res.json({ success: true, message_sent: text.trim() });
