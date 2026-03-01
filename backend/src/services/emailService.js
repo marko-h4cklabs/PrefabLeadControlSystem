@@ -39,6 +39,10 @@ function generateVerifyToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function generateVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 async function sendVerificationEmail(toEmail, userName, token) {
   if (!isEmailConfigured()) {
     throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
@@ -99,4 +103,37 @@ async function sendPasswordResetEmail(toEmail, token) {
   });
 }
 
-module.exports = { generateVerifyToken, sendVerificationEmail, sendPasswordResetEmail, isEmailConfigured };
+async function sendVerificationCode(toEmail, userName, code) {
+  if (!isEmailConfigured()) {
+    throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
+  }
+  const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
+  const appName = process.env.APP_NAME || 'EightPath';
+  const digits = code.split('').map(d =>
+    `<span style="display:inline-block;width:44px;height:52px;line-height:52px;text-align:center;font-size:24px;font-weight:bold;background:#1a1a1a;border:1px solid #333;border-radius:8px;margin:0 3px;color:#fff;">${d}</span>`
+  ).join('');
+
+  const transporter = getTransporter();
+  await transporter.sendMail({
+    from: `"${appName}" <${fromEmail}>`,
+    to: toEmail,
+    subject: `Your verification code — ${appName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 520px; margin: 0 auto; background: #0a0a0a; color: #ffffff; padding: 40px; border-radius: 12px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <div style="background: #f5c518; width: 48px; height: 48px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; color: #000;">P</div>
+        </div>
+        <h2 style="margin: 0 0 8px; font-size: 22px; text-align: center;">Welcome, ${userName || 'there'}!</h2>
+        <p style="color: #aaa; margin: 0 0 24px; text-align: center;">Enter this code to verify your email address.</p>
+        <div style="text-align: center; margin: 0 0 24px;">
+          ${digits}
+        </div>
+        <p style="color: #666; font-size: 12px; margin-top: 24px; text-align: center;">
+          This code expires in 10 minutes. If you didn't create an account, ignore this email.
+        </p>
+      </div>
+    `,
+  });
+}
+
+module.exports = { generateVerifyToken, generateVerificationCode, sendVerificationEmail, sendVerificationCode, sendPasswordResetEmail, isEmailConfigured };

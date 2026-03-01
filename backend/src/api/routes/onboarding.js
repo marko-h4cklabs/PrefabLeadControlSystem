@@ -92,7 +92,15 @@ router.post('/profile', async (req, res) => {
       [companyId, business_description, additional_notes || null]
     );
 
-    return res.json({ success: true });
+    // Transition user status: pending_onboarding → active
+    if (req.user && req.user.id) {
+      await pool.query(
+        "UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending_onboarding'",
+        [req.user.id]
+      );
+    }
+
+    return res.json({ success: true, status: 'active' });
   } catch (err) {
     logger.error('[onboarding] profile:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -106,7 +114,14 @@ router.post('/complete', async (req, res) => {
       'UPDATE companies SET onboarding_completed = true WHERE id = $1',
       [companyId]
     );
-    return res.json({ success: true, completed: true });
+    // Transition user status: pending_onboarding → active
+    if (req.user && req.user.id) {
+      await pool.query(
+        "UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending_onboarding'",
+        [req.user.id]
+      );
+    }
+    return res.json({ success: true, completed: true, status: 'active' });
   } catch (err) {
     logger.error('[onboarding] complete:', err.message);
     return errorJson(res, 500, 'INTERNAL_ERROR', err.message);

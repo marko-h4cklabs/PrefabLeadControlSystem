@@ -7,7 +7,7 @@ const axios = require('axios');
 const { pool } = require('../../../db');
 const { userRepository, companyRepository, chatbotBehaviorRepository } = require('../../../db/repositories');
 const { authMiddleware } = require('../middleware/auth');
-const { generateVerifyToken, sendVerificationEmail } = require('../../services/emailService');
+const { generateVerifyToken, generateVerificationCode, sendVerificationEmail, sendVerificationCode } = require('../../services/emailService');
 const { generateSmsCode, sendVerificationSms, isTwilioConfigured } = require('../../services/smsService');
 const rateLimit = require('express-rate-limit');
 const { getGoogleUserInfo, isGoogleConfigured } = require('../../services/googleAuthService');
@@ -69,6 +69,12 @@ const oauthLimiter = rateLimit({
   message: { error: { code: 'RATE_LIMIT', message: 'Too many requests' } },
 });
 
+const verifyCodeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: { code: 'RATE_LIMIT', message: 'Too many verification attempts' } },
+});
+
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 async function registerCompanyAndUser(body) {
@@ -111,8 +117,8 @@ async function registerCompanyAndUser(body) {
     );
     company = companyRes.rows[0];
     const userRes = await client.query(
-      `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type)
-       VALUES ($1, $2, $3, 'owner', $4, 'owner')
+      `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, status)
+       VALUES ($1, $2, $3, 'owner', $4, 'owner', 'email_unverified')
        RETURNING id, email, role, full_name`,
       [company.id, email, passwordHash, fullName || null]
     );
@@ -186,18 +192,22 @@ router.post('/signup', authLimiter, async (req, res) => {
       full_name: body.full_name || body.fullName,
     });
 
-    const verifyToken = generateVerifyToken();
-    const verifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // Generate 6-digit verification code
+    const code = generateVerificationCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const codeExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await pool.query(
       `UPDATE users SET
-        email_verify_token = $1,
-        email_verify_expires = $2,
         email_verified = false,
-        phone_number = $3,
-        country_code = $4,
-        auth_provider = 'email'
+        phone_number = $1,
+        country_code = $2,
+        auth_provider = 'email',
+        status = 'email_unverified',
+        verify_code = $3,
+        verify_code_expires = $4,
+        verify_code_attempts = 0
       WHERE id = $5`,
-      [verifyToken, verifyExpires, phoneNumber || null, countryCode || null, user.id]
+      [phoneNumber || null, countryCode || null, codeHash, codeExpires, user.id]
     );
 
     if (countryCode) {
@@ -207,47 +217,20 @@ router.post('/signup', authLimiter, async (req, res) => {
       ]);
     }
 
-    // Save onboarding profile data if provided
-    if (businessType || teamSize || monthlyLeadVolume) {
-      await pool.query(
-        `UPDATE companies SET business_type = $1, team_size = $2, monthly_lead_volume = $3 WHERE id = $4`,
-        [businessType, teamSize, monthlyLeadVolume, company.id]
-      );
-    }
-
-    if (businessDescription || additionalNotes) {
-      const { chatbotCompanyInfoRepository } = require('../../../db/repositories');
-      await chatbotCompanyInfoRepository.upsert(company.id, {
-        business_description: businessDescription || '',
-        additional_notes: additionalNotes || '',
-      }, 'copilot').catch((err) => {
-        logger.error('[register] Failed to save company info:', err.message);
-      });
-    }
-
-    // Mark onboarding as completed if profile data was provided
-    if (businessDescription) {
-      await pool.query('UPDATE companies SET onboarding_completed = true WHERE id = $1', [company.id]);
-    }
-
-    sendVerificationEmail(
+    sendVerificationCode(
       user.email,
       body.full_name || body.fullName || companyName,
-      verifyToken
+      code
     ).catch((err) => {
-      logger.error('[register] Failed to send verification email:', err.message);
+      logger.error('[register] Failed to send verification code:', err.message);
     });
 
-    const token = generateAccessToken({ id: user.id, companyId: company.id, role: user.role });
-    const refreshToken = await generateRefreshToken(user.id);
-    setRefreshCookie(res, refreshToken);
-
+    // Do NOT return a token — user must verify email code first
     res.status(201).json({
-      token,
-      user: { id: user.id, email: user.email, role: user.role, email_verified: false },
-      company: { id: company.id, name: company.name, webhook_token: company.webhook_token },
-      message: 'Account created. Please check your email to verify your account.',
+      success: true,
+      email: user.email,
       requires_verification: true,
+      message: 'Verification code sent to your email.',
     });
   } catch (err) {
     if (err.statusCode === 409) {
@@ -266,75 +249,10 @@ router.post('/signup', authLimiter, async (req, res) => {
   }
 });
 
-router.post('/register', authLimiter, async (req, res) => {
-  try {
-    const body = req.body || {};
-    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.trim() === '') {
-      return res.status(500).json({
-        error: { code: 'INTERNAL_ERROR', message: 'JWT_SECRET is not configured' },
-      });
-    }
-    const phoneNumber = body.phone_number || body.phoneNumber || null;
-    const countryCode = body.country_code || body.countryCode || null;
-    const { company, user } = await registerCompanyAndUser({
-      company_name: body.company_name || body.companyName,
-      full_name: body.full_name || body.fullName,
-      email: body.email,
-      password: body.password,
-    });
-
-    const verifyToken = generateVerifyToken();
-    const verifyExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await pool.query(
-      `UPDATE users SET
-        email_verify_token = $1,
-        email_verify_expires = $2,
-        email_verified = false,
-        phone_number = $3,
-        country_code = $4,
-        auth_provider = 'email'
-      WHERE id = $5`,
-      [verifyToken, verifyExpires, phoneNumber || null, countryCode || null, user.id]
-    );
-
-    if (countryCode) {
-      await pool.query('UPDATE companies SET country_code = $1 WHERE id = $2', [
-        countryCode,
-        company.id,
-      ]);
-    }
-
-    sendVerificationEmail(
-      user.email,
-      body.full_name || body.fullName || body.company_name || body.companyName,
-      verifyToken
-    ).catch((err) => {
-      logger.error('[register] Failed to send verification email:', err.message);
-    });
-
-    const token = generateAccessToken({ id: user.id, companyId: company.id, role: user.role });
-    const refreshToken = await generateRefreshToken(user.id);
-    setRefreshCookie(res, refreshToken);
-
-    res.status(201).json({
-      token,
-      user: { id: user.id, email: user.email, role: user.role, email_verified: false },
-      company: { id: company.id, name: company.name, webhook_token: company.webhook_token },
-      message: 'Account created. Please check your email to verify your account.',
-      requires_verification: true,
-    });
-  } catch (err) {
-    if (err.statusCode === 409) {
-      return res.status(409).json({ error: { code: 'CONFLICT', message: err.message } });
-    }
-    if (err.statusCode === 400) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: err.message } });
-    }
-    if (err.code === '23505') {
-      return res.status(409).json({ error: { code: 'CONFLICT', message: 'Email already in use' } });
-    }
-    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
-  }
+// /register is an alias for /signup
+router.post('/register', authLimiter, (req, res, next) => {
+  req.url = '/signup';
+  router.handle(req, res, next);
 });
 
 router.post('/login', authLimiter, async (req, res) => {
@@ -394,11 +312,12 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
-    // Block unverified email users
-    if (!user.email_verified) {
+    // Status-based access control
+    const userStatus = user.status || 'active';
+
+    if (userStatus === 'email_unverified' || userStatus === 'team_pending') {
       return res.status(403).json({
-        error: { code: 'EMAIL_NOT_VERIFIED', message: 'Please verify your email before signing in. Check your inbox for the verification link.' },
-        email: user.email,
+        error: { code: 'EMAIL_UNVERIFIED', message: 'Please verify your email first. Check your inbox for the verification code.' },
       });
     }
 
@@ -411,9 +330,24 @@ router.post('/login', authLimiter, async (req, res) => {
     const refreshToken = await generateRefreshToken(user.id);
     setRefreshCookie(res, refreshToken);
 
+    if (userStatus === 'pending_onboarding') {
+      return res.json({
+        token,
+        user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id, status: userStatus },
+        company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
+        redirect: '/onboarding',
+      });
+    }
+
+    if (userStatus !== 'active' && userStatus !== 'team_active') {
+      return res.status(403).json({
+        error: { code: 'ACCOUNT_NOT_ACTIVE', message: 'Account is not active' },
+      });
+    }
+
     res.json({
       token,
-      user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id },
+      user: { id: user.id, email: user.email, role: user.role, companyId: user.company_id, status: userStatus },
       company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
     });
   } catch (err) {
@@ -448,7 +382,8 @@ router.get('/verify-email', async (req, res) => {
 
     await pool.query(
       `UPDATE users
-       SET email_verified = true, email_verify_token = NULL, email_verify_expires = NULL
+       SET email_verified = true, email_verify_token = NULL, email_verify_expires = NULL,
+           status = CASE WHEN status = 'email_unverified' THEN 'pending_onboarding' ELSE status END
        WHERE id = $1`,
       [user.id]
     );
@@ -485,34 +420,148 @@ router.post('/resend-verification', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/auth/resend-verification-public — no auth required, accepts email
-router.post('/resend-verification-public', authLimiter, async (req, res) => {
+// POST /api/auth/verify-code — verify 6-digit email code (no auth required)
+router.post('/verify-code', verifyCodeLimiter, async (req, res) => {
+  try {
+    const { email, code } = req.body || {};
+    if (!email || !code) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Email and code are required' } });
+    }
+
+    const result = await pool.query(
+      `SELECT id, email, company_id, role, full_name, verify_code, verify_code_expires, verify_code_attempts
+       FROM users WHERE LOWER(email) = LOWER($1) AND status = 'email_unverified' LIMIT 1`,
+      [String(email).trim().toLowerCase()]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(400).json({ error: { code: 'INVALID_CODE', message: 'Invalid or expired code' } });
+    }
+    if ((user.verify_code_attempts || 0) >= 5) {
+      return res.status(429).json({ error: { code: 'TOO_MANY_ATTEMPTS', message: 'Too many attempts. Request a new code.' } });
+    }
+    if (!user.verify_code_expires || new Date() > new Date(user.verify_code_expires)) {
+      return res.status(400).json({ error: { code: 'CODE_EXPIRED', message: 'Code expired. Request a new one.' } });
+    }
+
+    const match = await bcrypt.compare(String(code).trim(), user.verify_code);
+    if (!match) {
+      await pool.query('UPDATE users SET verify_code_attempts = verify_code_attempts + 1 WHERE id = $1', [user.id]);
+      return res.status(400).json({ error: { code: 'INVALID_CODE', message: 'Invalid code' } });
+    }
+
+    // Success — transition to pending_onboarding
+    await pool.query(
+      `UPDATE users SET status = 'pending_onboarding', email_verified = true,
+       verify_code = NULL, verify_code_expires = NULL, verify_code_attempts = 0 WHERE id = $1`,
+      [user.id]
+    );
+
+    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+
+    const company = await companyRepository.findById(user.company_id);
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, role: user.role, status: 'pending_onboarding' },
+      company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
+    });
+  } catch (err) {
+    logger.error('[auth] verify-code:', err.message);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } });
+  }
+});
+
+// POST /api/auth/resend-code — resend 6-digit code (no auth required)
+router.post('/resend-code', authLimiter, async (req, res) => {
   try {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
     const result = await pool.query(
-      'SELECT id, email, full_name, email_verified FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
-      [email.trim().toLowerCase()]
+      `SELECT id, email, full_name, status FROM users
+       WHERE LOWER(email) = LOWER($1) AND status IN ('email_unverified', 'team_pending') LIMIT 1`,
+      [String(email).trim().toLowerCase()]
     );
     const user = result.rows[0];
     // Always return success to prevent email enumeration
-    if (!user || user.email_verified) {
-      return res.json({ success: true, message: 'If that email exists and is unverified, a verification link has been sent.' });
+    if (!user) {
+      return res.json({ success: true });
     }
 
-    const token = generateVerifyToken();
-    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const code = generateVerificationCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const codeExpires = new Date(Date.now() + 10 * 60 * 1000);
     await pool.query(
-      'UPDATE users SET email_verify_token = $1, email_verify_expires = $2 WHERE id = $3',
-      [token, expires, user.id]
+      'UPDATE users SET verify_code = $1, verify_code_expires = $2, verify_code_attempts = 0 WHERE id = $3',
+      [codeHash, codeExpires, user.id]
     );
-    await sendVerificationEmail(user.email, user.full_name, token);
-    res.json({ success: true, message: 'If that email exists and is unverified, a verification link has been sent.' });
+    await sendVerificationCode(user.email, user.full_name, code);
+    res.json({ success: true });
   } catch (err) {
-    logger.error('[auth] resend-verification-public:', err.message);
-    res.status(500).json({ error: 'Failed to send verification email' });
+    logger.error('[auth] resend-code:', err.message);
+    res.status(500).json({ error: 'Failed to send verification code' });
   }
+});
+
+// POST /api/auth/verify-team-code — verify team member 6-digit code (no auth required)
+router.post('/verify-team-code', verifyCodeLimiter, async (req, res) => {
+  try {
+    const { email, code } = req.body || {};
+    if (!email || !code) {
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Email and code are required' } });
+    }
+
+    const result = await pool.query(
+      `SELECT id, email, company_id, role, full_name, verify_code, verify_code_expires, verify_code_attempts
+       FROM users WHERE LOWER(email) = LOWER($1) AND status = 'team_pending' LIMIT 1`,
+      [String(email).trim().toLowerCase()]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(400).json({ error: { code: 'INVALID_CODE', message: 'Invalid or expired code' } });
+    }
+    if ((user.verify_code_attempts || 0) >= 5) {
+      return res.status(429).json({ error: { code: 'TOO_MANY_ATTEMPTS', message: 'Too many attempts. Request a new code.' } });
+    }
+    if (!user.verify_code_expires || new Date() > new Date(user.verify_code_expires)) {
+      return res.status(400).json({ error: { code: 'CODE_EXPIRED', message: 'Code expired. Request a new one.' } });
+    }
+
+    const match = await bcrypt.compare(String(code).trim(), user.verify_code);
+    if (!match) {
+      await pool.query('UPDATE users SET verify_code_attempts = verify_code_attempts + 1 WHERE id = $1', [user.id]);
+      return res.status(400).json({ error: { code: 'INVALID_CODE', message: 'Invalid code' } });
+    }
+
+    // Success — team member is now active
+    await pool.query(
+      `UPDATE users SET status = 'team_active', email_verified = true,
+       verify_code = NULL, verify_code_expires = NULL, verify_code_attempts = 0 WHERE id = $1`,
+      [user.id]
+    );
+
+    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
+    const refreshToken = await generateRefreshToken(user.id);
+    setRefreshCookie(res, refreshToken);
+
+    const company = await companyRepository.findById(user.company_id);
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, role: user.role, status: 'team_active' },
+      company: company ? { id: company.id, name: company.name } : { id: user.company_id, name: '' },
+    });
+  } catch (err) {
+    logger.error('[auth] verify-team-code:', err.message);
+    res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Verification failed' } });
+  }
+});
+
+// Keep old endpoint as alias for backward compatibility
+router.post('/resend-verification-public', authLimiter, (req, res, next) => {
+  req.url = '/resend-code';
+  router.handle(req, res, next);
 });
 
 // POST /api/auth/send-phone-code
@@ -647,14 +696,19 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
-      // Existing user — just log in
+      // Existing user — update Google ID and check status
       const u = existing.rows[0];
       userId = u.id;
       companyId = u.company_id;
+      // If user was email_unverified, transition to pending_onboarding (Google verifies email)
+      const newStatus = (u.status === 'email_unverified') ? 'pending_onboarding'
+        : (u.status === 'team_pending') ? 'team_active'
+        : u.status;
       await pool.query(
-        'UPDATE users SET google_id = $1, email_verified = true, last_login_at = NOW() WHERE id = $2',
-        [googleId, userId]
+        'UPDATE users SET google_id = $1, email_verified = true, last_login_at = NOW(), status = $3 WHERE id = $2',
+        [googleId, userId, newStatus]
       );
+      if (newStatus === 'pending_onboarding') isNewUser = true;
     } else if (inviteCode) {
       // New user joining via invite — add to existing company
       isNewUser = true;
@@ -678,9 +732,9 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
         const userResult = await client.query(
           `INSERT INTO users (
              id, company_id, email, full_name, email_verified, google_id,
-             auth_provider, last_login_at, role, account_type, setter_status, created_at
+             auth_provider, last_login_at, role, account_type, setter_status, status, created_at
            )
-           VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), $5, 'team_member', 'offline', NOW())
+           VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), $5, 'team_member', 'offline', 'team_active', NOW())
            RETURNING id`,
           [companyId, email, name, googleId, invite.role]
         );
@@ -721,9 +775,9 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
       const userResult = await pool.query(
         `INSERT INTO users (
            id, company_id, email, full_name, email_verified, google_id,
-           auth_provider, last_login_at, role, account_type, created_at
+           auth_provider, last_login_at, role, account_type, status, created_at
          )
-         VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), 'owner', 'owner', NOW())
+         VALUES (gen_random_uuid(), $1, $2, $3, true, $4, 'google', NOW(), 'owner', 'owner', 'pending_onboarding', NOW())
          RETURNING id`,
         [companyId, email, name, googleId]
       );
@@ -750,8 +804,10 @@ router.get('/google/callback', oauthLimiter, async (req, res) => {
     const refreshToken = await generateRefreshToken(userId);
     setRefreshCookie(res, refreshToken);
 
-    // Team members (invite join) go straight to copilot, owners go to onboarding if new
-    const redirectPath = inviteCode ? '/copilot' : (isNewUser ? '/onboarding' : '/copilot');
+    // Determine redirect based on status
+    const statusRow = await pool.query('SELECT status FROM users WHERE id = $1', [userId]);
+    const currentStatus = statusRow.rows[0]?.status || 'active';
+    const redirectPath = (currentStatus === 'pending_onboarding') ? '/onboarding' : '/copilot';
     return res.redirect(
       `${frontendUrl}/auth/callback?token=${token}&companyId=${companyId}&isNew=${isNewUser}&redirect=${redirectPath}`
     );
@@ -783,8 +839,8 @@ router.get('/me', authMiddleware, async (req, res) => {
     const company = await companyRepository.findById(req.user.companyId);
     const operating_mode = company?.operating_mode ?? null;
     const google_calendar_connected = company?.google_calendar_connected === true;
-    // Fetch email_verified from DB
-    const userRow = await pool.query('SELECT email_verified FROM users WHERE id = $1', [req.user.id]).then(r => r.rows[0]);
+    // Fetch status and email_verified from DB
+    const userRow = await pool.query('SELECT email_verified, status FROM users WHERE id = $1', [req.user.id]).then(r => r.rows[0]);
     res.json({
       id: req.user.id,
       email: req.user.email,
@@ -798,6 +854,7 @@ router.get('/me', authMiddleware, async (req, res) => {
       operating_mode,
       google_calendar_connected,
       email_verified: userRow?.email_verified ?? false,
+      status: userRow?.status || 'active',
     });
   } catch (err) {
     res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
@@ -901,10 +958,10 @@ router.post('/join', authLimiter, async (req, res) => {
     try {
       await client.query('BEGIN');
 
-      // Create user with invite's company and role
+      // Create user with invite's company and role, status = team_pending
       const userRes = await client.query(
-        `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, setter_status, phone_number, country_code)
-         VALUES ($1, $2, $3, $4, $5, 'team_member', 'offline', $6, $7)
+        `INSERT INTO users (company_id, email, password_hash, role, full_name, account_type, setter_status, phone_number, country_code, status)
+         VALUES ($1, $2, $3, $4, $5, 'team_member', 'offline', $6, $7, 'team_pending')
          RETURNING id, email, role, full_name, company_id`,
         [invite.company_id, String(email).trim().toLowerCase(), passwordHash, invite.role, String(full_name).trim(), phone_number || null, country_code || null]
       );
@@ -932,14 +989,29 @@ router.post('/join', authLimiter, async (req, res) => {
       client.release();
     }
 
-    const token = generateAccessToken({ id: user.id, companyId: user.company_id, role: user.role });
-    const refreshToken = await generateRefreshToken(user.id);
-    setRefreshCookie(res, refreshToken);
+    // Generate and send 6-digit verification code
+    const verifyCode = generateVerificationCode();
+    const codeHash = await bcrypt.hash(verifyCode, 10);
+    const codeExpires = new Date(Date.now() + 10 * 60 * 1000);
+    await pool.query(
+      'UPDATE users SET verify_code = $1, verify_code_expires = $2, verify_code_attempts = 0 WHERE id = $3',
+      [codeHash, codeExpires, user.id]
+    );
 
+    sendVerificationCode(
+      user.email,
+      user.full_name,
+      verifyCode
+    ).catch((err) => {
+      logger.error('[join] Failed to send verification code:', err.message);
+    });
+
+    // Do NOT return token — team member must verify email first
     res.status(201).json({
-      token,
-      user: { id: user.id, email: user.email, role: user.role, full_name: user.full_name },
-      company: { id: invite.company_id, name: invite.company_name },
+      success: true,
+      email: user.email,
+      requires_verification: true,
+      message: 'Verification code sent to your email.',
     });
   } catch (err) {
     logger.error({ err }, '[auth/join] Error joining team');
