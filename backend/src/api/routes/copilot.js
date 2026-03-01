@@ -1332,7 +1332,7 @@ router.get('/calendar/events', async (req, res) => {
  * PUT /api/copilot/settings/calendly
  * Save Calendly API token. Validates first, then encrypts and stores.
  */
-router.put('/settings/calendly', requireRole('owner', 'admin'), async (req, res) => {
+router.put('/settings/calendly', requireRole('owner', 'admin', 'setter'), async (req, res) => {
   try {
     const companyId = req.tenantId;
     const { api_token } = req.body || {};
@@ -1428,7 +1428,7 @@ router.get('/settings/calendly', async (req, res) => {
  * DELETE /api/copilot/settings/calendly
  * Disconnect Calendly by removing the API token.
  */
-router.delete('/settings/calendly', requireRole('owner', 'admin'), async (req, res) => {
+router.delete('/settings/calendly', requireRole('owner', 'admin', 'setter'), async (req, res) => {
   try {
     const companyId = req.tenantId;
     try {
