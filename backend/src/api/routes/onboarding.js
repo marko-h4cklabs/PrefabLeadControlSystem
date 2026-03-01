@@ -85,15 +85,11 @@ router.post('/profile', async (req, res) => {
     );
 
     // Save business description to chatbot_company_info
-    const descParts = [business_description];
-    if (additional_notes) descParts.push(additional_notes);
-    const fullDescription = descParts.join('\n\n');
-
     await pool.query(
-      `INSERT INTO chatbot_company_info (id, company_id, raw_text, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, NOW())
-       ON CONFLICT (company_id) DO UPDATE SET raw_text = $2, updated_at = NOW()`,
-      [companyId, fullDescription]
+      `INSERT INTO chatbot_company_info (company_id, business_description, additional_notes, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (company_id) DO UPDATE SET business_description = $2, additional_notes = $3, updated_at = NOW()`,
+      [companyId, business_description, additional_notes || null]
     );
 
     return res.json({ success: true });
