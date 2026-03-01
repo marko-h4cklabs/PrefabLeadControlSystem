@@ -123,23 +123,12 @@ function rowToObject(row) {
 }
 
 async function get(companyId, mode = 'autopilot') {
-  try {
-    const result = await pool.query(
-      `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-      [companyId, mode]
-    );
-    return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
-  } catch (err) {
-    // Fallback: operating_mode column may not exist yet (migration pending)
-    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-      const result = await pool.query(
-        `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1`,
-        [companyId]
-      );
-      return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
-    }
-    throw err;
-  }
+  // PK is company_id only — one row per company. Just fetch by company_id.
+  const result = await pool.query(
+    `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1`,
+    [companyId]
+  );
+  return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
 }
 
 async function upsert(companyId, payload, mode = 'autopilot') {
@@ -152,38 +141,23 @@ async function upsert(companyId, payload, mode = 'autopilot') {
   const columns = fields.map(([col]) => col);
   const values = fields.map(([_, v]) => v);
 
-  // Check if row exists for this company+mode
-  let exists = false;
-  try {
-    const check = await pool.query(
-      `SELECT 1 FROM chatbot_behavior WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-      [companyId, mode]
-    );
-    exists = check.rows.length > 0;
-  } catch (err) {
-    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-      const check = await pool.query(
-        `SELECT 1 FROM chatbot_behavior WHERE company_id = $1`,
-        [companyId]
-      );
-      exists = check.rows.length > 0;
-    } else {
-      throw err;
-    }
-  }
+  // PK is company_id only — one row per company. Check if ANY row exists.
+  const check = await pool.query(
+    `SELECT 1 FROM chatbot_behavior WHERE company_id = $1`,
+    [companyId]
+  );
 
-  if (exists) {
-    // UPDATE existing row
+  if (check.rows.length > 0) {
+    // UPDATE the existing row (also set operating_mode so GET can find it)
+    const setClauses = columns.map((col, i) => `"${col}" = $${i + 2}`).join(', ');
     try {
-      const setClauses = columns.map((col, i) => `"${col}" = $${i + 3}`).join(', ');
       await pool.query(
-        `UPDATE chatbot_behavior SET ${setClauses}, updated_at = NOW()
-         WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-        [companyId, mode, ...values]
+        `UPDATE chatbot_behavior SET ${setClauses}, operating_mode = $${columns.length + 2}, updated_at = NOW() WHERE company_id = $1`,
+        [companyId, ...values, mode]
       );
     } catch (err) {
-      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-        const setClauses = columns.map((col, i) => `"${col}" = $${i + 2}`).join(', ');
+      // operating_mode column may not exist
+      if (err.message && err.message.includes('operating_mode')) {
         await pool.query(
           `UPDATE chatbot_behavior SET ${setClauses}, updated_at = NOW() WHERE company_id = $1`,
           [companyId, ...values]
@@ -203,7 +177,7 @@ async function upsert(companyId, payload, mode = 'autopilot') {
         [companyId, mode, ...values]
       );
     } catch (err) {
-      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+      if (err.message && err.message.includes('operating_mode')) {
         const colsList = columns.map((c) => `"${c}"`).join(', ');
         const placeholders = columns.map((_, i) => `$${i + 2}`).join(', ');
         await pool.query(

@@ -7,38 +7,21 @@ const DEFAULTS = {
 };
 
 async function get(companyId, mode = 'autopilot') {
-  try {
-    const result = await pool.query(
-      `SELECT website_url, business_description, additional_notes
-       FROM chatbot_company_info WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-      [companyId, mode]
-    );
-    return result.rows[0] ? {
-      website_url: result.rows[0].website_url ?? '',
-      business_description: result.rows[0].business_description ?? '',
-      additional_notes: result.rows[0].additional_notes ?? '',
-    } : { ...DEFAULTS };
-  } catch (err) {
-    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-      const result = await pool.query(
-        `SELECT website_url, business_description, additional_notes
-         FROM chatbot_company_info WHERE company_id = $1`,
-        [companyId]
-      );
-      return result.rows[0] ? {
-        website_url: result.rows[0].website_url ?? '',
-        business_description: result.rows[0].business_description ?? '',
-        additional_notes: result.rows[0].additional_notes ?? '',
-      } : { ...DEFAULTS };
-    }
-    throw err;
-  }
+  // PK is company_id only — one row per company. Just fetch by company_id.
+  const result = await pool.query(
+    `SELECT website_url, business_description, additional_notes
+     FROM chatbot_company_info WHERE company_id = $1`,
+    [companyId]
+  );
+  return result.rows[0] ? {
+    website_url: result.rows[0].website_url ?? '',
+    business_description: result.rows[0].business_description ?? '',
+    additional_notes: result.rows[0].additional_notes ?? '',
+  } : { ...DEFAULTS };
 }
 
 async function upsert(companyId, payload, mode = 'autopilot') {
   const updates = [];
-  const values = [];
-  let i = 1;
   if (payload.website_url !== undefined) {
     updates.push({ col: 'website_url', val: payload.website_url });
   }
@@ -50,38 +33,23 @@ async function upsert(companyId, payload, mode = 'autopilot') {
   }
   if (updates.length === 0) return get(companyId, mode);
 
-  // Check if row exists for this company+mode
-  let exists = false;
-  try {
-    const check = await pool.query(
-      `SELECT 1 FROM chatbot_company_info WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-      [companyId, mode]
-    );
-    exists = check.rows.length > 0;
-  } catch (err) {
-    if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-      const check = await pool.query(
-        `SELECT 1 FROM chatbot_company_info WHERE company_id = $1`,
-        [companyId]
-      );
-      exists = check.rows.length > 0;
-    } else {
-      throw err;
-    }
-  }
+  // PK is company_id only — one row per company. Check if ANY row exists.
+  const check = await pool.query(
+    `SELECT 1 FROM chatbot_company_info WHERE company_id = $1`,
+    [companyId]
+  );
 
-  if (exists) {
-    // UPDATE existing row
+  if (check.rows.length > 0) {
+    // UPDATE the existing row (also set operating_mode so GET can find it)
+    const setClauses = updates.map((u, idx) => `${u.col} = $${idx + 2}`).join(', ');
     try {
-      const setClauses = updates.map((u, idx) => `${u.col} = $${idx + 3}`).join(', ');
       await pool.query(
-        `UPDATE chatbot_company_info SET ${setClauses}, updated_at = NOW()
-         WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
-        [companyId, mode, ...updates.map((u) => u.val)]
+        `UPDATE chatbot_company_info SET ${setClauses}, operating_mode = $${updates.length + 2}, updated_at = NOW() WHERE company_id = $1`,
+        [companyId, ...updates.map((u) => u.val), mode]
       );
     } catch (err) {
-      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-        const setClauses = updates.map((u, idx) => `${u.col} = $${idx + 2}`).join(', ');
+      // operating_mode column may not exist
+      if (err.message && err.message.includes('operating_mode')) {
         await pool.query(
           `UPDATE chatbot_company_info SET ${setClauses}, updated_at = NOW() WHERE company_id = $1`,
           [companyId, ...updates.map((u) => u.val)]
@@ -99,7 +67,7 @@ async function upsert(companyId, payload, mode = 'autopilot') {
         [companyId, mode, payload.website_url || null, payload.business_description || null, payload.additional_notes || null]
       );
     } catch (err) {
-      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+      if (err.message && err.message.includes('operating_mode')) {
         await pool.query(
           `INSERT INTO chatbot_company_info (company_id, website_url, business_description, additional_notes, updated_at)
            VALUES ($1, $2, $3, $4, NOW())`,
