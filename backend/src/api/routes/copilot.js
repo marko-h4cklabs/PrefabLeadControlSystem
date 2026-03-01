@@ -699,7 +699,8 @@ router.get('/settings/fields', async (req, res) => {
     }
     const fields = (result.rows || []).map((f) => ({
       id: f.id,
-      name: f.label || f.name,
+      name: f.name,
+      label: f.label || f.name,
       type: f.field_type || f.type || 'text',
       is_enabled: f.is_enabled !== false,
       qualification_prompt: f.qualification_prompt || '',
