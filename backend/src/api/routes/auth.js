@@ -168,6 +168,13 @@ router.post('/signup', authLimiter, async (req, res) => {
     const phoneNumber = body.phone_number || body.phoneNumber || null;
     const countryCode = body.country_code || body.countryCode || null;
 
+    // Onboarding profile fields (optional, sent when onboarding is completed before signup)
+    const businessDescription = body.business_description || body.businessDescription || null;
+    const additionalNotes = body.additional_notes || body.additionalNotes || null;
+    const businessType = body.business_type || body.businessType || null;
+    const teamSize = body.team_size || body.teamSize || null;
+    const monthlyLeadVolume = body.monthly_lead_volume || body.monthlyLeadVolume || null;
+
     const { company, user } = await registerCompanyAndUser({
       company_name: companyName,
       email: body.email,
@@ -194,6 +201,29 @@ router.post('/signup', authLimiter, async (req, res) => {
         countryCode,
         company.id,
       ]);
+    }
+
+    // Save onboarding profile data if provided
+    if (businessType || teamSize || monthlyLeadVolume) {
+      await pool.query(
+        `UPDATE companies SET business_type = $1, team_size = $2, monthly_lead_volume = $3 WHERE id = $4`,
+        [businessType, teamSize, monthlyLeadVolume, company.id]
+      );
+    }
+
+    if (businessDescription || additionalNotes) {
+      const { chatbotCompanyInfoRepository } = require('../../../db/repositories');
+      await chatbotCompanyInfoRepository.upsert(company.id, {
+        business_description: businessDescription || '',
+        additional_notes: additionalNotes || '',
+      }, 'copilot').catch((err) => {
+        logger.error('[register] Failed to save company info:', err.message);
+      });
+    }
+
+    // Mark onboarding as completed if profile data was provided
+    if (businessDescription) {
+      await pool.query('UPDATE companies SET onboarding_completed = true WHERE id = $1', [company.id]);
     }
 
     sendVerificationEmail(
