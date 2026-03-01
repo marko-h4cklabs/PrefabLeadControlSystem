@@ -55,6 +55,54 @@ router.get('/status', async (req, res) => {
   }
 });
 
+// POST /api/onboarding/profile — save business profile (used by Google OAuth signup flow)
+router.post('/profile', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const {
+      business_name,
+      business_description,
+      additional_notes,
+      business_type,
+      team_size,
+      monthly_lead_volume,
+    } = req.body || {};
+
+    if (!business_name || !business_description) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Business name and description are required');
+    }
+
+    // Update company info
+    await pool.query(
+      `UPDATE companies SET
+        name = $1,
+        business_type = COALESCE($2, business_type),
+        team_size = COALESCE($3, team_size),
+        monthly_lead_volume = COALESCE($4, monthly_lead_volume),
+        onboarding_completed = true
+      WHERE id = $5`,
+      [business_name, business_type || null, team_size || null, monthly_lead_volume || null, companyId]
+    );
+
+    // Save business description to chatbot_company_info
+    const descParts = [business_description];
+    if (additional_notes) descParts.push(additional_notes);
+    const fullDescription = descParts.join('\n\n');
+
+    await pool.query(
+      `INSERT INTO chatbot_company_info (id, company_id, raw_text, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, NOW())
+       ON CONFLICT (company_id) DO UPDATE SET raw_text = $2, updated_at = NOW()`,
+      [companyId, fullDescription]
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    logger.error('[onboarding] profile:', err.message);
+    return errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 router.post('/complete', async (req, res) => {
   try {
     const companyId = req.tenantId;

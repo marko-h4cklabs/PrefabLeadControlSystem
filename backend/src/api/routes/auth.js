@@ -564,7 +564,7 @@ router.get('/google', oauthLimiter, (req, res) => {
     response_type: 'code',
     scope: 'openid email profile',
     access_type: 'offline',
-    prompt: 'select_account',
+    prompt: 'consent',
   });
   if (stateStr) params.set('state', stateStr);
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
