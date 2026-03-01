@@ -1,9 +1,12 @@
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 
+function isEmailConfigured() {
+  return !!(process.env.SENDGRID_API_KEY || (process.env.SMTP_USER && process.env.SMTP_PASS));
+}
+
 function getTransporter() {
   // Supports SendGrid, Mailgun, or any SMTP
-  // Set EMAIL_PROVIDER=sendgrid or smtp
   if (process.env.SENDGRID_API_KEY) {
     return nodemailer.createTransport({
       host: 'smtp.sendgrid.net',
@@ -12,6 +15,9 @@ function getTransporter() {
         user: 'apikey',
         pass: process.env.SENDGRID_API_KEY,
       },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     });
   }
   // Generic SMTP fallback
@@ -23,6 +29,9 @@ function getTransporter() {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 }
 
@@ -31,6 +40,10 @@ function generateVerifyToken() {
 }
 
 async function sendVerificationEmail(toEmail, userName, token) {
+  if (!isEmailConfigured()) {
+    console.warn('[email] No email provider configured (set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS). Skipping verification email.');
+    return;
+  }
   const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
   const appName = process.env.APP_NAME || 'EightPath';
   const backendUrl =
@@ -87,4 +100,4 @@ async function sendPasswordResetEmail(toEmail, token) {
   });
 }
 
-module.exports = { generateVerifyToken, sendVerificationEmail, sendPasswordResetEmail };
+module.exports = { generateVerifyToken, sendVerificationEmail, sendPasswordResetEmail, isEmailConfigured };
