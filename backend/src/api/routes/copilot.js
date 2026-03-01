@@ -657,18 +657,87 @@ router.get('/settings/fields', async (req, res) => {
 
 /**
  * PUT /api/copilot/settings/fields
+ * Accepts { presets: [...] } where each item is { name, type, priority }.
+ * Replaces all copilot-mode quote fields for this company.
  */
 router.put('/settings/fields', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const { presets } = req.body;
+    const fields = req.body.presets || req.body.fields || (Array.isArray(req.body) ? req.body : null);
 
-    if (!Array.isArray(presets)) {
+    if (!Array.isArray(fields)) {
       return errorJson(res, 400, 'INVALID_INPUT', 'presets must be an array');
     }
 
-    const result = await chatbotQuoteFieldsRepository.updatePresets(companyId, presets, 'copilot');
-    res.json(result);
+    // Delete existing copilot-mode fields for this company, then recreate
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Remove existing copilot-mode fields
+      try {
+        await client.query(
+          `DELETE FROM chatbot_quote_fields WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = 'copilot'`,
+          [companyId]
+        );
+      } catch (colErr) {
+        // operating_mode column may not exist — delete all for this company
+        if (colErr.message && colErr.message.includes('operating_mode')) {
+          await client.query(
+            `DELETE FROM chatbot_quote_fields WHERE company_id = $1`,
+            [companyId]
+          );
+        } else {
+          throw colErr;
+        }
+      }
+
+      // Re-insert each field
+      for (let i = 0; i < fields.length; i++) {
+        const f = fields[i];
+        const name = (f.name || f.label || '').trim();
+        if (!name) continue;
+        const fieldType = (f.type || 'text').toLowerCase();
+        const priority = i + 1;
+        const required = f.priority === 'Required' || f.priority === 'required' || f.required === true;
+
+        try {
+          await client.query(
+            `INSERT INTO chatbot_quote_fields (company_id, operating_mode, name, label, type, field_type, priority, required, is_enabled, config, is_custom)
+             VALUES ($1, 'copilot', $2, $3, $4, $5, $6, $7, true, '{}'::jsonb, true)`,
+            [companyId, name, name, fieldType, fieldType, priority, required]
+          );
+        } catch (colErr) {
+          if (colErr.message && colErr.message.includes('operating_mode')) {
+            await client.query(
+              `INSERT INTO chatbot_quote_fields (company_id, name, label, type, field_type, priority, required, is_enabled, config, is_custom)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, true, '{}'::jsonb, true)`,
+              [companyId, name, name, fieldType, fieldType, priority, required]
+            );
+          } else {
+            throw colErr;
+          }
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    // Return the saved fields
+    const saved = fields.filter((f) => (f.name || f.label || '').trim()).map((f, i) => ({
+      name: (f.name || f.label || '').trim(),
+      label: (f.name || f.label || '').trim(),
+      type: (f.type || 'text').toLowerCase(),
+      priority: i + 1,
+      required: f.priority === 'Required' || f.priority === 'required' || f.required === true,
+      is_enabled: true,
+    }));
+    res.json(saved);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }

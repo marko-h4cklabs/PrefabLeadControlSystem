@@ -37,48 +37,77 @@ async function get(companyId, mode = 'autopilot') {
 
 async function upsert(companyId, payload, mode = 'autopilot') {
   const updates = [];
-  const values = [companyId, mode];
-  let i = 3;
+  const values = [];
+  let i = 1;
   if (payload.website_url !== undefined) {
-    updates.push(`website_url = $${i++}`);
-    values.push(payload.website_url);
+    updates.push({ col: 'website_url', val: payload.website_url });
   }
   if (payload.business_description !== undefined) {
-    updates.push(`business_description = $${i++}`);
-    values.push(payload.business_description);
+    updates.push({ col: 'business_description', val: payload.business_description });
   }
   if (payload.additional_notes !== undefined) {
-    updates.push(`additional_notes = $${i++}`);
-    values.push(payload.additional_notes);
+    updates.push({ col: 'additional_notes', val: payload.additional_notes });
   }
   if (updates.length === 0) return get(companyId, mode);
-  updates.push('updated_at = NOW()');
 
+  // Check if row exists for this company+mode
+  let exists = false;
   try {
-    await pool.query(
-      `INSERT INTO chatbot_company_info (company_id, operating_mode, website_url, business_description, additional_notes, updated_at)
-       VALUES ($1, $2, NULL, NULL, NULL, NOW())
-       ON CONFLICT (company_id, COALESCE(operating_mode, 'autopilot')) DO UPDATE SET ${updates.join(', ')}`,
-      values
+    const check = await pool.query(
+      `SELECT 1 FROM chatbot_company_info WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
+      [companyId, mode]
     );
+    exists = check.rows.length > 0;
   } catch (err) {
     if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
-      // Fallback: use original schema without operating_mode
-      const fallbackUpdates = [];
-      const fallbackValues = [companyId];
-      let j = 2;
-      if (payload.website_url !== undefined) { fallbackUpdates.push(`website_url = $${j++}`); fallbackValues.push(payload.website_url); }
-      if (payload.business_description !== undefined) { fallbackUpdates.push(`business_description = $${j++}`); fallbackValues.push(payload.business_description); }
-      if (payload.additional_notes !== undefined) { fallbackUpdates.push(`additional_notes = $${j++}`); fallbackValues.push(payload.additional_notes); }
-      fallbackUpdates.push('updated_at = NOW()');
-      await pool.query(
-        `INSERT INTO chatbot_company_info (company_id, website_url, business_description, additional_notes, updated_at)
-         VALUES ($1, NULL, NULL, NULL, NOW())
-         ON CONFLICT (company_id) DO UPDATE SET ${fallbackUpdates.join(', ')}`,
-        fallbackValues
+      const check = await pool.query(
+        `SELECT 1 FROM chatbot_company_info WHERE company_id = $1`,
+        [companyId]
       );
+      exists = check.rows.length > 0;
     } else {
       throw err;
+    }
+  }
+
+  if (exists) {
+    // UPDATE existing row
+    try {
+      const setClauses = updates.map((u, idx) => `${u.col} = $${idx + 3}`).join(', ');
+      await pool.query(
+        `UPDATE chatbot_company_info SET ${setClauses}, updated_at = NOW()
+         WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = $2`,
+        [companyId, mode, ...updates.map((u) => u.val)]
+      );
+    } catch (err) {
+      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+        const setClauses = updates.map((u, idx) => `${u.col} = $${idx + 2}`).join(', ');
+        await pool.query(
+          `UPDATE chatbot_company_info SET ${setClauses}, updated_at = NOW() WHERE company_id = $1`,
+          [companyId, ...updates.map((u) => u.val)]
+        );
+      } else {
+        throw err;
+      }
+    }
+  } else {
+    // INSERT new row
+    try {
+      await pool.query(
+        `INSERT INTO chatbot_company_info (company_id, operating_mode, website_url, business_description, additional_notes, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [companyId, mode, payload.website_url || null, payload.business_description || null, payload.additional_notes || null]
+      );
+    } catch (err) {
+      if (mode === 'autopilot' && err.message && err.message.includes('operating_mode')) {
+        await pool.query(
+          `INSERT INTO chatbot_company_info (company_id, website_url, business_description, additional_notes, updated_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [companyId, payload.website_url || null, payload.business_description || null, payload.additional_notes || null]
+        );
+      } else {
+        throw err;
+      }
     }
   }
   return get(companyId, mode);
