@@ -447,7 +447,7 @@ router.get('/verify-email', async (req, res) => {
 
     const frontendUrl =
       process.env.FRONTEND_URL || 'https://app.eightpath.dev';
-    return res.redirect(`${frontendUrl}/onboarding?verified=true`);
+    return res.redirect(`${frontendUrl}/login?verified=true`);
   } catch (err) {
     return res.send(verifyPage('error', 'Something went wrong. Please try again.'));
   }
@@ -464,21 +464,13 @@ router.post('/resend-verification', authMiddleware, async (req, res) => {
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.email_verified) return res.json({ message: 'Email already verified' });
 
-    const { isEmailConfigured } = require('../../services/emailService');
-    if (!isEmailConfigured()) {
-      return res.json({ success: true, message: 'Email provider not configured. Verification skipped.', email_not_configured: true });
-    }
-
     const token = generateVerifyToken();
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await pool.query(
       'UPDATE users SET email_verify_token = $1, email_verify_expires = $2 WHERE id = $3',
       [token, expires, req.user.id]
     );
-    // Fire-and-forget — don't block the response on email delivery
-    sendVerificationEmail(user.email, user.full_name, token).catch((err) => {
-      logger.error('[resend-verification] Failed to send email:', err.message);
-    });
+    await sendVerificationEmail(user.email, user.full_name, token);
     res.json({ success: true, message: 'Verification email sent' });
   } catch (err) {
     res.status(500).json({ error: err.message });

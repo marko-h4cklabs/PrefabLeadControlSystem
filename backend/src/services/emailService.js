@@ -41,8 +41,7 @@ function generateVerifyToken() {
 
 async function sendVerificationEmail(toEmail, userName, token) {
   if (!isEmailConfigured()) {
-    console.warn('[email] No email provider configured (set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS). Skipping verification email.');
-    return;
+    throw new Error('Email service not configured. Set SENDGRID_API_KEY or SMTP_USER/SMTP_PASS.');
   }
   const fromEmail = process.env.EMAIL_FROM || 'noreply@eightpath.dev';
   const appName = process.env.APP_NAME || 'EightPath';
