@@ -213,6 +213,14 @@ async function sendSuggestion(suggestionId, suggestionIndex, companyId) {
     [suggestionId, suggestionIndex]
   );
 
+  // Emit SSE event so chat and DM list update in real-time
+  publishEvent(companyId, {
+    type: 'new_message',
+    leadId: rec.lead_id,
+    conversationId: rec.conversation_id,
+    preview: chosen.text.slice(0, 100),
+  }).catch(() => {});
+
   return { success: true, message_sent: chosen.text };
 }
 

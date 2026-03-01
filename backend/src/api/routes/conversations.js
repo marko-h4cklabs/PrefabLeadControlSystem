@@ -21,6 +21,7 @@ const aiReplyService = require('../../../services/aiReplyService');
 const replySuggestionsService = require('../../../services/replySuggestionsService');
 const { logLeadActivity } = require('../../../services/activityLogger');
 const { errorJson } = require('../middleware/errors');
+const { publish: publishEvent } = require('../../lib/eventBus');
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -265,6 +266,14 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1 WHERE id = $1`,
       [suggestionId]
     );
+
+    // Emit SSE event so chat and DM list update in real-time
+    publishEvent(companyId, {
+      type: 'new_message',
+      leadId: suggestion.lead_id,
+      conversationId: req.params.conversationId,
+      preview: text.trim().slice(0, 100),
+    }).catch(() => {});
 
     res.json({ success: true, message_sent: text.trim() });
   } catch (err) {
