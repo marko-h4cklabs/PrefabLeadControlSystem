@@ -1577,6 +1577,61 @@ router.delete('/settings/calendly', requireRole('owner', 'admin', 'setter'), asy
   }
 });
 
+/**
+ * PUT /api/copilot/settings/calendly-url
+ * Save a manual Calendly booking link (no API token needed).
+ */
+router.put('/settings/calendly-url', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { calendly_url } = req.body || {};
+    const url = (calendly_url || '').trim() || null;
+
+    const { chatbotBehaviorRepository } = require('../../../db/repositories');
+    await chatbotBehaviorRepository.upsert(companyId, {
+      calendly_url: url,
+      booking_trigger_enabled: !!url,
+    }, 'copilot').catch(() => {});
+
+    // Also store on companies table as fallback
+    await pool.query(
+      'UPDATE companies SET calendly_url = $1 WHERE id = $2',
+      [url, companyId]
+    ).catch(() => {});
+
+    res.json({ success: true, calendly_url: url });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/calendly-url
+ * Get the current booking URL.
+ */
+router.get('/settings/calendly-url', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { chatbotBehaviorRepository } = require('../../../db/repositories');
+    const behavior = await chatbotBehaviorRepository.get(companyId, 'copilot');
+    const calendlyUrl = behavior?.calendly_url || null;
+
+    // Fallback to companies table
+    let url = calendlyUrl;
+    if (!url) {
+      const compRow = await pool.query(
+        'SELECT calendly_url, calendly_scheduling_url FROM companies WHERE id = $1',
+        [companyId]
+      ).catch(() => null);
+      url = compRow?.rows?.[0]?.calendly_url || compRow?.rows?.[0]?.calendly_scheduling_url || null;
+    }
+
+    res.json({ calendly_url: url || '' });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 // ===========================================================================
 // NOTIFICATION CHANNELS
 // ===========================================================================
