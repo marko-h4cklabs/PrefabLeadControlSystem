@@ -270,6 +270,12 @@ async function processManyChatPayload(payload, overrideCompany) {
       channel: 'instagram',
       metadata: {},
     }).catch(() => {});
+    // Emit SSE event so DM list refreshes instantly for new leads
+    publishEvent(companyId, {
+      type: 'new_lead',
+      leadId: lead.id,
+      leadName: lead.name || subscriberName || null,
+    }).catch(() => {});
   } else if (subscriberName && (!lead.name || !lead.name.trim())) {
     await leadRepository.update(companyId, lead.id, { name: subscriberName }).catch(() => {});
   }

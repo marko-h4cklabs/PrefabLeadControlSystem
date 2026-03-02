@@ -207,12 +207,14 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
  */
 async function sendSuggestion(suggestionId, suggestionIndex, companyId) {
   const row = await pool.query(
-    `SELECT id, lead_id, company_id, conversation_id, suggestions FROM reply_suggestions
-     WHERE id = $1 AND company_id = $2 AND used_at IS NULL`,
+    `SELECT id, lead_id, company_id, conversation_id, suggestions, used_at FROM reply_suggestions
+     WHERE id = $1 AND company_id = $2`,
     [suggestionId, companyId]
   );
   const rec = row.rows[0];
   if (!rec) return null;
+  // Already sent — return success without re-sending (idempotent)
+  if (rec.used_at) return { success: true, already_sent: true };
 
   const suggestions = Array.isArray(rec.suggestions) ? rec.suggestions : (typeof rec.suggestions === 'string' ? JSON.parse(rec.suggestions || '[]') : []);
   const chosen = suggestions.find((s) => s.index === suggestionIndex);

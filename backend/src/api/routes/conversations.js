@@ -231,16 +231,28 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid suggestion ID required');
     }
 
-    // Verify suggestion belongs to this company and hasn't already been sent
+    // Try to find the suggestion row (may already be used — that's okay)
     const sugRow = await pool.query(
-      `SELECT rs.id, rs.lead_id FROM reply_suggestions rs
+      `SELECT rs.id, rs.lead_id, rs.used_at FROM reply_suggestions rs
        JOIN leads l ON l.id = rs.lead_id
-       WHERE rs.id = $1 AND l.company_id = $2 AND rs.used_at IS NULL`,
+       WHERE rs.id = $1 AND l.company_id = $2`,
       [suggestionId, companyId]
     );
     const suggestion = sugRow.rows[0];
-    if (!suggestion) {
-      return errorJson(res, 404, 'NOT_FOUND', 'Suggestion not found or already sent');
+
+    // Resolve leadId: from suggestion if found, otherwise from conversation
+    let leadId;
+    if (suggestion) {
+      leadId = suggestion.lead_id;
+    } else {
+      const convRow = await pool.query(
+        'SELECT c.lead_id FROM conversations c JOIN leads l ON l.id = c.lead_id WHERE c.id = $1 AND l.company_id = $2',
+        [req.params.conversationId, companyId]
+      );
+      if (!convRow.rows[0]) {
+        return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
+      }
+      leadId = convRow.rows[0].lead_id;
     }
 
     // Get lead + ManyChat API key for sending
@@ -248,7 +260,7 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       `SELECT l.external_id, c.manychat_api_key FROM leads l
        JOIN companies c ON c.id = l.company_id
        WHERE l.id = $1 AND l.company_id = $2`,
-      [suggestion.lead_id, companyId]
+      [leadId, companyId]
     );
     const lead = leadRow.rows[0];
     if (!lead?.external_id || !lead?.manychat_api_key) {
@@ -259,18 +271,20 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
     await sendInstagramMessage(lead.external_id, text.trim(), decrypt(lead.manychat_api_key));
 
     // Append to conversation history
-    await conversationRepository.appendMessage(suggestion.lead_id, 'assistant', text.trim());
+    await conversationRepository.appendMessage(leadId, 'assistant', text.trim());
 
-    // Mark suggestion as used (edited)
-    await pool.query(
-      `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1 WHERE id = $1`,
-      [suggestionId]
-    );
+    // Mark suggestion as used (if not already)
+    if (suggestion && !suggestion.used_at) {
+      await pool.query(
+        `UPDATE reply_suggestions SET used_at = NOW(), used_suggestion_index = -1 WHERE id = $1`,
+        [suggestionId]
+      );
+    }
 
     // Emit SSE event with full message data so frontend can display instantly
     publishEvent(companyId, {
       type: 'new_message',
-      leadId: suggestion.lead_id,
+      leadId,
       conversationId: req.params.conversationId,
       preview: text.trim().slice(0, 100),
       role: 'assistant',
