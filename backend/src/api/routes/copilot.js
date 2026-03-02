@@ -578,7 +578,7 @@ router.get('/leads/:leadId/summary', async (req, res) => {
       },
       parsed_fields: conversationResult.rows[0]?.parsed_fields || null,
       recent_activity: activityRows,
-      notes: notesRows,
+      notes: notesRows.map((r) => ({ id: r.id, content: r.body, created_at: r.created_at })),
       pending_suggestions: suggestionsResult.rows[0]?.count || 0,
     });
   } catch (err) {
@@ -822,6 +822,110 @@ router.put('/settings/social-proof', requireRole('owner', 'admin', 'setter'), as
     await chatbotBehaviorRepository.upsert(req.tenantId, {
       social_proof_enabled: enabled ?? undefined,
       social_proof_examples: examples ?? undefined,
+    }, 'copilot');
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AI Persona Generator endpoints
+// ---------------------------------------------------------------------------
+
+const multer = require('multer');
+const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+/**
+ * GET /api/copilot/settings/persona-config
+ * Returns current persona source + AI persona metadata (not the full snapshot).
+ */
+router.get('/settings/persona-config', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    res.json({
+      copilot_persona_source: behavior.copilot_persona_source || 'manual',
+      has_ai_persona: !!behavior.ai_persona_snapshot,
+      ai_persona_generated_at: behavior.ai_persona_generated_at || null,
+      ai_persona_summary: behavior.ai_persona_summary || null,
+      // Return snapshot so frontend can pre-fill the review form
+      ai_persona_snapshot: behavior.ai_persona_snapshot || null,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/persona-source
+ * Switch active persona source between 'manual' and 'ai_generated'.
+ */
+router.put('/settings/persona-source', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { source } = req.body ?? {};
+    if (!['manual', 'ai_generated'].includes(source)) {
+      return res.status(400).json({ error: 'source must be "manual" or "ai_generated"' });
+    }
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    if (source === 'ai_generated' && !behavior.ai_persona_snapshot) {
+      return res.status(400).json({ error: 'No AI persona exists yet. Generate one first.' });
+    }
+    await chatbotBehaviorRepository.upsert(req.tenantId, { copilot_persona_source: source }, 'copilot');
+    res.json({ success: true, copilot_persona_source: source });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/copilot/settings/generate-persona
+ * Upload 1-20 files (.json, .txt, .docx, .xlsx). AI analyzes them and returns
+ * a generated persona. Does NOT save — frontend presents preview for user to confirm.
+ */
+router.post('/settings/generate-persona', requireRole('owner', 'admin', 'setter'), personaUpload.array('files', 20), async (req, res) => {
+  try {
+    const files = req.files;
+    if (!files || files.length === 0) {
+      return res.status(400).json({ error: 'Upload at least one file (.json, .txt, .docx, .xlsx).' });
+    }
+
+    const { generatePersonaFromFiles } = require('../../../../services/copilotPersonaGenerator');
+    const result = await generatePersonaFromFiles(
+      files.map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, originalname: f.originalname }))
+    );
+
+    res.json(result);
+  } catch (err) {
+    logger.error({ err: err.message }, '[copilot] generate-persona error');
+    res.status(500).json({ error: err.message || 'Persona generation failed.' });
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/ai-persona
+ * Save the AI-generated persona snapshot and set it as active source.
+ */
+router.put('/settings/ai-persona', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const persona = req.body ?? {};
+    const ALLOWED_KEYS = [
+      'agent_name', 'agent_backstory', 'tone', 'response_length', 'emojis_enabled',
+      'opener_style', 'conversation_approach', 'follow_up_style', 'closing_style',
+      'human_error_enabled', 'human_error_types', 'human_error_random',
+      'no_trailing_period', 'bot_deny_response',
+    ];
+    const snapshot = {};
+    for (const key of ALLOWED_KEYS) {
+      if (persona[key] !== undefined) snapshot[key] = persona[key];
+    }
+    if (Object.keys(snapshot).length === 0) {
+      return res.status(400).json({ error: 'No persona fields provided.' });
+    }
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      ai_persona_snapshot: snapshot,
+      ai_persona_generated_at: new Date().toISOString(),
+      ai_persona_summary: persona.style_summary || null,
+      copilot_persona_source: 'ai_generated',
     }, 'copilot');
     res.json({ success: true });
   } catch (err) {

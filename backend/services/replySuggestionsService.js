@@ -153,7 +153,14 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   logger.info({ companyId, quoteFieldsCount: (quoteFields || []).length, snapshotCount: (quoteSnapshot || []).length, orderedCount: orderedQuoteFields.length, fieldNames: orderedQuoteFields.map((f) => f.label || f.name) }, '[replySuggestions] Field awareness: loaded fields');
 
   // If no behavior passed, load copilot-specific behavior
-  const effectiveBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
+  const rawBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
+
+  // If AI persona is active, merge snapshot over the base behavior
+  const effectiveBehavior = { ...rawBehavior };
+  if (rawBehavior?.copilot_persona_source === 'ai_generated' && rawBehavior?.ai_persona_snapshot) {
+    Object.assign(effectiveBehavior, rawBehavior.ai_persona_snapshot);
+    logger.info({ companyId }, '[replySuggestions] Using AI-generated persona snapshot');
+  }
 
   // Compute missing fields for field-aware suggestions
   const parsedFields = conv?.parsed_fields ?? {};
