@@ -305,7 +305,7 @@ async function listCopilotFields(companyId) {
   try {
     result = await pool.query(
       `SELECT id, name, label, type, field_type, units, priority, required, is_enabled, config,
-              is_custom, variable_name, qualification_prompt
+              is_custom, variable_name, qualification_prompt, qualification_requirement
        FROM chatbot_quote_fields
        WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = 'copilot'
        ORDER BY priority ASC, name ASC`,
@@ -315,7 +315,7 @@ async function listCopilotFields(companyId) {
     if (colErr.message && colErr.message.includes('operating_mode')) {
       result = await pool.query(
         `SELECT id, name, label, type, field_type, units, priority, required, is_enabled, config,
-                is_custom, variable_name, qualification_prompt
+                is_custom, variable_name, qualification_prompt, qualification_requirement
          FROM chatbot_quote_fields
          WHERE company_id = $1 AND is_custom = true
          ORDER BY priority ASC, name ASC`,
@@ -349,6 +349,7 @@ async function listCopilotFields(companyId) {
       variable_name: row.variable_name || row.name,
       field_type: typeVal,
       qualification_prompt: row.qualification_prompt ?? null,
+      qualification_requirement: row.qualification_requirement ?? null,
     };
   });
 }

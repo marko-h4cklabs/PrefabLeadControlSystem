@@ -678,7 +678,7 @@ router.get('/settings/fields', async (req, res) => {
     let result;
     try {
       result = await pool.query(
-        `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt
+        `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt, qualification_requirement
          FROM chatbot_quote_fields
          WHERE company_id = $1 AND is_custom = true AND COALESCE(operating_mode, 'autopilot') = 'copilot'
          ORDER BY priority ASC, name ASC`,
@@ -687,7 +687,7 @@ router.get('/settings/fields', async (req, res) => {
     } catch (colErr) {
       if (colErr.message && colErr.message.includes('operating_mode')) {
         result = await pool.query(
-          `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt
+          `SELECT id, name, label, type, field_type, priority, is_enabled, qualification_prompt, qualification_requirement
            FROM chatbot_quote_fields
            WHERE company_id = $1 AND is_custom = true
            ORDER BY priority ASC, name ASC`,
@@ -704,6 +704,7 @@ router.get('/settings/fields', async (req, res) => {
       type: f.field_type || f.type || 'text',
       is_enabled: f.is_enabled !== false,
       qualification_prompt: f.qualification_prompt || '',
+      qualification_requirement: f.qualification_requirement || '',
     }));
     res.json(fields);
   } catch (err) {
@@ -756,19 +757,20 @@ router.put('/settings/fields', async (req, res) => {
         const priority = i + 1;
         const isEnabled = f.is_enabled !== false;
         const qualPrompt = (f.qualification_prompt || '').trim() || null;
+        const qualReq = (f.qualification_requirement || '').trim() || null;
 
         try {
           await client.query(
-            `INSERT INTO chatbot_quote_fields (company_id, operating_mode, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt)
-             VALUES ($1, 'copilot', $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8)`,
-            [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt]
+            `INSERT INTO chatbot_quote_fields (company_id, operating_mode, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt, qualification_requirement)
+             VALUES ($1, 'copilot', $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8, $9)`,
+            [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt, qualReq]
           );
         } catch (colErr) {
           if (colErr.message && colErr.message.includes('operating_mode')) {
             await client.query(
-              `INSERT INTO chatbot_quote_fields (company_id, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt)
-               VALUES ($1, $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8)`,
-              [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt]
+              `INSERT INTO chatbot_quote_fields (company_id, name, label, type, field_type, priority, required, is_enabled, config, is_custom, qualification_prompt, qualification_requirement)
+               VALUES ($1, $2, $3, $4, $5, $6, true, $7, '{}'::jsonb, true, $8, $9)`,
+              [companyId, name, name, fieldType, fieldType, priority, isEnabled, qualPrompt, qualReq]
             );
           } else {
             throw colErr;
@@ -791,6 +793,7 @@ router.put('/settings/fields', async (req, res) => {
       type: (f.type || 'text').toLowerCase(),
       is_enabled: f.is_enabled !== false,
       qualification_prompt: (f.qualification_prompt || '').trim(),
+      qualification_requirement: (f.qualification_requirement || '').trim(),
     }));
     res.json(saved);
   } catch (err) {
@@ -1507,7 +1510,7 @@ router.put('/settings/calendly', requireRole('owner', 'admin', 'setter'), async 
       await chatbotBehaviorRepository.upsert(companyId, {
         calendly_url: validation.scheduling_url,
         booking_trigger_enabled: true,
-      }).catch(() => {});
+      }, 'copilot').catch(() => {});
       await pool.query(
         'UPDATE companies SET calendly_url = $1 WHERE id = $2',
         [validation.scheduling_url, companyId]

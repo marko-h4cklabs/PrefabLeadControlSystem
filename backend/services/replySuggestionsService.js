@@ -143,7 +143,10 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
       const label = (f.label || '').toLowerCase();
       return (f.label || f.name) && !collectedKeysLower.has(name) && !collectedKeysLower.has(label);
     })
-    .map((f) => f.label || f.name);
+    .map((f) => {
+      const req = f.qualification_requirement ? ` (QUALIFICATION: ${f.qualification_requirement})` : '';
+      return (f.label || f.name) + req;
+    });
 
   // Build already-collected context so AI doesn't re-ask answered questions
   const collectedEntries = Object.entries(parsedFields)
@@ -153,15 +156,24 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     ? `\n\nALREADY COLLECTED (do NOT ask about these again):\n${collectedEntries.join('\n')}`
     : '';
 
-  const calendlyUrl = effectiveBehavior?.calendly_url || null;
+  // Calendly URL: try behavior first, then companies table as fallback
+  const calendlyUrl = effectiveBehavior?.calendly_url
+    || companyRecord?.calendly_scheduling_url
+    || companyRecord?.calendly_url
+    || null;
+
+  const hasQualRules = orderedQuoteFields.some((f) => f.qualification_requirement);
+  const qualRulesSection = hasQualRules
+    ? `\n\nQUALIFICATION RULES:\nWhen the lead provides a value for a field with a QUALIFICATION requirement, evaluate it immediately.\nIf the lead does NOT meet a requirement, acknowledge it politely and explain the limitation.\nDo NOT continue collecting remaining fields if a critical qualification fails.`
+    : '';
 
   let fieldAwarenessPrompt = '';
   if (missingFields.length > 0) {
     const fieldList = missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n');
-    fieldAwarenessPrompt = `${collectedContext}\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list. Stay focused and conversational.`;
+    fieldAwarenessPrompt = `${collectedContext}\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list. Stay focused and conversational.${qualRulesSection}`;
   } else if (orderedQuoteFields.length > 0) {
     const bookingMsg = calendlyUrl
-      ? `All required fields have been collected! NOW suggest booking a call. Include this Calendly link in at least one suggestion: ${calendlyUrl}\nDo NOT ask what day or time works. Just share the link.`
+      ? `All required fields have been collected! NOW suggest booking a call. You MUST include this EXACT Calendly link verbatim in at least one suggestion: ${calendlyUrl}\nNEVER use placeholders like [BOOKING LINK] or [LINK]. Copy-paste the URL exactly as shown above.\nDo NOT ask what day or time works. Just share the Calendly link and let them book directly.`
       : `All required fields have been collected! Focus on advancing toward the goal: ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
     fieldAwarenessPrompt = `${collectedContext}\n\n${bookingMsg}`;
   }

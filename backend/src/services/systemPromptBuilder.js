@@ -159,7 +159,7 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
 BOOKING TRIGGER RULES:
 Once the lead seems interested (asking real questions, showing intent) and you have collected the required data fields listed in DATA TO COLLECT, proactively offer to book a call.
 Use this message to offer booking: "${offerMessage}"
-${calendlyUrl ? `If they accept, send them the Calendly link: ${calendlyUrl}\nNEVER ask what day or time works. NEVER negotiate scheduling. Just share the Calendly link and let them book directly.` : 'If they accept, let them know the team will follow up to schedule.'}
+${calendlyUrl ? `If they accept, send them the Calendly link: ${calendlyUrl}\nYou MUST paste this exact URL — NEVER use placeholders like [BOOKING LINK] or [LINK]. Always output the full URL: ${calendlyUrl}\nNEVER ask what day or time works. NEVER negotiate scheduling. Just share the Calendly link and let them book directly.` : 'If they accept, let them know the team will follow up to schedule.'}
 NEVER show calendar time slots or available times in the chat. NEVER list numbered time options.
 Only offer booking ONCE per conversation. If they decline, respect it and continue naturally.
 `;
@@ -179,9 +179,15 @@ Only offer booking ONCE per conversation. If they decline, respect it and contin
       const label = f.label || f.name.replace(/_/g, ' ');
       const suffix = f.units ? ` (${f.units})` : '';
       const qualPrompt = f.qualification_prompt ? ` → Qualification: ${f.qualification_prompt}` : '';
-      return `- ${label}${suffix}${qualPrompt}`;
+      const qualReq = f.qualification_requirement ? ` [MUST: ${f.qualification_requirement}]` : '';
+      return `- ${label}${suffix}${qualPrompt}${qualReq}`;
     })
     .join('\n');
+
+  const hasQualificationRules = (quoteFields || []).some((f) => f.is_enabled && f.qualification_requirement);
+  const qualificationSection = hasQualificationRules
+    ? `\nQUALIFICATION RULES:\nWhen the lead provides a value for a field with a [MUST: ...] requirement, evaluate it immediately.\nIf the lead does NOT meet a requirement, acknowledge it politely and explain the limitation.\nDo NOT continue collecting remaining fields if a critical qualification fails.`
+    : '';
 
   const prompt = personaBase
     ? `
@@ -202,7 +208,7 @@ ${closingInstructions ? `Closing: ${closingInstructions}` : ''}
 ${socialProofText}
 ${prohibitedText}
 ${languageInstruction}
-${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}
+${enabledFields ? `DATA TO COLLECT (naturally):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}${qualificationSection}
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
 ${fillerRules}${humanErrorInstructions}
 ${bookingSection}
@@ -245,7 +251,7 @@ CRITICAL RULES:
 ${fillerRules}${humanErrorInstructions}
 ${bookingSection}
 
-${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}
+${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never like a form):\n${enabledFields}\nIMPORTANT: ONLY ask about the fields listed above. Do NOT ask for name, phone number, email, or ANY other information not in this list. If the lead volunteers extra info, acknowledge it but do not actively pursue it.` : ''}${qualificationSection}
 
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
 
