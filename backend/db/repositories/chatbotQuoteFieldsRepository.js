@@ -285,8 +285,72 @@ async function updatePresets(companyId, updates, mode = 'autopilot') {
   return listAllPresets(companyId, mode);
 }
 
+/**
+ * List all fields for a given operating mode.
+ * For 'copilot' mode, returns custom copilot fields (created via settings UI).
+ * For 'autopilot' mode, returns preset fields.
+ */
 async function list(companyId, mode = 'autopilot') {
+  if (mode === 'copilot') {
+    return listCopilotFields(companyId);
+  }
   return listAllPresets(companyId, mode);
+}
+
+/**
+ * Returns all copilot-mode fields (custom fields created via copilot settings).
+ */
+async function listCopilotFields(companyId) {
+  let result;
+  try {
+    result = await pool.query(
+      `SELECT id, name, label, type, field_type, units, priority, required, is_enabled, config,
+              is_custom, variable_name, qualification_prompt
+       FROM chatbot_quote_fields
+       WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = 'copilot'
+       ORDER BY priority ASC, name ASC`,
+      [companyId]
+    );
+  } catch (colErr) {
+    if (colErr.message && colErr.message.includes('operating_mode')) {
+      result = await pool.query(
+        `SELECT id, name, label, type, field_type, units, priority, required, is_enabled, config,
+                is_custom, variable_name, qualification_prompt
+         FROM chatbot_quote_fields
+         WHERE company_id = $1 AND is_custom = true
+         ORDER BY priority ASC, name ASC`,
+        [companyId]
+      );
+    } else {
+      throw colErr;
+    }
+  }
+  return (result.rows || []).map((row) => {
+    let config = {};
+    if (row.config != null) {
+      if (typeof row.config === 'object' && !Array.isArray(row.config)) config = row.config;
+      else if (typeof row.config === 'string') {
+        try { config = JSON.parse(row.config) || {}; } catch { config = {}; }
+      }
+    }
+    const typeVal = row.field_type || row.type || 'text';
+    return {
+      id: row.id,
+      name: row.variable_name || row.name,
+      label: row.label || row.name || row.variable_name || '',
+      description: '',
+      type: typeVal,
+      units: row.units ?? null,
+      is_enabled: row.is_enabled === true,
+      config,
+      priority: row.priority ?? 500,
+      required: row.required !== false,
+      is_custom: row.is_custom === true,
+      variable_name: row.variable_name || row.name,
+      field_type: typeVal,
+      qualification_prompt: row.qualification_prompt ?? null,
+    };
+  });
 }
 
 async function listCustomFields(companyId) {
@@ -421,6 +485,7 @@ async function bulkUpsertQuotePresets(companyId, presets) {
 module.exports = {
   list,
   listAllPresets,
+  listCopilotFields,
   listCustomFields,
   listWithCustom,
   updatePresets,

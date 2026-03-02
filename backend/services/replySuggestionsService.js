@@ -120,9 +120,12 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   const quoteSnapshot = conv?.quote_snapshot;
   const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
   // Use quote_snapshot if it has entries, otherwise fall back to the live quoteFields config
+  // Filter to only enabled fields with valid types
   const orderedQuoteFields = (Array.isArray(quoteSnapshot) && quoteSnapshot.length > 0 ? quoteSnapshot : quoteFields || [])
-    .filter((f) => f && validTypes.includes(f.type))
+    .filter((f) => f && f.is_enabled !== false && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+
+  logger.info({ companyId, quoteFieldsCount: (quoteFields || []).length, snapshotCount: (quoteSnapshot || []).length, orderedCount: orderedQuoteFields.length, fieldNames: orderedQuoteFields.map((f) => f.label || f.name) }, '[replySuggestions] Field awareness: loaded fields');
 
   // If no behavior passed, load copilot-specific behavior
   const effectiveBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
@@ -161,6 +164,10 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
       ? `All required fields have been collected! NOW suggest booking a call. Include this Calendly link in at least one suggestion: ${calendlyUrl}\nDo NOT ask what day or time works. Just share the link.`
       : `All required fields have been collected! Focus on advancing toward the goal: ${effectiveBehavior?.conversation_goal || 'booking a call'}.`;
     fieldAwarenessPrompt = `${collectedContext}\n\n${bookingMsg}`;
+  }
+
+  if (missingFields.length > 0) {
+    logger.info({ companyId, missingFields, collectedKeys: [...collectedKeysLower] }, '[replySuggestions] Missing fields detected');
   }
 
   const company = {
