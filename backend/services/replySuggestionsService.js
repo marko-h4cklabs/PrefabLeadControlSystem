@@ -24,6 +24,26 @@ function buildSuggestionPrompt(behavior) {
   const goal = behavior?.conversation_goal || 'booking a call';
   const lengthHint = behavior?.response_length === 'short' ? '1-2' : '2-4';
   const emojisOk = behavior?.emojis_enabled ? '' : 'No emojis. ';
+
+  // Human error style — explicitly enforce the user's settings on the text values inside JSON
+  let humanErrorRules = '';
+  if (!behavior?.human_error_enabled) {
+    humanErrorRules = '\n- Write in clean, standard English. No typos, no casual short forms, no stylistic imperfections. Polished text only.';
+  } else {
+    const types = Array.isArray(behavior.human_error_types) ? behavior.human_error_types : [];
+    const errorDescriptions = {
+      typos: 'include occasional small typos (e.g. "teh", "somethng") — max 1 per message',
+      no_periods: 'do NOT end messages with a period — stop after the last word',
+      lowercase_starts: 'sometimes start sentences with lowercase like a real text',
+      short_forms: 'use casual short forms: "ur", "u", "rn", "gonna", "wanna", "ngl", "tbh"',
+    };
+    // Exclude double_messages — [SPLIT] would corrupt the JSON output
+    const activeRules = types.filter((t) => t !== 'double_messages').map((t) => errorDescriptions[t]).filter(Boolean);
+    if (activeRules.length > 0) {
+      humanErrorRules = '\n- MANDATORY human writing style — apply these to the text values in JSON:\n' + activeRules.map((r) => `  • ${r}`).join('\n');
+    }
+  }
+
   return `
 
 Based on this conversation, generate EXACTLY 3 different reply options.
@@ -53,7 +73,7 @@ Return ONLY valid JSON in this exact format, nothing else:
 Apply these rules to ALL replies:
 - ${emojisOk}Max ${lengthHint} sentences each
 - Sound human, not robotic
-- No formal greetings or sign-offs
+- No formal greetings or sign-offs${humanErrorRules}
 `;
 }
 
