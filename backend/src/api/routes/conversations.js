@@ -172,7 +172,7 @@ router.post('/:conversationId/suggestions', async (req, res) => {
     if (!conv) {
       return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
     }
-    const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
+    const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
     const result = await replySuggestionsService.generateSuggestions(
       conv.lead_id,
       conversationId,

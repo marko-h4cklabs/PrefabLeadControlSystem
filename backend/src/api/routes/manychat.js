@@ -449,9 +449,11 @@ async function processManyChatPayload(payload, overrideCompany) {
     }
     try {
       if (mode === 'copilot') {
-        const replySuggestionsService = require('../../../services/replySuggestionsService');
-        const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
-        await replySuggestionsService.generateSuggestions(lead.id, conversationAfter?.id, companyId, messagesForIntelligence, behavior);
+        // NOTE: Suggestions are NOT generated here. The frontend generates them
+        // when it receives the SSE "user" message event (POST /suggestions).
+        // Generating here would race with the frontend: this Claude API call takes
+        // 3-5s, and if the user sends another message in that window, the stale
+        // suggestions from THIS call overwrite the frontend's correct ones.
 
         // Extract field values from user message (copilot mode needs this for Collected Fields)
         try {
