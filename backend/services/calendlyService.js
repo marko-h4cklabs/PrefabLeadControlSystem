@@ -66,14 +66,32 @@ async function getScheduledEvents(apiToken, opts = {}) {
     params.set('max_start_time', sixtyDaysOut.toISOString());
   }
 
-  if (opts.status && ['active', 'canceled'].includes(opts.status)) {
-    params.set('status', opts.status);
-  }
-
   params.set('sort', 'start_time:asc');
 
-  const data = await calendlyRequest(`/scheduled_events?${params.toString()}`, apiToken);
-  const events = data?.collection || [];
+  let events;
+  if (opts.status && ['active', 'canceled'].includes(opts.status)) {
+    // Specific status filter — single request
+    params.set('status', opts.status);
+    const data = await calendlyRequest(`/scheduled_events?${params.toString()}`, apiToken);
+    events = data?.collection || [];
+  } else {
+    // "All" — Calendly API defaults to active-only, so fetch both and merge
+    const activeParams = new URLSearchParams(params);
+    activeParams.set('status', 'active');
+    const canceledParams = new URLSearchParams(params);
+    canceledParams.set('status', 'canceled');
+
+    const [activeRes, canceledRes] = await Promise.allSettled([
+      calendlyRequest(`/scheduled_events?${activeParams.toString()}`, apiToken),
+      calendlyRequest(`/scheduled_events?${canceledParams.toString()}`, apiToken),
+    ]);
+
+    const activeEvents = activeRes.status === 'fulfilled' ? (activeRes.value?.collection || []) : [];
+    const canceledEvents = canceledRes.status === 'fulfilled' ? (canceledRes.value?.collection || []) : [];
+    events = [...activeEvents, ...canceledEvents].sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+    );
+  }
 
   // Fetch invitees for each event (batched, max 10 concurrent)
   const enriched = [];
