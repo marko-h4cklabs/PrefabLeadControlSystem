@@ -7,7 +7,15 @@ const Anthropic = require('@anthropic-ai/sdk');
 const OpenAI = require('openai');
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Lazy-init OpenAI client — SDK throws if apiKey is undefined at construction time
+let _openai = null;
+function getOpenAI() {
+  if (!_openai) {
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || 'sk-placeholder' });
+  }
+  return _openai;
+}
 
 async function claudeWithRetry(claudeParams, maxRetries = 3) {
   let lastError;
@@ -50,7 +58,7 @@ async function claudeWithRetry(claudeParams, maxRetries = 3) {
             : (msg.content || []).map((c) => c.text || '').join(''),
       });
     }
-    const response = await openai.chat.completions.create({
+    const response = await getOpenAI().chat.completions.create({
       model: 'gpt-4o',
       messages: openaiMessages,
       max_tokens: claudeParams.max_tokens || 1000,
@@ -74,4 +82,4 @@ async function claudeWithRetry(claudeParams, maxRetries = 3) {
   }
 }
 
-module.exports = { claudeWithRetry, anthropic, openai };
+module.exports = { claudeWithRetry, anthropic, get openai() { return getOpenAI(); } };

@@ -176,7 +176,7 @@ app.use('/api/health', healthRouter);
 app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')));
 
 const { chatAttachmentRepository } = require('../db/repositories');
-app.get('/public/attachments/:id/:token/{:filename}', async (req, res) => {
+app.get('/public/attachments/:id/:token/:filename', async (req, res) => {
   try {
     const { id, token } = req.params;
     const row = await chatAttachmentRepository.findById(id);
