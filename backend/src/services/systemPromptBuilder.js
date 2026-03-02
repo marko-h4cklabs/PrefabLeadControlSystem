@@ -145,6 +145,29 @@ async function buildSystemPrompt(company, behavior, quoteFields, activePersona, 
     }
   }
 
+  // Standalone no-trailing-period toggle (independent of human error style)
+  const noTrailingPeriodRule = behavior?.no_trailing_period
+    ? '\n13. NEVER end any message with a period (.). Stop after the last word — no trailing punctuation. No exceptions.'
+    : '';
+
+  // Conversation approach: field_focused (default) vs rapport_building
+  const conversationApproach = behavior?.conversation_approach || 'field_focused';
+  const conversationApproachSection = conversationApproach === 'rapport_building'
+    ? `CONVERSATION APPROACH — BUILD RAPPORT FIRST:
+- Follow the lead's vibe and energy — if they're casual, be casual; if they're excited, match it
+- Have a genuine conversation: ask about their situation, engage with their answers, show real interest
+- Do NOT jump straight into collecting fields. Let the conversation breathe and flow naturally first
+- Collect required fields one at a time, only when the timing feels organic — never two fields in a row
+- If the conversation drifts to a natural topic, follow it — fields can wait
+- A warm, connected lead who trusts you converts far better than a rushed form submission
+- Only after building genuine rapport, naturally guide them toward ${conversationGoal}`
+    : `CONVERSATION APPROACH:
+- Start by understanding what brought them here and what they're looking for
+- Build rapport before pitching anything
+- Qualify them naturally through conversation
+- When they're ready, guide them toward booking a call / taking the next step
+- Handle objections with empathy and real answers, not deflection`;
+
   let bookingSection = '';
   if (behavior?.booking_trigger_enabled) {
     const calendlyUrl = behavior.calendly_url || null;
@@ -247,7 +270,7 @@ CRITICAL RULES:
 9. Always move the conversation forward toward: ${conversationGoal}, but do it by asking a specific next question or making a concrete suggestion. Never use vague transition phrases like "moving forward", "standing by", or "noted".
 10. If the lead seems frustrated or upset, acknowledge it first before responding to their question.
 11. NEVER use em dashes, en dashes, or double dashes (no "—", "–", or "--"). Use commas or periods instead.
-12. NEVER end messages with filler phrases like "We got you", "Stay tuned", "We'll reach out", "We'll be in touch". End naturally or with a question.
+12. NEVER end messages with filler phrases like "We got you", "Stay tuned", "We'll reach out", "We'll be in touch". End naturally or with a question.${noTrailingPeriodRule}
 ${fillerRules}${humanErrorInstructions}
 ${bookingSection}
 
@@ -255,12 +278,7 @@ ${enabledFields ? `DATA TO COLLECT (naturally, through conversation — never li
 
 ${handoffTrigger ? `\nHANDOFF TO HUMAN: When "${handoffTrigger}", respond with: "${humanFallback || 'Let me connect you with my colleague who can help you further.'}"` : ''}
 
-CONVERSATION APPROACH:
-- Start by understanding what brought them here and what they're looking for
-- Build rapport before pitching anything
-- Qualify them naturally through conversation
-- When they're ready, guide them toward booking a call / taking the next step
-- Handle objections with empathy and real answers, not deflection
+${conversationApproachSection}
 `;
 
   return (toneInstruction + '\n\n' + prompt).trim();

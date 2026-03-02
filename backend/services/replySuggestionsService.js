@@ -25,6 +25,11 @@ function buildSuggestionPrompt(behavior) {
   const lengthHint = behavior?.response_length === 'short' ? '1-2' : '2-4';
   const emojisOk = behavior?.emojis_enabled ? '' : 'No emojis. ';
 
+  // No-trailing-period rule (standalone from human error style)
+  const noTrailingPeriodRule = behavior?.no_trailing_period
+    ? '\n- Do NOT end any message with a period (.). Stop after the last word — no trailing punctuation.'
+    : '';
+
   // Human error style — explicitly enforce the user's settings on the text values inside JSON
   let humanErrorRules = '';
   if (!behavior?.human_error_enabled) {
@@ -73,7 +78,7 @@ Return ONLY valid JSON in this exact format, nothing else:
 Apply these rules to ALL replies:
 - ${emojisOk}Max ${lengthHint} sentences each
 - Sound human, not robotic
-- No formal greetings or sign-offs${humanErrorRules}
+- No formal greetings or sign-offs${noTrailingPeriodRule}${humanErrorRules}
 `;
 }
 
@@ -187,10 +192,16 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     ? `\n\nQUALIFICATION RULES:\nWhen the lead provides a value for a field with a QUALIFICATION requirement, evaluate it immediately.\nIf the lead does NOT meet a requirement, acknowledge it politely and explain the limitation.\nDo NOT continue collecting remaining fields if a critical qualification fails.`
     : '';
 
+  const isRapportMode = (effectiveBehavior?.conversation_approach || 'field_focused') === 'rapport_building';
+
   let fieldAwarenessPrompt = '';
   if (missingFields.length > 0) {
     const fieldList = missingFields.map((f, i) => `${i + 1}. ${f}`).join('\n');
-    fieldAwarenessPrompt = `${collectedContext}\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list. Stay focused and conversational.${qualRulesSection}`;
+    if (isRapportMode) {
+      fieldAwarenessPrompt = `${collectedContext}\n\nFIELDS STILL NEEDED (collect naturally — no rush):\n${fieldList}\n\nYou are in rapport-building mode. Do NOT ask for these fields aggressively or back-to-back. Work toward ONE field naturally when the timing feels right in the conversation. If the conversation is still warming up, it's okay to not ask for a field yet — prioritize connection and vibe first. Never make it feel like a form.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list.${qualRulesSection}`;
+    } else {
+      fieldAwarenessPrompt = `${collectedContext}\n\nCRITICAL — REQUIRED FIELDS NOT YET COLLECTED:\n${fieldList}\n\nYou MUST incorporate questions about these fields into your suggestions. Each reply option should naturally work toward collecting at least one of these missing fields. Do NOT ignore them — they are required before the conversation can advance to ${effectiveBehavior?.conversation_goal || 'booking a call'}.\nDo NOT ask about fields already collected above. Do NOT ask for name, phone, email, or anything not in this list. Stay focused and conversational.${qualRulesSection}`;
+    }
   } else if (orderedQuoteFields.length > 0) {
     const bookingMsg = calendlyUrl
       ? `All required fields have been collected! NOW suggest booking a call. You MUST include this EXACT Calendly link verbatim in at least one suggestion: ${calendlyUrl}\nNEVER use placeholders like [BOOKING LINK] or [LINK]. Copy-paste the URL exactly as shown above.\nDo NOT ask what day or time works. Just share the Calendly link and let them book directly.`
