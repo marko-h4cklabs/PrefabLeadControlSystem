@@ -892,7 +892,7 @@ router.post('/settings/generate-persona', requireRole('owner', 'admin', 'setter'
     // sender_name is optional — helps AI filter messages from the right person in group chats
     const senderName = (req.body?.sender_name || '').trim() || null;
 
-    const { generatePersonaFromFiles } = require('../../../../services/copilotPersonaGenerator');
+    const { generatePersonaFromFiles } = require('../../../services/copilotPersonaGenerator');
     const result = await generatePersonaFromFiles(
       files.map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, originalname: f.originalname })),
       senderName
