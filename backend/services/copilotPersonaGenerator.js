@@ -14,8 +14,12 @@ const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 /**
  * Parse a single file buffer based on its extension/mimetype.
  * Returns extracted text or null if unsupported.
+ * @param {Buffer} buffer
+ * @param {string} mimetype
+ * @param {string} originalname
+ * @param {string|null} senderName  — when set, filter JSON DM exports to only this sender's messages
  */
-async function parseFileToText(buffer, mimetype, originalname) {
+async function parseFileToText(buffer, mimetype, originalname, senderName) {
   const ext = (originalname || '').split('.').pop().toLowerCase();
 
   // Plain text — read directly
@@ -29,15 +33,33 @@ async function parseFileToText(buffer, mimetype, originalname) {
       const raw = buffer.toString('utf8');
       const data = JSON.parse(raw);
 
+      // Helper: check if a sender_name matches the target (case-insensitive partial match)
+      const matchesSender = (msgSender) => {
+        if (!senderName) return true; // no filter — include everyone
+        if (!msgSender) return false;
+        return msgSender.toLowerCase().includes(senderName.toLowerCase());
+      };
+
       // Instagram DM export format: { participants: [...], messages: [{ sender_name, content, timestamp_ms }] }
       if (data.messages && Array.isArray(data.messages)) {
-        const lines = data.messages
-          .filter((m) => m.content && typeof m.content === 'string' && m.content.trim())
-          .map((m) => `${m.sender_name || 'Unknown'}: ${m.content.trim()}`);
-        if (lines.length > 0) {
-          const participants = (data.participants || []).map((p) => p.name).join(', ');
-          const header = participants ? `[Conversation between: ${participants}]\n\n` : '';
-          return header + lines.join('\n');
+        const participants = (data.participants || []).map((p) => p.name).join(', ');
+        const header = participants ? `[Conversation between: ${participants}]\n\n` : '';
+
+        if (senderName) {
+          // Include ALL messages for context but mark the target sender's messages clearly
+          const lines = data.messages
+            .filter((m) => m.content && typeof m.content === 'string' && m.content.trim())
+            .map((m) => {
+              const isSetter = matchesSender(m.sender_name);
+              const label = isSetter ? `[SETTER] ${m.sender_name || 'Unknown'}` : (m.sender_name || 'Lead');
+              return `${label}: ${m.content.trim()}`;
+            });
+          if (lines.length > 0) return header + lines.join('\n');
+        } else {
+          const lines = data.messages
+            .filter((m) => m.content && typeof m.content === 'string' && m.content.trim())
+            .map((m) => `${m.sender_name || 'Unknown'}: ${m.content.trim()}`);
+          if (lines.length > 0) return header + lines.join('\n');
         }
       }
 
@@ -121,9 +143,10 @@ Rules:
  * Generate a full persona configuration from an array of file buffers.
  *
  * @param {Array<{buffer: Buffer, mimetype: string, originalname: string}>} files
+ * @param {string|null} senderName  — name of the setter to focus on (optional)
  * @returns {Promise<{ persona: Object, style_summary: string }>}
  */
-async function generatePersonaFromFiles(files) {
+async function generatePersonaFromFiles(files, senderName = null) {
   if (!files || files.length === 0) {
     throw new Error('At least one file is required');
   }
@@ -132,7 +155,7 @@ async function generatePersonaFromFiles(files) {
   const textParts = [];
   for (const f of files) {
     try {
-      const text = await parseFileToText(f.buffer, f.mimetype, f.originalname);
+      const text = await parseFileToText(f.buffer, f.mimetype, f.originalname, senderName);
       if (text && text.trim().length > 0) {
         textParts.push(`--- FILE: ${f.originalname} ---\n${text.trim()}`);
       }
@@ -150,11 +173,16 @@ async function generatePersonaFromFiles(files) {
   // Trim to ~80k chars to stay within token limits (Claude handles ~100k context)
   const truncated = combinedText.length > 80000 ? combinedText.slice(0, 80000) + '\n\n[...truncated for analysis...]' : combinedText;
 
+  // Build user message — inject sender name hint when provided
+  const senderHint = senderName
+    ? `The person you must analyze is named "${senderName}". In the conversations below, their messages are marked with [SETTER] or simply appear under their name. ONLY model the style of "${senderName}" — completely ignore all other participants.\n\n`
+    : '';
+
   const { content } = await claudeWithRetry({
     model,
     max_tokens: 2500,
     system: ANALYSIS_PROMPT,
-    messages: [{ role: 'user', content: `Here are the conversations and documents to analyze:\n\n${truncated}\n\nGenerate the persona JSON now.` }],
+    messages: [{ role: 'user', content: `${senderHint}Here are the conversations and documents to analyze:\n\n${truncated}\n\nGenerate the persona JSON now.` }],
   });
 
   const raw = content ?? '';

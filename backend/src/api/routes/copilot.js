@@ -834,7 +834,7 @@ router.put('/settings/social-proof', requireRole('owner', 'admin', 'setter'), as
 // ---------------------------------------------------------------------------
 
 const multer = require('multer');
-const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 50 } });
 
 /**
  * GET /api/copilot/settings/persona-config
@@ -882,16 +882,20 @@ router.put('/settings/persona-source', requireRole('owner', 'admin', 'setter'), 
  * Upload 1-20 files (.json, .txt, .docx, .xlsx). AI analyzes them and returns
  * a generated persona. Does NOT save — frontend presents preview for user to confirm.
  */
-router.post('/settings/generate-persona', requireRole('owner', 'admin', 'setter'), personaUpload.array('files', 20), async (req, res) => {
+router.post('/settings/generate-persona', requireRole('owner', 'admin', 'setter'), personaUpload.array('files', 50), async (req, res) => {
   try {
     const files = req.files;
     if (!files || files.length === 0) {
       return res.status(400).json({ error: 'Upload at least one file (.json, .txt, .docx, .xlsx).' });
     }
 
+    // sender_name is optional — helps AI filter messages from the right person in group chats
+    const senderName = (req.body?.sender_name || '').trim() || null;
+
     const { generatePersonaFromFiles } = require('../../../../services/copilotPersonaGenerator');
     const result = await generatePersonaFromFiles(
-      files.map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, originalname: f.originalname }))
+      files.map((f) => ({ buffer: f.buffer, mimetype: f.mimetype, originalname: f.originalname })),
+      senderName
     );
 
     res.json(result);
