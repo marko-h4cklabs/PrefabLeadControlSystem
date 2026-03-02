@@ -9,7 +9,7 @@ const router = express.Router();
 const { pool } = require('../../../db');
 const { errorJson } = require('../middleware/errors');
 const { requireRole } = require('../middleware/auth');
-const { chatbotBehaviorRepository, chatbotCompanyInfoRepository, chatbotQuoteFieldsRepository } = require('../../../db/repositories');
+const { chatbotBehaviorRepository, chatbotCompanyInfoRepository, chatbotQuoteFieldsRepository, companyRepository } = require('../../../db/repositories');
 const { sendSuggestion } = require('../../../services/replySuggestionsService');
 const { publish: publishEvent } = require('../../lib/eventBus');
 
@@ -663,6 +663,167 @@ router.put('/settings/identity', async (req, res) => {
     const companyId = req.tenantId;
     const result = await chatbotCompanyInfoRepository.upsert(companyId, req.body, 'copilot');
     res.json(result);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/agent-identity
+ * Full agent identity: name, backstory, business info — scoped to copilot mode.
+ */
+router.get('/settings/agent-identity', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const [behavior, companyRecord, companyInfo] = await Promise.all([
+      chatbotBehaviorRepository.get(companyId, 'copilot').catch(() => null),
+      companyRepository.findById(companyId).catch(() => null),
+      chatbotCompanyInfoRepository.get(companyId, 'copilot').catch(() => null),
+    ]);
+    res.json({
+      agent_name: behavior?.agent_name ?? '',
+      agent_backstory: behavior?.agent_backstory ?? '',
+      business_name: companyRecord?.name ?? '',
+      business_description: companyInfo?.business_description ?? '',
+      additional_context: companyInfo?.additional_notes ?? '',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/agent-identity
+ */
+router.put('/settings/agent-identity', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { agent_name, agent_backstory, business_name, business_description, additional_context } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(companyId, {
+      agent_name: agent_name ?? undefined,
+      agent_backstory: agent_backstory ?? undefined,
+    }, 'copilot');
+    if (business_name !== undefined) {
+      await pool.query(
+        `UPDATE companies SET name = CASE WHEN $1::text IS NOT NULL THEN $1 ELSE name END WHERE id = $2`,
+        [business_name, companyId]
+      ).catch(() => {});
+    }
+    if (business_description !== undefined || additional_context !== undefined) {
+      await chatbotCompanyInfoRepository.upsert(companyId, {
+        business_description: business_description ?? undefined,
+        additional_notes: additional_context ?? undefined,
+      }, 'copilot');
+    }
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/strategy
+ * Conversation strategy (goal, follow-up style, closing, etc.) — copilot mode.
+ */
+router.get('/settings/strategy', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    res.json({
+      primary_goal: behavior?.conversation_goal ?? '',
+      follow_up_style: behavior?.follow_up_style ?? 'gentle',
+      closing_style: behavior?.closing_style ?? 'soft',
+      competitor_mentions: behavior?.competitor_mentions ?? 'deflect',
+      price_reveal: behavior?.price_reveal ?? 'ask_first',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/strategy
+ */
+router.put('/settings/strategy', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { primary_goal, follow_up_style, closing_style, competitor_mentions, price_reveal } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      conversation_goal: primary_goal ?? undefined,
+      follow_up_style: follow_up_style ?? undefined,
+      closing_style: closing_style ?? undefined,
+      competitor_mentions: competitor_mentions ?? undefined,
+      price_reveal: price_reveal ?? undefined,
+    }, 'copilot');
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/guardrails
+ * Guardrails (prohibited topics, bot denial, etc.) — copilot mode.
+ */
+router.get('/settings/guardrails', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    res.json({
+      bot_deny_response: behavior?.bot_deny_response ?? '',
+      prohibited_topics: behavior?.prohibited_topics ?? '',
+      handoff_trigger: behavior?.handoff_trigger ?? '',
+      human_fallback_message: behavior?.human_fallback_message ?? '',
+      max_messages_before_handoff: behavior?.max_messages_before_handoff ?? 20,
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/guardrails
+ */
+router.put('/settings/guardrails', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { bot_deny_response, prohibited_topics, handoff_trigger, human_fallback_message, max_messages_before_handoff } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      bot_deny_response: bot_deny_response ?? undefined,
+      prohibited_topics: prohibited_topics ?? undefined,
+      handoff_trigger: handoff_trigger ?? undefined,
+      human_fallback_message: human_fallback_message ?? undefined,
+      max_messages_before_handoff: max_messages_before_handoff ?? undefined,
+    }, 'copilot');
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * GET /api/copilot/settings/social-proof
+ * Social proof text/enabled — copilot mode. Images are company-wide (shared).
+ */
+router.get('/settings/social-proof', async (req, res) => {
+  try {
+    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    res.json({
+      enabled: behavior?.social_proof_enabled ?? false,
+      examples: behavior?.social_proof_examples ?? '',
+    });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/social-proof
+ */
+router.put('/settings/social-proof', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { enabled, examples } = req.body ?? {};
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      social_proof_enabled: enabled ?? undefined,
+      social_proof_examples: examples ?? undefined,
+    }, 'copilot');
+    res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
