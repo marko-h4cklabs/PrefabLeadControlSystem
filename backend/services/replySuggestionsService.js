@@ -119,9 +119,9 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   const conv = convRow.rows[0];
   const quoteSnapshot = conv?.quote_snapshot;
   const validTypes = ['text', 'number', 'select_multi', 'composite_dimensions', 'boolean', 'pictures'];
-  // Use quote_snapshot if it has entries, otherwise fall back to the live quoteFields config
-  // Filter to only enabled fields with valid types
-  const orderedQuoteFields = (Array.isArray(quoteSnapshot) && quoteSnapshot.length > 0 ? quoteSnapshot : quoteFields || [])
+  // Always use LIVE fields from settings — copilot fields are dynamic (add/remove/toggle
+  // in Fields tab takes effect immediately across all conversations, no stale snapshots)
+  const orderedQuoteFields = (quoteFields || [])
     .filter((f) => f && f.is_enabled !== false && validTypes.includes(f.type))
     .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
