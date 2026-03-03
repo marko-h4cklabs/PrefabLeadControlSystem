@@ -516,6 +516,17 @@ async function processManyChatPayload(payload, overrideCompany) {
         } catch (assignErr) {
           logger.warn({ err: assignErr.message }, '[manychat/webhook] Auto-assign failed');
         }
+
+        // Pre-generate suggestions in the background so they're ready when setter opens the chat.
+        // Fire-and-forget: generateSuggestions handles Claude call + reply_suggestions insert +
+        // publishing 'suggestion_ready' SSE event. The setter sees suggestions immediately on open.
+        conversationRepository.getByLeadId(lead.id).then((convForSug) => {
+          if (!convForSug?.id) return;
+          const { generateSuggestions } = require('../../../services/replySuggestionsService');
+          return generateSuggestions(lead.id, convForSug.id, companyId, convForSug.messages, null);
+        }).catch((err) => {
+          logger.warn({ err: err.message }, '[manychat/copilot] Suggestion pre-generation failed');
+        });
       } else {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
 
