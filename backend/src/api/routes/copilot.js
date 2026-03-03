@@ -886,7 +886,8 @@ router.put('/settings/social-proof', requireRole('owner', 'admin', 'setter'), as
 // ---------------------------------------------------------------------------
 
 const multer = require('multer');
-const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 50 } });
+// Accept text files + images (for vision analysis), 20 MB per file, 50 files per upload
+const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 50 } });
 
 /**
  * GET /api/copilot/settings/persona-config
@@ -897,7 +898,7 @@ router.get('/settings/persona-config', async (req, res) => {
     const companyId = req.tenantId;
     const behavior = await chatbotBehaviorRepository.get(companyId, 'copilot');
     const personasResult = await pool.query(
-      `SELECT id, name, style_summary, snapshot, created_at, updated_at
+      `SELECT id, name, style_summary, knowledge_base, snapshot, created_at, updated_at
        FROM copilot_ai_personas
        WHERE company_id = $1
        ORDER BY created_at DESC`,
@@ -937,14 +938,15 @@ router.put('/settings/persona-source', requireRole('owner', 'admin', 'setter'), 
 
 /**
  * POST /api/copilot/settings/generate-persona
- * Upload 1-20 files (.json, .txt, .docx, .xlsx). AI analyzes them and returns
- * a generated persona. Does NOT save — frontend presents preview for user to confirm.
+ * Upload files (.json, .txt, .docx, .xlsx) and/or images (screenshots).
+ * AI analyzes them and returns a generated persona + knowledge_base.
+ * Does NOT save — frontend presents preview for user to confirm.
  */
 router.post('/settings/generate-persona', requireRole('owner', 'admin', 'setter'), personaUpload.array('files', 50), async (req, res) => {
   try {
     const files = req.files;
     if (!files || files.length === 0) {
-      return res.status(400).json({ error: 'Upload at least one file (.json, .txt, .docx, .xlsx).' });
+      return res.status(400).json({ error: 'Upload at least one file (.json, .txt, .docx, .xlsx) or image screenshot.' });
     }
 
     // sender_name is optional — helps AI filter messages from the right person in group chats
@@ -1004,7 +1006,7 @@ router.put('/settings/ai-persona', requireRole('owner', 'admin', 'setter'), asyn
 router.get('/settings/ai-personas', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, style_summary, snapshot, created_at, updated_at
+      `SELECT id, name, style_summary, knowledge_base, snapshot, created_at, updated_at
        FROM copilot_ai_personas
        WHERE company_id = $1
        ORDER BY created_at DESC`,
@@ -1019,11 +1021,11 @@ router.get('/settings/ai-personas', async (req, res) => {
 /**
  * POST /api/copilot/settings/ai-personas
  * Save a generated persona as a named template.
- * Body: { name, snapshot, style_summary }
+ * Body: { name, snapshot, style_summary, knowledge_base }
  */
 router.post('/settings/ai-personas', requireRole('owner', 'admin', 'setter'), async (req, res) => {
   try {
-    const { name, snapshot, style_summary } = req.body ?? {};
+    const { name, snapshot, style_summary, knowledge_base } = req.body ?? {};
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'Persona name is required.' });
     }
@@ -1031,10 +1033,10 @@ router.post('/settings/ai-personas', requireRole('owner', 'admin', 'setter'), as
       return res.status(400).json({ error: 'Persona snapshot is required.' });
     }
     const result = await pool.query(
-      `INSERT INTO copilot_ai_personas (company_id, name, snapshot, style_summary)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, style_summary, snapshot, created_at, updated_at`,
-      [req.tenantId, name.trim(), JSON.stringify(snapshot), style_summary || null]
+      `INSERT INTO copilot_ai_personas (company_id, name, snapshot, style_summary, knowledge_base)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, style_summary, knowledge_base, snapshot, created_at, updated_at`,
+      [req.tenantId, name.trim(), JSON.stringify(snapshot), style_summary || null, knowledge_base || null]
     );
     res.json(result.rows[0]);
   } catch (err) {

@@ -166,17 +166,14 @@ async function get(companyId, mode = 'autopilot') {
   const row = result.rows[0];
   const base = rowToObject(row);
 
-  // Merge active AI persona snapshot on top of base behavior when AI mode is active
-  if (base.copilot_persona_source === 'ai_generated' && row._ai_persona_snapshot) {
-    Object.assign(base, row._ai_persona_snapshot);
-  }
-
-  // Always expose the active persona metadata for UI use
+  // Expose active persona metadata (including snapshot) for replySuggestionsService to merge.
+  // We do NOT auto-merge here so that manual-mode tab GET endpoints always see raw behavior fields.
   base._active_ai_persona = row._ai_persona_id
     ? {
         id: row._ai_persona_id,
         name: row._ai_persona_name,
         style_summary: row._ai_persona_style_summary,
+        snapshot: row._ai_persona_snapshot ?? null,
       }
     : null;
 

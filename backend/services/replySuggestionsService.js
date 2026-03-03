@@ -78,7 +78,8 @@ Return ONLY valid JSON in this exact format, nothing else:
 Apply these rules to ALL replies:
 - ${emojisOk}Max ${lengthHint} sentences each
 - Sound human, not robotic
-- No formal greetings or sign-offs${noTrailingPeriodRule}${humanErrorRules}
+- No formal greetings or sign-offs
+- NEVER use dashes or em-dashes (-- or \u2014) in any reply text. Use commas, periods, or line breaks instead.${noTrailingPeriodRule}${humanErrorRules}
 `;
 }
 
@@ -137,7 +138,8 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     chatbotCompanyInfoRepository.get(companyId, mode),
     companyRepository.findById(companyId),
     chatbotQuoteFieldsRepository.list(companyId, mode),
-    pool.query('SELECT parsed_fields, quote_snapshot FROM conversations WHERE id = $1 AND lead_id = $2', [conversationId, leadId]),
+    // Always fetch the LATEST conversation state to catch all messages in a rapid batch
+    pool.query('SELECT messages, parsed_fields, quote_snapshot FROM conversations WHERE id = $1 AND lead_id = $2', [conversationId, leadId]),
     pool.query(`SELECT id, name, system_prompt, agent_name, tone, opener_style FROM chatbot_personas WHERE company_id = $1 AND is_active = true AND COALESCE(operating_mode, 'autopilot') = $2 LIMIT 1`, [companyId, mode]).then((r) => r.rows[0] ?? null),
   ]);
 
@@ -152,10 +154,16 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
 
   logger.info({ companyId, quoteFieldsCount: (quoteFields || []).length, snapshotCount: (quoteSnapshot || []).length, orderedCount: orderedQuoteFields.length, fieldNames: orderedQuoteFields.map((f) => f.label || f.name) }, '[replySuggestions] Field awareness: loaded fields');
 
-  // Load copilot-specific behavior — repository.get() handles AI persona snapshot merge via LEFT JOIN
-  const effectiveBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
-  if (effectiveBehavior?.copilot_persona_source === 'ai_generated' && effectiveBehavior?._active_ai_persona) {
-    logger.info({ companyId, persona: effectiveBehavior._active_ai_persona.name }, '[replySuggestions] Using AI-generated persona');
+  // Always use the freshest messages from DB — the caller may have stale state
+  // (e.g. when the lead sends 3 messages quickly and the frontend regenerates on each one)
+  const latestMessages = convRow.rows[0]?.messages ?? messages ?? [];
+
+  // Load behavior; merge active AI persona snapshot on top when AI mode is active
+  const rawBehavior = behavior ?? await chatbotBehaviorRepository.get(companyId, mode);
+  const effectiveBehavior = { ...rawBehavior };
+  if (rawBehavior?.copilot_persona_source === 'ai_generated' && rawBehavior?._active_ai_persona?.snapshot) {
+    Object.assign(effectiveBehavior, rawBehavior._active_ai_persona.snapshot);
+    logger.info({ companyId, persona: rawBehavior._active_ai_persona.name }, '[replySuggestions] Using AI-generated persona snapshot');
   }
 
   // Compute missing fields for field-aware suggestions
@@ -223,7 +231,7 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   };
   const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow);
   const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt;
-  const userPrompt = buildUserPrompt(messages);
+  const userPrompt = buildUserPrompt(latestMessages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);
   let suggestions;
