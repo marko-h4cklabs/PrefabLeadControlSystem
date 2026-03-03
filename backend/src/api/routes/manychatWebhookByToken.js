@@ -28,7 +28,22 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     try {
       payload = JSON.parse(rawBody.toString());
     } catch (e) {
-      return res.status(400).json({ error: 'Invalid JSON body' });
+      // Sanitize control characters (e.g. raw newlines in multi-line DMs) and retry
+      try {
+        const sanitized = rawBody.toString().replace(
+          /"((?:[^"\\]|\\.)*)"/g,
+          (match, contents) => {
+            const fixed = contents.replace(/[\u0000-\u001F]/g, (c) => {
+              const escapes = { '\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f' };
+              return escapes[c] || ('\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+            });
+            return '"' + fixed + '"';
+          }
+        );
+        payload = JSON.parse(sanitized);
+      } catch (e2) {
+        return res.status(400).json({ error: 'Invalid JSON body' });
+      }
     }
 
     const companyResult = await pool.query(
@@ -45,6 +60,14 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     }
 
     res.status(200).json({ received: true });
+
+    // If message text was passed as a query param (to avoid ManyChat JSON template failures
+    // on multi-line messages), inject it into the payload before processing.
+    const queryMsg = req.query?.msg;
+    if (queryMsg && typeof queryMsg === 'string' && queryMsg.trim().length > 0) {
+      if (!payload.message) payload.message = {};
+      if (!payload.message.text) payload.message.text = queryMsg.trim();
+    }
 
     // Deduplicate: Redis-backed dedup shared with main webhook
     const messageId = payload.id ?? null;

@@ -13,7 +13,7 @@ const logger = require('../../lib/logger');
 const { subscribe } = require('../../lib/eventBus');
 const { userRepository } = require('../../../db/repositories');
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 router.get('/events', async (req, res) => {
   const token = req.query.token;

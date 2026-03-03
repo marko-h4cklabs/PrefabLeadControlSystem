@@ -291,6 +291,7 @@ router.get('/:leadId/conversation', async (req, res) => {
         .filter((f) => f?.required !== false)
         .map((f) => ({ name: f.name ?? '', type: f.type ?? 'text', units: f.units ?? null, priority: f.priority ?? 100, required: true }));
     }
+    res.set('Cache-Control', 'no-store');
     res.json({
       lead_id: leadId,
       conversation_id: conversation?.id ?? null,
