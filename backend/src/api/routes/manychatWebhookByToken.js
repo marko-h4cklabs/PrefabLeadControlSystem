@@ -1,12 +1,16 @@
 /**
  * ManyChat webhook by company webhook_token: POST /api/webhook/manychat/:webhookToken
  * No global signature; the token in the URL identifies the company.
+ *
+ * Uses BullMQ (same as the signature-verified route) for persistent, retryable processing.
+ * Falls back to direct fire-and-forget if Redis is unavailable.
  */
 const logger = require('../../lib/logger');
 const express = require('express');
 const { pool } = require('../../../db');
 const { processManyChatPayload } = require('./manychat');
 const { decrypt } = require('../../lib/encryption');
+const incomingMessageQueue = require('../../../services/incomingMessageQueue');
 
 const router = express.Router();
 
@@ -69,20 +73,22 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
       if (!payload.message.text) payload.message.text = queryMsg.trim();
     }
 
-    // Deduplicate: Redis-backed dedup shared with main webhook
+    // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).
+    // Pass overrideCompany so the worker skips the page_id lookup — token already resolved it.
+    // Falls back to direct fire-and-forget if Redis is unavailable.
     const messageId = payload.id ?? null;
-    if (messageId) {
-      const { isMessageProcessed } = require('../../lib/redis');
-      const isDuplicate = await isMessageProcessed(messageId, 3600);
-      if (isDuplicate) {
-        logger.info({ messageId }, 'Duplicate messageId skipped (webhook-by-token)');
-        return;
-      }
+    if (process.env.REDIS_URL) {
+      incomingMessageQueue.enqueueMessage(payload, messageId, companyRow).catch((err) => {
+        logger.error({ err: err.message }, '[manychat/webhook-by-token] Queue enqueue failed, falling back to direct processing');
+        processManyChatPayload(payload, companyRow).catch((e) => {
+          logger.error({ err: e }, '[manychat/webhook-by-token] Fallback processing error');
+        });
+      });
+    } else {
+      processManyChatPayload(payload, companyRow).catch((err) => {
+        logger.error('[manychat/webhook-by-token] Async processing error:', err);
+      });
     }
-
-    processManyChatPayload(payload, companyRow).catch((err) => {
-      logger.error('[manychat/webhook-by-token] Async processing error:', err);
-    });
   } catch (err) {
     logger.error('[manychat/webhook-by-token] Error:', err);
     if (!res.headersSent) {

@@ -51,9 +51,10 @@ function getQueue() {
  * Enqueue an incoming webhook payload for async processing.
  * @param {object} payload - Raw ManyChat webhook payload
  * @param {string|null} messageId - ManyChat message ID for deduplication
+ * @param {object|null} [overrideCompany] - Pre-resolved company row (from token-based route)
  * @returns {{ queued: boolean, jobId?: string, reason?: string }}
  */
-async function enqueueMessage(payload, messageId) {
+async function enqueueMessage(payload, messageId, overrideCompany = null) {
   try {
     const q = getQueue();
     const jobId = messageId ? `msg-${messageId}` : undefined;
@@ -69,7 +70,10 @@ async function enqueueMessage(payload, messageId) {
       }
     }
 
-    const job = await q.add('process_message', { payload, enqueuedAt: new Date().toISOString() }, {
+    const jobData = { payload, enqueuedAt: new Date().toISOString() };
+    if (overrideCompany) jobData.overrideCompany = overrideCompany;
+
+    const job = await q.add('process_message', jobData, {
       ...(jobId ? { jobId } : {}),
     });
 

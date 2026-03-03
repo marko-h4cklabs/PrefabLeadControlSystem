@@ -16,7 +16,7 @@ const CONCURRENCY = 10;
 let worker = null;
 
 async function processJob(job) {
-  const { payload } = job.data;
+  const { payload, overrideCompany } = job.data;
   if (!payload) {
     logger.warn('[incoming-message-worker] Job missing payload, skipping:', job.id);
     return;
@@ -27,7 +27,7 @@ async function processJob(job) {
 
   // Import processManyChatPayload lazily to avoid circular deps
   const { processManyChatPayload } = require('../src/api/routes/manychat');
-  await processManyChatPayload(payload);
+  await processManyChatPayload(payload, overrideCompany ?? null);
 }
 
 function start() {

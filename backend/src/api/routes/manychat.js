@@ -464,10 +464,63 @@ async function processManyChatPayload(payload, overrideCompany) {
     if (operating_mode === null) {
       logger.warn('[manychat/webhook] operating_mode not set, defaulting to autopilot');
     }
-    // Acquire per-lead lock (Redis-backed distributed lock, survives redeploy)
-    const lockAcquired = await acquireDistributedLock(`lead:${lead.id}`, 90);
+    // Acquire per-lead lock (Redis-backed distributed lock, survives redeploy).
+    // TTL 30s: enough headroom for Claude API (typical 5-15s) while not blocking rapid follow-ups too long.
+    const lockAcquired = await acquireDistributedLock(`lead:${lead.id}`, 30);
     if (!lockAcquired) {
-      logger.warn({ leadId: lead.id }, 'Lead already being processed, skipping');
+      // Message is already stored in DB and SSE has been fired. Only the AI reply/suggestions
+      // are missing. Schedule a 15s delayed retry so the current processing can finish first.
+      logger.warn({ leadId: lead.id }, '[manychat/webhook] Lead locked — scheduling delayed reply in 15s');
+      const _dLead = lead;
+      const _dMode = mode;
+      const _dCompanyId = companyId;
+      const _dApiKey = manychatApiKey;
+      const _dSubscriberId = subscriberId;
+      setTimeout(async () => {
+        try {
+          const retryLock = await acquireDistributedLock(`lead:${_dLead.id}`, 30);
+          if (!retryLock) {
+            logger.warn({ leadId: _dLead.id }, '[manychat/webhook] Delayed reply: lead still locked, giving up');
+            return;
+          }
+          try {
+            if (_dMode === 'copilot') {
+              const conv = await conversationRepository.getByLeadId(_dLead.id);
+              if (conv?.id) {
+                const { generateSuggestions } = require('../../../services/replySuggestionsService');
+                await generateSuggestions(_dLead.id, conv.id, _dCompanyId, conv.messages, null);
+              }
+            } else {
+              // Autopilot: generate AI reply for current conversation (already includes the new message)
+              const retryResult = await aiReplyService.generateAiReply(_dCompanyId, _dLead.id);
+              if (retryResult?.assistant_message) {
+                await conversationRepository.appendMessage(_dLead.id, 'assistant', retryResult.assistant_message);
+                const retryParsed = retryResult.parsed_fields ?? retryResult.field_updates ?? {};
+                if (Object.keys(retryParsed).length > 0) {
+                  await conversationRepository.updateParsedFields(_dLead.id, retryParsed);
+                }
+                if (_dApiKey) {
+                  await sendInstagramMessage(_dSubscriberId, retryResult.assistant_message, _dApiKey);
+                  incrementMessageCountAndWarn(_dCompanyId).catch(() => {});
+                }
+                logLeadActivity({
+                  companyId: _dCompanyId,
+                  leadId: _dLead.id,
+                  eventType: 'ai_reply_sent',
+                  actorType: 'ai',
+                  source: 'instagram',
+                  channel: 'instagram',
+                  metadata: { retried: true },
+                }).catch(() => {});
+              }
+            }
+          } finally {
+            await releaseDistributedLock(`lead:${_dLead.id}`);
+          }
+        } catch (err) {
+          logger.error({ err }, '[manychat/webhook] Delayed reply retry failed');
+        }
+      }, 15000);
       success = true;
       return;
     }
