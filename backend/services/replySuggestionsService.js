@@ -230,7 +230,14 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     additional_notes: companyInfo?.additional_notes ?? '',
   };
   const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow);
-  const systemPrompt = baseSystemPrompt + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt;
+
+  // Inject any custom rules the user added to this AI persona
+  const additionalInstructions = effectiveBehavior?.additional_instructions;
+  const additionalSection = additionalInstructions && String(additionalInstructions).trim()
+    ? `\n\n--- SETTER RULES (MUST be followed in every reply) ---\n${String(additionalInstructions).trim()}\n--- END SETTER RULES ---`
+    : '';
+
+  const systemPrompt = baseSystemPrompt + additionalSection + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt;
   const userPrompt = buildUserPrompt(latestMessages);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);
