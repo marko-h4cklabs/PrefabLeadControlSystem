@@ -141,7 +141,23 @@ router.post('/', rawJsonParser, async (req, res) => {
     try {
       payload = JSON.parse(rawBody.toString());
     } catch (e) {
-      return res.status(400).json({ error: 'Invalid JSON body' });
+      // ManyChat inserts message text raw without escaping control characters
+      // (e.g. literal newlines in multi-line DMs). Sanitize string values and retry.
+      try {
+        const sanitized = rawBody.toString().replace(
+          /"((?:[^"\\]|\\.)*)"/g,
+          (match, contents) => {
+            const fixed = contents.replace(/[\u0000-\u001F]/g, (c) => {
+              const escapes = { '\n': '\\n', '\r': '\\r', '\t': '\\t', '\b': '\\b', '\f': '\\f' };
+              return escapes[c] || ('\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+            });
+            return '"' + fixed + '"';
+          }
+        );
+        payload = JSON.parse(sanitized);
+      } catch (e2) {
+        return res.status(400).json({ error: 'Invalid JSON body' });
+      }
     }
 
     res.status(200).json({ received: true });
