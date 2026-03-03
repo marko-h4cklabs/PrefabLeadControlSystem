@@ -162,6 +162,14 @@ router.post('/', rawJsonParser, async (req, res) => {
 
     res.status(200).json({ received: true });
 
+    // If message text was passed as a query param (to avoid ManyChat JSON template failures
+    // on multi-line messages), inject it into the payload before processing.
+    const queryMsg = req.query?.msg;
+    if (queryMsg && typeof queryMsg === 'string' && queryMsg.trim().length > 0) {
+      if (!payload.message) payload.message = {};
+      if (!payload.message.text) payload.message.text = queryMsg.trim();
+    }
+
     // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).
     // Falls back to fire-and-forget if Redis is unavailable.
     const messageId = payload.id ?? null;
