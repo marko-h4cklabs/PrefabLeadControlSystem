@@ -636,6 +636,27 @@ router.put('/settings/behavior', async (req, res) => {
   try {
     const companyId = req.tenantId;
     const result = await chatbotBehaviorRepository.upsert(companyId, req.body, 'copilot');
+    // Sync behavior fields to active AI persona snapshot when AI mode is active
+    const BEHAVIOR_PERSONA_KEYS = [
+      'tone', 'response_length', 'emojis_enabled', 'opener_style',
+      'human_error_enabled', 'human_error_types', 'human_error_random', 'no_trailing_period',
+      'bot_deny_response',
+    ];
+    const syncFields = {};
+    for (const key of BEHAVIOR_PERSONA_KEYS) {
+      if (req.body[key] !== undefined) syncFields[key] = req.body[key];
+    }
+    if (Object.keys(syncFields).length > 0) {
+      await pool.query(
+        `UPDATE copilot_ai_personas p
+         SET snapshot = snapshot || $1::jsonb, updated_at = NOW()
+         FROM chatbot_behavior b
+         WHERE b.company_id = $2
+           AND b.copilot_persona_source = 'ai_generated'
+           AND b.active_ai_persona_id = p.id`,
+        [JSON.stringify(syncFields), companyId]
+      ).catch(() => {});
+    }
     res.json(result);
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -715,6 +736,21 @@ router.put('/settings/agent-identity', requireRole('owner', 'admin', 'setter'), 
         additional_notes: additional_context ?? undefined,
       }, 'copilot');
     }
+    // Sync to active AI persona snapshot when AI mode is active
+    const fields = {};
+    if (agent_name !== undefined) fields.agent_name = agent_name;
+    if (agent_backstory !== undefined) fields.agent_backstory = agent_backstory;
+    if (Object.keys(fields).length > 0) {
+      await pool.query(
+        `UPDATE copilot_ai_personas p
+         SET snapshot = snapshot || $1::jsonb, updated_at = NOW()
+         FROM chatbot_behavior b
+         WHERE b.company_id = $2
+           AND b.copilot_persona_source = 'ai_generated'
+           AND b.active_ai_persona_id = p.id`,
+        [JSON.stringify(fields), companyId]
+      ).catch(() => {});
+    }
     res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -745,14 +781,30 @@ router.get('/settings/strategy', async (req, res) => {
  */
 router.put('/settings/strategy', requireRole('owner', 'admin', 'setter'), async (req, res) => {
   try {
+    const companyId = req.tenantId;
     const { primary_goal, follow_up_style, closing_style, competitor_mentions, price_reveal } = req.body ?? {};
-    await chatbotBehaviorRepository.upsert(req.tenantId, {
+    await chatbotBehaviorRepository.upsert(companyId, {
       conversation_goal: primary_goal ?? undefined,
       follow_up_style: follow_up_style ?? undefined,
       closing_style: closing_style ?? undefined,
       competitor_mentions: competitor_mentions ?? undefined,
       price_reveal: price_reveal ?? undefined,
     }, 'copilot');
+    // Sync strategy fields to active AI persona snapshot when AI mode is active
+    const syncFields = {};
+    if (follow_up_style !== undefined) syncFields.follow_up_style = follow_up_style;
+    if (closing_style !== undefined) syncFields.closing_style = closing_style;
+    if (Object.keys(syncFields).length > 0) {
+      await pool.query(
+        `UPDATE copilot_ai_personas p
+         SET snapshot = snapshot || $1::jsonb, updated_at = NOW()
+         FROM chatbot_behavior b
+         WHERE b.company_id = $2
+           AND b.copilot_persona_source = 'ai_generated'
+           AND b.active_ai_persona_id = p.id`,
+        [JSON.stringify(syncFields), companyId]
+      ).catch(() => {});
+    }
     res.json({ success: true });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -838,18 +890,24 @@ const personaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 
 /**
  * GET /api/copilot/settings/persona-config
- * Returns current persona source + AI persona metadata (not the full snapshot).
+ * Returns current persona source + active AI persona metadata + list of all saved personas.
  */
 router.get('/settings/persona-config', async (req, res) => {
   try {
-    const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
+    const companyId = req.tenantId;
+    const behavior = await chatbotBehaviorRepository.get(companyId, 'copilot');
+    const personasResult = await pool.query(
+      `SELECT id, name, style_summary, snapshot, created_at, updated_at
+       FROM copilot_ai_personas
+       WHERE company_id = $1
+       ORDER BY created_at DESC`,
+      [companyId]
+    );
     res.json({
       copilot_persona_source: behavior.copilot_persona_source || 'manual',
-      has_ai_persona: !!behavior.ai_persona_snapshot,
-      ai_persona_generated_at: behavior.ai_persona_generated_at || null,
-      ai_persona_summary: behavior.ai_persona_summary || null,
-      // Return snapshot so frontend can pre-fill the review form
-      ai_persona_snapshot: behavior.ai_persona_snapshot || null,
+      active_ai_persona_id: behavior.active_ai_persona_id || null,
+      active_ai_persona: behavior._active_ai_persona || null,
+      personas: personasResult.rows,
     });
   } catch (err) {
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
@@ -867,8 +925,8 @@ router.put('/settings/persona-source', requireRole('owner', 'admin', 'setter'), 
       return res.status(400).json({ error: 'source must be "manual" or "ai_generated"' });
     }
     const behavior = await chatbotBehaviorRepository.get(req.tenantId, 'copilot');
-    if (source === 'ai_generated' && !behavior.ai_persona_snapshot) {
-      return res.status(400).json({ error: 'No AI persona exists yet. Generate one first.' });
+    if (source === 'ai_generated' && !behavior.active_ai_persona_id) {
+      return res.status(400).json({ error: 'No AI persona selected. Choose a persona first.' });
     }
     await chatbotBehaviorRepository.upsert(req.tenantId, { copilot_persona_source: source }, 'copilot');
     res.json({ success: true, copilot_persona_source: source });
@@ -936,6 +994,141 @@ router.put('/settings/ai-persona', requireRole('owner', 'admin', 'setter'), asyn
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });
+
+// ─── Named AI Persona CRUD ──────────────────────────────────────────────────
+
+/**
+ * GET /api/copilot/settings/ai-personas
+ * List all saved AI persona templates for this company.
+ */
+router.get('/settings/ai-personas', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, style_summary, snapshot, created_at, updated_at
+       FROM copilot_ai_personas
+       WHERE company_id = $1
+       ORDER BY created_at DESC`,
+      [req.tenantId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/copilot/settings/ai-personas
+ * Save a generated persona as a named template.
+ * Body: { name, snapshot, style_summary }
+ */
+router.post('/settings/ai-personas', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { name, snapshot, style_summary } = req.body ?? {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Persona name is required.' });
+    }
+    if (!snapshot || typeof snapshot !== 'object') {
+      return res.status(400).json({ error: 'Persona snapshot is required.' });
+    }
+    const result = await pool.query(
+      `INSERT INTO copilot_ai_personas (company_id, name, snapshot, style_summary)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, style_summary, snapshot, created_at, updated_at`,
+      [req.tenantId, name.trim(), JSON.stringify(snapshot), style_summary || null]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/ai-personas/:id
+ * Update a saved AI persona (name, snapshot fields, style_summary).
+ */
+router.put('/settings/ai-personas/:id', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, snapshot, style_summary } = req.body ?? {};
+
+    // Verify ownership
+    const check = await pool.query(
+      `SELECT id, snapshot FROM copilot_ai_personas WHERE id = $1 AND company_id = $2`,
+      [id, req.tenantId]
+    );
+    if (!check.rows[0]) return res.status(404).json({ error: 'Persona not found.' });
+
+    const existing = check.rows[0];
+    const mergedSnapshot = snapshot
+      ? { ...existing.snapshot, ...snapshot }
+      : existing.snapshot;
+
+    const result = await pool.query(
+      `UPDATE copilot_ai_personas
+       SET name = COALESCE($3, name),
+           snapshot = $4,
+           style_summary = COALESCE($5, style_summary),
+           updated_at = NOW()
+       WHERE id = $1 AND company_id = $2
+       RETURNING id, name, style_summary, snapshot, created_at, updated_at`,
+      [id, req.tenantId, name ? name.trim() : null, JSON.stringify(mergedSnapshot), style_summary || null]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * DELETE /api/copilot/settings/ai-personas/:id
+ * Delete a saved AI persona. If it was active, clears active_ai_persona_id.
+ */
+router.delete('/settings/ai-personas/:id', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `DELETE FROM copilot_ai_personas WHERE id = $1 AND company_id = $2 RETURNING id`,
+      [id, req.tenantId]
+    );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Persona not found.' });
+    // If this was the active persona, clear it and revert to manual
+    await pool.query(
+      `UPDATE chatbot_behavior
+       SET active_ai_persona_id = NULL,
+           copilot_persona_source = CASE WHEN active_ai_persona_id = $1 THEN 'manual' ELSE copilot_persona_source END
+       WHERE company_id = $2`,
+      [id, req.tenantId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/ai-personas/:id/activate
+ * Set a saved AI persona as active and switch source to 'ai_generated'.
+ */
+router.put('/settings/ai-personas/:id/activate', requireRole('owner', 'admin', 'setter'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const check = await pool.query(
+      `SELECT id FROM copilot_ai_personas WHERE id = $1 AND company_id = $2`,
+      [id, req.tenantId]
+    );
+    if (!check.rows[0]) return res.status(404).json({ error: 'Persona not found.' });
+
+    await chatbotBehaviorRepository.upsert(req.tenantId, {
+      active_ai_persona_id: id,
+      copilot_persona_source: 'ai_generated',
+    }, 'copilot');
+    res.json({ success: true, active_ai_persona_id: id, copilot_persona_source: 'ai_generated' });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 
 /**
  * GET /api/copilot/settings/fields

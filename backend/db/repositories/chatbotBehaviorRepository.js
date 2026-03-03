@@ -40,6 +40,7 @@ const DEFAULTS = {
   ai_persona_snapshot: null,
   ai_persona_generated_at: null,
   ai_persona_summary: null,
+  active_ai_persona_id: null,
   delay_min_seconds: 0,
   delay_max_seconds: 0,
   delay_random_enabled: false,
@@ -86,6 +87,7 @@ const COLUMNS = [
   'ai_persona_snapshot',
   'ai_persona_generated_at',
   'ai_persona_summary',
+  'active_ai_persona_id',
   'delay_min_seconds',
   'delay_max_seconds',
   'delay_random_enabled',
@@ -136,6 +138,7 @@ function rowToObject(row) {
     ai_persona_snapshot: row.ai_persona_snapshot ?? DEFAULTS.ai_persona_snapshot,
     ai_persona_generated_at: row.ai_persona_generated_at ?? DEFAULTS.ai_persona_generated_at,
     ai_persona_summary: row.ai_persona_summary ?? DEFAULTS.ai_persona_summary,
+    active_ai_persona_id: row.active_ai_persona_id ?? DEFAULTS.active_ai_persona_id,
     delay_min_seconds: row.delay_min_seconds ?? DEFAULTS.delay_min_seconds,
     delay_max_seconds: row.delay_max_seconds ?? DEFAULTS.delay_max_seconds,
     delay_random_enabled: row.delay_random_enabled ?? DEFAULTS.delay_random_enabled,
@@ -144,12 +147,40 @@ function rowToObject(row) {
 }
 
 async function get(companyId, mode = 'autopilot') {
-  // PK is company_id only — one row per company. Just fetch by company_id.
+  // PK is company_id only — one row per company.
+  // LEFT JOIN copilot_ai_personas to get the active AI persona snapshot in one query.
+  const colSelect = COLUMNS.map((c) => `cb."${c}"`).join(', ');
   const result = await pool.query(
-    `SELECT ${COLUMNS.join(', ')} FROM chatbot_behavior WHERE company_id = $1`,
+    `SELECT ${colSelect},
+            cap.id          AS _ai_persona_id,
+            cap.name        AS _ai_persona_name,
+            cap.snapshot    AS _ai_persona_snapshot,
+            cap.style_summary AS _ai_persona_style_summary
+     FROM chatbot_behavior cb
+     LEFT JOIN copilot_ai_personas cap ON cb.active_ai_persona_id = cap.id
+     WHERE cb.company_id = $1`,
     [companyId]
   );
-  return result.rows[0] ? rowToObject(result.rows[0]) : { ...DEFAULTS };
+  if (!result.rows[0]) return { ...DEFAULTS };
+
+  const row = result.rows[0];
+  const base = rowToObject(row);
+
+  // Merge active AI persona snapshot on top of base behavior when AI mode is active
+  if (base.copilot_persona_source === 'ai_generated' && row._ai_persona_snapshot) {
+    Object.assign(base, row._ai_persona_snapshot);
+  }
+
+  // Always expose the active persona metadata for UI use
+  base._active_ai_persona = row._ai_persona_id
+    ? {
+        id: row._ai_persona_id,
+        name: row._ai_persona_name,
+        style_summary: row._ai_persona_style_summary,
+      }
+    : null;
+
+  return base;
 }
 
 async function upsert(companyId, payload, mode = 'autopilot') {
