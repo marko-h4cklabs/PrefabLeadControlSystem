@@ -173,6 +173,14 @@ router.post('/:conversationId/suggestions', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
     }
     const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
+
+    // Clear the 5-min auto-suggest timer for this lead — manual generate takes priority
+    try {
+      const { getRedisClient } = require('../../lib/redis');
+      const redis = getRedisClient();
+      if (redis) await redis.del(`autosuggest:${conv.lead_id}`);
+    } catch { /* non-critical */ }
+
     const result = await replySuggestionsService.generateSuggestions(
       conv.lead_id,
       conversationId,

@@ -505,11 +505,8 @@ async function processManyChatPayload(payload, overrideCompany) {
           }
           try {
             if (_dMode === 'copilot') {
-              const conv = await conversationRepository.getByLeadId(_dLead.id);
-              if (conv?.id) {
-                const { generateSuggestions } = require('../../../services/replySuggestionsService');
-                await generateSuggestions(_dLead.id, conv.id, _dCompanyId, conv.messages, null);
-              }
+              // Suggestions deferred to 5-min auto-trigger or manual "Generate" button.
+              // No immediate generation needed on delayed retry — message is already stored.
             } else {
               // Autopilot: generate AI reply for current conversation (already includes the new message)
               const retryResult = await aiReplyService.generateAiReply(_dCompanyId, _dLead.id);
@@ -557,20 +554,31 @@ async function processManyChatPayload(payload, overrideCompany) {
           logger.warn({ err: assignErr.message }, '[manychat/webhook] Auto-assign failed');
         }
 
-        // Pre-generate suggestions after a short debounce (3s) so rapid follow-up messages
-        // accumulate before the Claude call starts. This prevents stale suggestions based on
-        // only the first message when a user sends multiple messages quickly.
+        // Delayed auto-generation: schedule suggestions 5 minutes after the FIRST message
+        // in a batch. This saves Claude API credits — setters rarely respond instantly.
+        // Uses Redis to ensure only one timer runs per lead. Setter can click "Generate"
+        // in the UI at any time to get suggestions immediately.
+        const AUTO_SUGGEST_DELAY = 5 * 60 * 1000; // 5 minutes
         const _sugLeadId = lead.id;
         const _sugCompanyId = companyId;
-        setTimeout(() => {
-          conversationRepository.getByLeadId(_sugLeadId).then((convForSug) => {
-            if (!convForSug?.id) return;
-            const { generateSuggestions } = require('../../../services/replySuggestionsService');
-            return generateSuggestions(_sugLeadId, convForSug.id, _sugCompanyId, convForSug.messages, null);
-          }).catch((err) => {
-            logger.warn({ err: err.message }, '[manychat/copilot] Suggestion pre-generation failed');
-          });
-        }, 3000);
+        const { getRedisClient } = require('../../lib/redis');
+        const sugRedis = getRedisClient();
+        const sugKey = `autosuggest:${_sugLeadId}`;
+        // Only schedule if no timer is already pending for this lead
+        const alreadyPending = sugRedis ? await sugRedis.set(sugKey, '1', 'NX', 'EX', 310).then(r => r === null) : false;
+        if (!alreadyPending) {
+          setTimeout(() => {
+            // Clear the Redis key first, then generate
+            if (sugRedis) sugRedis.del(sugKey).catch(() => {});
+            conversationRepository.getByLeadId(_sugLeadId).then((convForSug) => {
+              if (!convForSug?.id) return;
+              const { generateSuggestions } = require('../../../services/replySuggestionsService');
+              return generateSuggestions(_sugLeadId, convForSug.id, _sugCompanyId, convForSug.messages, null);
+            }).catch((err) => {
+              logger.warn({ err: err.message }, '[manychat/copilot] Auto-suggestion generation failed');
+            });
+          }, AUTO_SUGGEST_DELAY);
+        }
       } else {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
 
