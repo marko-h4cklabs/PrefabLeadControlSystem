@@ -173,14 +173,6 @@ router.post('/:conversationId/suggestions', async (req, res) => {
       return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
     }
     const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId, 'copilot')) ?? {};
-
-    // Clear the 5-min auto-suggest timer for this lead — manual generate takes priority
-    try {
-      const { getRedisClient } = require('../../lib/redis');
-      const redis = getRedisClient();
-      if (redis) await redis.del(`autosuggest:${conv.lead_id}`);
-    } catch { /* non-critical */ }
-
     const result = await replySuggestionsService.generateSuggestions(
       conv.lead_id,
       conversationId,
@@ -294,6 +286,65 @@ router.post('/:conversationId/suggestions/:suggestionId/send-edited', async (req
       type: 'new_message',
       leadId,
       conversationId: req.params.conversationId,
+      preview: text.trim().slice(0, 100),
+      role: 'assistant',
+      content: text.trim(),
+      messageTimestamp: new Date().toISOString(),
+    }).catch(() => {});
+
+    res.json({ success: true, message_sent: text.trim() });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/conversations/:conversationId/send-direct
+ * Send a message directly without needing a suggestion context.
+ * Used by the copilot template message flow.
+ * Body: { text: "message to send" }
+ */
+router.post('/:conversationId/send-direct', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { conversationId } = req.params;
+    const { text } = req.body || {};
+
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
+    }
+    if (!UUID_REGEX.test(conversationId)) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Valid conversation ID required');
+    }
+
+    const convRow = await pool.query(
+      'SELECT c.lead_id FROM conversations c JOIN leads l ON l.id = c.lead_id WHERE c.id = $1 AND l.company_id = $2',
+      [conversationId, companyId]
+    );
+    if (!convRow.rows[0]) {
+      return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
+    }
+    const leadId = convRow.rows[0].lead_id;
+
+    const leadRow = await pool.query(
+      `SELECT l.external_id, c.manychat_api_key FROM leads l
+       JOIN companies c ON c.id = l.company_id
+       WHERE l.id = $1 AND l.company_id = $2`,
+      [leadId, companyId]
+    );
+    const lead = leadRow.rows[0];
+    if (!lead?.external_id || !lead?.manychat_api_key) {
+      return errorJson(res, 400, 'SEND_FAILED', 'Lead missing external ID or ManyChat API key');
+    }
+
+    const { sendInstagramMessage } = require('../../services/manychatService');
+    await sendInstagramMessage(lead.external_id, text.trim(), decrypt(lead.manychat_api_key));
+    await conversationRepository.appendMessage(leadId, 'assistant', text.trim());
+
+    publishEvent(companyId, {
+      type: 'new_message',
+      leadId,
+      conversationId,
       preview: text.trim().slice(0, 100),
       role: 'assistant',
       content: text.trim(),

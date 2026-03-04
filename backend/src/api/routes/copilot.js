@@ -2053,4 +2053,121 @@ router.post('/me/notification-channels/test', async (req, res) => {
   }
 });
 
+// ─── Copilot Template Messages ───────────────────────────────────────────────
+
+/**
+ * GET /api/copilot/settings/templates
+ * List all copilot template messages for the company.
+ */
+router.get('/settings/templates', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const r = await pool.query(
+      `SELECT id, name, category, content, variables, use_count, created_at
+       FROM message_templates
+       WHERE company_id = $1 AND COALESCE(operating_mode, 'autopilot') = 'copilot'
+       ORDER BY created_at ASC`,
+      [companyId]
+    );
+    res.json({ templates: r.rows });
+  } catch (err) {
+    logger.error('[copilot/templates] list:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to list templates');
+  }
+});
+
+/**
+ * POST /api/copilot/settings/templates
+ * Create a new copilot template message.
+ */
+router.post('/settings/templates', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { name, content, category } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'name is required');
+    }
+    if (!content || typeof content !== 'string' || !content.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'content is required');
+    }
+    const variables = [];
+    const matches = content.match(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g) || [];
+    for (const m of [...new Set(matches.map(v => v.slice(1, -1)))]) variables.push(m);
+
+    const r = await pool.query(
+      `INSERT INTO message_templates (company_id, name, category, content, variables, operating_mode)
+       VALUES ($1, $2, $3, $4, $5, 'copilot')
+       RETURNING id, name, category, content, variables, use_count, created_at`,
+      [companyId, name.trim(), (category && String(category).trim()) || 'general', content.trim(), variables]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (err) {
+    logger.error('[copilot/templates] create:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to create template');
+  }
+});
+
+/**
+ * PUT /api/copilot/settings/templates/:id
+ * Update a copilot template message.
+ */
+router.put('/settings/templates/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { id } = req.params;
+    const { name, content, category } = req.body || {};
+
+    const sets = [];
+    const vals = [id, companyId];
+    let idx = 3;
+    if (name && typeof name === 'string') { sets.push(`name = $${idx++}`); vals.push(name.trim()); }
+    if (content && typeof content === 'string') {
+      sets.push(`content = $${idx++}`);
+      vals.push(content.trim());
+      const variables = [];
+      const matches = content.match(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g) || [];
+      for (const m of [...new Set(matches.map(v => v.slice(1, -1)))]) variables.push(m);
+      sets.push(`variables = $${idx++}`);
+      vals.push(variables);
+    }
+    if (category && typeof category === 'string') { sets.push(`category = $${idx++}`); vals.push(category.trim()); }
+
+    if (sets.length === 0) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'No fields to update');
+    }
+
+    const r = await pool.query(
+      `UPDATE message_templates SET ${sets.join(', ')}
+       WHERE id = $1 AND company_id = $2 AND COALESCE(operating_mode, 'autopilot') = 'copilot'
+       RETURNING id, name, category, content, variables, use_count, created_at`,
+      vals
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Template not found');
+    res.json(r.rows[0]);
+  } catch (err) {
+    logger.error('[copilot/templates] update:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to update template');
+  }
+});
+
+/**
+ * DELETE /api/copilot/settings/templates/:id
+ * Delete a copilot template message.
+ */
+router.delete('/settings/templates/:id', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { id } = req.params;
+    const r = await pool.query(
+      `DELETE FROM message_templates WHERE id = $1 AND company_id = $2 AND COALESCE(operating_mode, 'autopilot') = 'copilot' RETURNING id`,
+      [id, companyId]
+    );
+    if (!r.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Template not found');
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('[copilot/templates] delete:', err.message);
+    errorJson(res, 500, 'INTERNAL_ERROR', 'Failed to delete template');
+  }
+});
+
 module.exports = router;
