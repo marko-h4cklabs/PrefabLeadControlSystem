@@ -364,6 +364,12 @@ async function processManyChatPayload(payload, overrideCompany) {
 
   if (extracted.type === 'text') {
     await conversationRepository.appendMessage(lead.id, 'user', content);
+    // Invalidate any pending (unused) suggestions — a new user message makes them stale
+    pool.query(
+      `UPDATE reply_suggestions SET used_suggestion_index = -2
+       WHERE lead_id = $1 AND company_id = $2 AND used_at IS NULL AND used_suggestion_index IS NULL`,
+      [lead.id, companyId]
+    ).catch(() => {});
   }
 
   const conversationForCount = await conversationRepository.getByLeadId(lead.id);
@@ -469,8 +475,8 @@ async function processManyChatPayload(payload, overrideCompany) {
     const lockAcquired = await acquireDistributedLock(`lead:${lead.id}`, 30);
     if (!lockAcquired) {
       // Message is already stored in DB and SSE has been fired. Only the AI reply/suggestions
-      // are missing. Schedule a 15s delayed retry so the current processing can finish first.
-      logger.warn({ leadId: lead.id }, '[manychat/webhook] Lead locked — scheduling delayed reply in 15s');
+      // are missing. Schedule a 5s delayed retry so the current processing can finish first.
+      logger.warn({ leadId: lead.id }, '[manychat/webhook] Lead locked — scheduling delayed reply in 5s');
       const _dLead = lead;
       const _dMode = mode;
       const _dCompanyId = companyId;
@@ -520,7 +526,7 @@ async function processManyChatPayload(payload, overrideCompany) {
         } catch (err) {
           logger.error({ err }, '[manychat/webhook] Delayed reply retry failed');
         }
-      }, 15000);
+      }, 5000);
       success = true;
       return;
     }
@@ -537,16 +543,20 @@ async function processManyChatPayload(payload, overrideCompany) {
           logger.warn({ err: assignErr.message }, '[manychat/webhook] Auto-assign failed');
         }
 
-        // Pre-generate suggestions in the background so they're ready when setter opens the chat.
-        // Fire-and-forget: generateSuggestions handles Claude call + reply_suggestions insert +
-        // publishing 'suggestion_ready' SSE event. The setter sees suggestions immediately on open.
-        conversationRepository.getByLeadId(lead.id).then((convForSug) => {
-          if (!convForSug?.id) return;
-          const { generateSuggestions } = require('../../../services/replySuggestionsService');
-          return generateSuggestions(lead.id, convForSug.id, companyId, convForSug.messages, null);
-        }).catch((err) => {
-          logger.warn({ err: err.message }, '[manychat/copilot] Suggestion pre-generation failed');
-        });
+        // Pre-generate suggestions after a short debounce (3s) so rapid follow-up messages
+        // accumulate before the Claude call starts. This prevents stale suggestions based on
+        // only the first message when a user sends multiple messages quickly.
+        const _sugLeadId = lead.id;
+        const _sugCompanyId = companyId;
+        setTimeout(() => {
+          conversationRepository.getByLeadId(_sugLeadId).then((convForSug) => {
+            if (!convForSug?.id) return;
+            const { generateSuggestions } = require('../../../services/replySuggestionsService');
+            return generateSuggestions(_sugLeadId, convForSug.id, _sugCompanyId, convForSug.messages, null);
+          }).catch((err) => {
+            logger.warn({ err: err.message }, '[manychat/copilot] Suggestion pre-generation failed');
+          });
+        }, 3000);
       } else {
         const behavior = (await require('../../../db/repositories').chatbotBehaviorRepository.get(companyId)) ?? {};
 
