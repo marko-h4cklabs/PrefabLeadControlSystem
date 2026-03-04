@@ -357,4 +357,88 @@ router.post('/:conversationId/send-direct', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Send voice note to Instagram via ManyChat
+// ---------------------------------------------------------------------------
+const { sendManyChatFile } = require('../../services/manychatService');
+const { chatAttachmentRepository } = require('../../../db/repositories');
+
+/**
+ * POST /api/conversations/:conversationId/send-voice
+ * Send a pre-generated voice note to Instagram.
+ * Body: { audio_base64: string, text: string }
+ */
+router.post('/:conversationId/send-voice', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { conversationId } = req.params;
+    const { audio_base64, text } = req.body || {};
+
+    if (!audio_base64 || typeof audio_base64 !== 'string') {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'audio_base64 is required');
+    }
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
+    }
+
+    // Resolve conversation -> lead
+    const convRow = await pool.query(
+      'SELECT c.lead_id FROM conversations c JOIN leads l ON l.id = c.lead_id WHERE c.id = $1 AND l.company_id = $2',
+      [conversationId, companyId]
+    );
+    if (!convRow.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Conversation not found');
+    const leadId = convRow.rows[0].lead_id;
+
+    // Get lead external_id + ManyChat API key
+    const leadRow = await pool.query(
+      `SELECT l.external_id, c.manychat_api_key FROM leads l
+       JOIN companies c ON c.id = l.company_id
+       WHERE l.id = $1 AND l.company_id = $2`,
+      [leadId, companyId]
+    );
+    const lead = leadRow.rows[0];
+    if (!lead?.external_id || !lead?.manychat_api_key) {
+      return errorJson(res, 400, 'SEND_FAILED', 'Lead missing external ID or ManyChat API key');
+    }
+
+    // Store audio as attachment (same pattern as manychat.js voice flow)
+    const audioBuffer = Buffer.from(audio_base64, 'base64');
+    const attachment = await chatAttachmentRepository.create(companyId, leadId, {
+      mimeType: 'audio/wav',
+      fileName: 'voice-note.wav',
+      byteSize: audioBuffer.length,
+      buffer: audioBuffer,
+      conversationId,
+    });
+
+    // Build public URL
+    const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
+    const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-note.wav`;
+
+    // Send to Instagram via ManyChat
+    const manychatApiKey = decrypt(lead.manychat_api_key);
+    await sendManyChatFile(lead.external_id, audioPublicUrl, manychatApiKey);
+
+    // Append text to conversation history
+    await conversationRepository.appendMessage(leadId, 'assistant', text.trim());
+
+    // Emit SSE event
+    publishEvent(companyId, {
+      type: 'new_message',
+      leadId,
+      conversationId,
+      preview: text.trim().slice(0, 80),
+      role: 'assistant',
+      content: text.trim(),
+      messageTimestamp: new Date().toISOString(),
+      is_voice: true,
+    }).catch(() => {});
+
+    res.json({ success: true, message_sent: text.trim(), audio_url: audioPublicUrl, is_voice: true });
+  } catch (err) {
+    logger.error({ err: err.message }, '[conversations/send-voice] Error');
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 module.exports = router;

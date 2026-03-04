@@ -2170,4 +2170,52 @@ router.delete('/settings/templates/:id', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Voice note generation (ElevenLabs TTS preview)
+// ---------------------------------------------------------------------------
+const { isElevenLabsConfigured, textToSpeechWav } = require('../../utils/elevenLabsClient');
+
+/**
+ * POST /api/copilot/voice/generate
+ * Generate a voice note from text using the company's ElevenLabs voice settings.
+ */
+router.post('/voice/generate', async (req, res) => {
+  try {
+    const companyId = req.tenantId;
+    const { text } = req.body || {};
+
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
+    }
+    if (text.trim().length > 5000) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Text too long (max 5000 characters)');
+    }
+    if (!isElevenLabsConfigured()) {
+      return errorJson(res, 503, 'SERVICE_UNAVAILABLE', 'ElevenLabs API key not configured');
+    }
+
+    const company = await companyRepository.findById(companyId);
+    if (!company) return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
+    if (!company.voice_selected_id) {
+      return errorJson(res, 400, 'VOICE_NOT_CONFIGURED', 'No voice selected. Configure a voice in Copilot Settings > Voice Messages.');
+    }
+
+    const ttsResult = await textToSpeechWav(company.voice_selected_id, text.trim(), {
+      model: company.voice_model || 'eleven_turbo_v2_5',
+      stability: parseFloat(company.voice_stability) || 0.5,
+      similarity_boost: parseFloat(company.voice_similarity_boost) || 0.75,
+      style: parseFloat(company.voice_style) || 0,
+      speaker_boost: company.voice_speaker_boost !== false,
+    });
+
+    res.json({
+      audio_base64: ttsResult.audio_base64,
+      content_type: ttsResult.content_type,
+    });
+  } catch (err) {
+    logger.error({ err: err.message }, '[copilot/voice/generate] Error');
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 module.exports = router;

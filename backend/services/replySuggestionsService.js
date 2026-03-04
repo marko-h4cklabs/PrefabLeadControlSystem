@@ -89,11 +89,14 @@ async function callClaude(systemPrompt, userPrompt, maxTokens = 1024) {
   return content ?? '';
 }
 
-function buildUserPrompt(messages) {
+function buildUserPrompt(messages, additionalInstructions = null) {
   const history = (messages ?? [])
     .map((m) => `${m.role}: ${m.content}`)
     .join('\n');
-  return `Conversation so far:\n${history || '(no messages yet)'}\n\nGenerate the 2 reply options as JSON only.`;
+  const rulesReminder = additionalInstructions && String(additionalInstructions).trim()
+    ? `\n\nBEFORE generating replies, ensure each suggestion complies with ALL of these rules:\n${String(additionalInstructions).trim()}\n`
+    : '';
+  return `Conversation so far:\n${history || '(no messages yet)'}${rulesReminder}\n\nGenerate the 2 reply options as JSON only.`;
 }
 
 function parseSuggestionsJson(raw) {
@@ -236,11 +239,14 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
   // Inject any custom rules the user added to this AI persona
   const additionalInstructions = effectiveBehavior?.additional_instructions;
   const additionalSection = additionalInstructions && String(additionalInstructions).trim()
-    ? `\n\n--- SETTER RULES (MUST be followed in every reply) ---\n${String(additionalInstructions).trim()}\n--- END SETTER RULES ---`
+    ? `\n\n=== CRITICAL SETTER RULES — ABSOLUTE REQUIREMENTS ===\nThe following rules are NON-NEGOTIABLE. You MUST obey every single one in EVERY reply you generate. Violating any of these rules is a critical failure.\n\n${String(additionalInstructions).trim()}\n\n=== END CRITICAL SETTER RULES ===`
     : '';
 
-  const systemPrompt = baseSystemPrompt + additionalSection + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt;
-  const userPrompt = buildUserPrompt(latestMessages);
+  const additionalReminder = additionalInstructions && String(additionalInstructions).trim()
+    ? `\n\n--- FINAL REMINDER: Re-read CRITICAL SETTER RULES above before writing. Every rule must be followed without exception. ---`
+    : '';
+  const systemPrompt = baseSystemPrompt + additionalSection + buildSuggestionPrompt(effectiveBehavior) + fieldAwarenessPrompt + additionalReminder;
+  const userPrompt = buildUserPrompt(latestMessages, additionalInstructions);
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);
   let suggestions;
