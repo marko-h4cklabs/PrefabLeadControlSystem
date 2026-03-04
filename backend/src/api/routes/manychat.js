@@ -172,9 +172,17 @@ router.post('/', rawJsonParser, async (req, res) => {
 
     // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).
     // Falls back to fire-and-forget if Redis is unavailable.
-    const messageId = payload.id ?? null;
+    // Always generate unique messageId — payload.id from ManyChat is NOT unique per message.
+    const messageId = `${payload.subscriber?.id || 'unk'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (process.env.REDIS_URL) {
-      incomingMessageQueue.enqueueMessage(payload, messageId).catch((err) => {
+      incomingMessageQueue.enqueueMessage(payload, messageId).then((result) => {
+        if (!result.queued) {
+          logger.warn({ reason: result.reason }, '[manychat/webhook] Queue rejected, falling back to direct processing');
+          processManyChatPayload(payload).catch((e) => {
+            logger.error({ err: e }, '[manychat/webhook] Fallback processing error');
+          });
+        }
+      }).catch((err) => {
         logger.error({ err: err.message }, '[manychat/webhook] Queue enqueue failed, falling back to direct processing');
         processManyChatPayload(payload).catch((e) => {
           logger.error({ err: e }, '[manychat/webhook] Fallback processing error');

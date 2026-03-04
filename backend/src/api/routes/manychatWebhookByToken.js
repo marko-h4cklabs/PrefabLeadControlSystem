@@ -76,9 +76,21 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
     // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).
     // Pass overrideCompany so the worker skips the page_id lookup — token already resolved it.
     // Falls back to direct fire-and-forget if Redis is unavailable.
-    const messageId = payload.id ?? null;
+    //
+    // IMPORTANT: Always generate a unique messageId per webhook hit.
+    // payload.id from ManyChat may be a subscriber/conversation ID (not unique per message),
+    // which caused BullMQ to silently dedup rapid messages from the same sender.
+    const messageId = `${payload.subscriber?.id || 'unk'}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     if (process.env.REDIS_URL) {
-      incomingMessageQueue.enqueueMessage(payload, messageId, companyRow).catch((err) => {
+      incomingMessageQueue.enqueueMessage(payload, messageId, companyRow).then((result) => {
+        if (!result.queued) {
+          // Fallback: if queue rejected (dedup or other), process directly
+          logger.warn({ reason: result.reason }, '[manychat/webhook-by-token] Queue rejected, falling back to direct processing');
+          processManyChatPayload(payload, companyRow).catch((e) => {
+            logger.error({ err: e }, '[manychat/webhook-by-token] Fallback processing error');
+          });
+        }
+      }).catch((err) => {
         logger.error({ err: err.message }, '[manychat/webhook-by-token] Queue enqueue failed, falling back to direct processing');
         processManyChatPayload(payload, companyRow).catch((e) => {
           logger.error({ err: e }, '[manychat/webhook-by-token] Fallback processing error');
