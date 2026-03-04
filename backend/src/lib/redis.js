@@ -6,19 +6,37 @@ const IORedis = require('ioredis');
 const logger = require('./logger');
 
 let client = null;
+let clientReady = false;
 
 function getRedisClient() {
   if (client) return client;
   const url = process.env.REDIS_URL;
   if (!url) return null;
-  client = new IORedis(url, { maxRetriesPerRequest: 3, lazyConnect: true });
+  client = new IORedis(url, {
+    maxRetriesPerRequest: 3,
+    lazyConnect: true,
+    retryStrategy: (times) => Math.min(times * 500, 5000),
+    reconnectOnError: () => true,
+  });
   client.on('error', (err) => {
-    logger.error({ err }, 'Redis client error');
+    logger.error({ err: err.message }, 'Redis client error');
+  });
+  client.on('ready', () => { clientReady = true; });
+  client.on('close', () => { clientReady = false; });
+  client.on('end', () => {
+    clientReady = false;
+    client = null; // Allow recreation on next getRedisClient() call
   });
   client.connect().catch((err) => {
-    logger.error({ err }, 'Redis connection failed');
+    logger.error({ err: err.message }, 'Redis connection failed');
+    clientReady = false;
   });
   return client;
+}
+
+/** Check if the Redis client is connected and ready for commands. */
+function isRedisReady() {
+  return client !== null && clientReady;
 }
 
 /**
@@ -119,6 +137,7 @@ async function releaseCronLock(cronName) {
 
 module.exports = {
   getRedisClient,
+  isRedisReady,
   isMessageProcessed,
   acquireDistributedLock,
   releaseDistributedLock,

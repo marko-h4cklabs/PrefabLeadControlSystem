@@ -15,12 +15,18 @@ const logger = require('./lib/logger');
 
 process.on('uncaughtException', (err) => {
   logger.fatal({ err }, 'UNCAUGHT EXCEPTION - process will exit');
+  if (process.env.SENTRY_DSN) Sentry.captureException(err);
   setTimeout(() => process.exit(1), 1000);
 });
 
+// Unhandled rejections: log + report but do NOT crash.
+// Most are from fire-and-forget promises (SSE, queue enqueue, Redis ops)
+// that are non-critical. Crashing causes more harm than the rejection itself.
+let _rejectionCount = 0;
 process.on('unhandledRejection', (reason) => {
-  logger.fatal({ err: reason }, 'UNHANDLED REJECTION - process will exit');
-  setTimeout(() => process.exit(1), 1000);
+  _rejectionCount++;
+  logger.error({ err: reason, count: _rejectionCount }, 'UNHANDLED REJECTION (non-fatal)');
+  if (process.env.SENTRY_DSN) Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
 });
 
 const path = require('path');
