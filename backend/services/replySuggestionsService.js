@@ -1,9 +1,8 @@
 /**
- * Copilot mode: generate 3 reply suggestions for human to choose and send.
+ * Copilot mode: generate 2 reply suggestions for human to choose and send.
  */
 
 const logger = require('../src/lib/logger');
-const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
 const { pool } = require('../db');
 const {
@@ -21,7 +20,6 @@ const { publish: publishEvent } = require('../src/lib/eventBus');
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
 function buildSuggestionPrompt(behavior) {
-  const goal = behavior?.conversation_goal || 'booking a call';
   const lengthHint = behavior?.response_length === 'short' ? '1-2' : '2-4';
   const emojisOk = behavior?.emojis_enabled ? '' : 'No emojis. ';
 
@@ -51,28 +49,26 @@ function buildSuggestionPrompt(behavior) {
 
   return `
 
-Based on this conversation, generate EXACTLY 3 different reply options.
+Based on this conversation, generate EXACTLY 2 different reply options.
 Each must have a distinct STRATEGY, not just a different tone.
 
-REPLY 1 — DIRECT CLOSER:
-Short, confident, moves directly toward ${goal}.
-No fluff. Clear next step.
+REPLY 1 — CURIOUS QUALIFIER:
+Asks one smart question to understand their situation better.
+Makes them feel heard and understood.
 
 REPLY 2 — VALUE BUILDER:
 Leads with a relevant insight, result, or social proof.
 Makes them feel they'd be missing out by not continuing.
 
-REPLY 3 — CURIOUS QUALIFIER:
-Asks one smart question to understand their situation better.
-Makes them feel heard and understood.
+Also extract any field values the user provided in their latest message(s).
 
 Return ONLY valid JSON in this exact format, nothing else:
 {
   "suggestions": [
-    { "index": 0, "label": "Direct Closer", "text": "..." },
-    { "index": 1, "label": "Value Builder", "text": "..." },
-    { "index": 2, "label": "Curious Qualifier", "text": "..." }
-  ]
+    { "index": 0, "label": "Curious Qualifier", "text": "..." },
+    { "index": 1, "label": "Value Builder", "text": "..." }
+  ],
+  "field_updates": { "fieldName": "value" }
 }
 
 Apply these rules to ALL replies:
@@ -97,7 +93,7 @@ function buildUserPrompt(messages) {
   const history = (messages ?? [])
     .map((m) => `${m.role}: ${m.content}`)
     .join('\n');
-  return `Conversation so far:\n${history || '(no messages yet)'}\n\nGenerate the 3 reply options as JSON only.`;
+  return `Conversation so far:\n${history || '(no messages yet)'}\n\nGenerate the 2 reply options as JSON only.`;
 }
 
 function parseSuggestionsJson(raw) {
@@ -106,14 +102,20 @@ function parseSuggestionsJson(raw) {
   const jsonStr = jsonMatch ? jsonMatch[0] : trimmed;
   const parsed = JSON.parse(jsonStr);
   const suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
-  return suggestions
-    .filter((s) => s && Number.isInteger(s.index) && typeof s.label === 'string' && (typeof s.text === 'string' || typeof s.content === 'string'))
-    .map((s) => ({ index: s.index, label: String(s.label).slice(0, 50), text: String(s.text || s.content || '').slice(0, 4000) }))
-    .slice(0, 3);
+  const fieldUpdates = (parsed.field_updates && typeof parsed.field_updates === 'object' && !Array.isArray(parsed.field_updates))
+    ? parsed.field_updates
+    : {};
+  return {
+    suggestions: suggestions
+      .filter((s) => s && Number.isInteger(s.index) && typeof s.label === 'string' && (typeof s.text === 'string' || typeof s.content === 'string'))
+      .map((s) => ({ index: s.index, label: String(s.label).slice(0, 50), text: String(s.text || s.content || '').slice(0, 4000) }))
+      .slice(0, 2),
+    fieldUpdates,
+  };
 }
 
 /**
- * Generate 3 suggestions, save to reply_suggestions, return suggestions array.
+ * Generate 2 suggestions, save to reply_suggestions, return suggestions array.
  */
 async function generateSuggestions(leadId, conversationId, companyId, messages, behavior) {
   if (!conversationId || !leadId || !companyId) {
@@ -242,12 +244,32 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
 
   const raw = await callClaude(systemPrompt, userPrompt, 1024);
   let suggestions;
+  let fieldUpdates = {};
   try {
     const cleaned = raw.replace(/```json|```/g, '').trim();
-    suggestions = parseSuggestionsJson(cleaned);
+    const parsed = parseSuggestionsJson(cleaned);
+    suggestions = parsed.suggestions;
+    fieldUpdates = parsed.fieldUpdates || {};
   } catch (e) {
     logger.error('[replySuggestions] Failed to parse LLM JSON response, skipping');
     return [];
+  }
+
+  // Merge any extracted field values into parsed_fields (batched extraction — no separate Claude call)
+  if (Object.keys(fieldUpdates).length > 0) {
+    const { getAllowedFieldNames } = require('../src/chat/extractService');
+    const allowed = getAllowedFieldNames(orderedQuoteFields);
+    const updates = {};
+    for (const [key, value] of Object.entries(fieldUpdates)) {
+      if (value != null && String(value).trim() !== '' && key.toLowerCase() !== 'pictures' && allowed.has(key.toLowerCase())) {
+        updates[key] = value;
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      const merged = { ...parsedFields, ...updates };
+      await conversationRepository.updateParsedFields(leadId, merged);
+      logger.info({ leadId, fields: Object.keys(updates) }, '[replySuggestions] Extracted fields from suggestion generation');
+    }
   }
 
   const result = await pool.query(

@@ -12,7 +12,7 @@ const {
   schedulingRequestRepository,
 } = require('../db/repositories');
 const { createNotification } = require('../src/services/notificationService');
-const { extractFieldsWithClaude, getAllowedFieldNames } = require('../src/chat/extractService');
+const { getAllowedFieldNames } = require('../src/chat/extractService');
 const { dimensionsToDisplayString } = require('../src/chat/dimensionsFormat');
 const { computeFieldsState } = require('../src/chat/fieldsState');
 const { buildSystemPrompt, buildLeadContext } = require('../src/services/systemPromptBuilder');
@@ -244,23 +244,15 @@ async function generateAiReply(companyId, leadId) {
   const assistantCountBefore = (conversation.messages ?? []).filter((m) => m.role === 'assistant').length;
   const allowedFieldNames = getAllowedFieldNames(orderedQuoteFields);
 
+  // Field extraction is batched into the main Claude reply call (field_updates in JSON output).
+  // No separate extractFieldsWithClaude call — saves one Claude API call per message.
   let parsedFields = conversation.parsed_fields ?? {};
-
-  const { extracted } = await extractFieldsWithClaude(userText, orderedQuoteFields);
-  const extractedUpdates = {};
-  for (const e of extracted ?? []) {
-    if (e?.name && e.name.toLowerCase() !== 'pictures' && e?.value != null && String(e.value).trim() !== '') {
-      extractedUpdates[e.name] = e.type === 'number' ? Number(e.value) : String(e.value).trim();
-    }
-  }
-  parsedFields = mergeParsedFields(parsedFields, extractedUpdates, allowedFieldNames, orderedQuoteFields);
 
   const collectedFromParsed = parsedFieldsToCollected(parsedFields, orderedQuoteFields);
   const { required_infos: requiredInfos, collected_infos: collectedInfos } = computeFieldsState(
     orderedQuoteFields,
     collectedFromParsed
   );
-  const collectedMap = Object.fromEntries(collectedInfos.map((c) => [c.name, c.value]));
   const topMissing = requiredInfos[0] ?? null;
 
   logger.info('[aiReplyService]', {
@@ -273,7 +265,6 @@ async function generateAiReply(companyId, leadId) {
       emojis_enabled: behavior?.emojis_enabled,
     },
     quoteFieldsLoaded: { count: orderedQuoteFields.length, names: orderedQuoteFields.map((f) => f.name) },
-    extractionOutput: extracted,
     required_infos_count: requiredInfos.length,
     collected_infos_count: collectedInfos.length,
   });

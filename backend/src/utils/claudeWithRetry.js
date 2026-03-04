@@ -18,6 +18,15 @@ function getOpenAI() {
 }
 
 async function claudeWithRetry(claudeParams, maxRetries = 3) {
+  // Enable prompt caching: convert string system prompt to cacheable content blocks.
+  // The Anthropic API caches the prefix up to the cache_control marker, saving ~90% on
+  // repeated system prompts (same company context reused across messages).
+  if (typeof claudeParams.system === 'string' && claudeParams.system.length > 0) {
+    claudeParams.system = [
+      { type: 'text', text: claudeParams.system, cache_control: { type: 'ephemeral' } },
+    ];
+  }
+
   let lastError;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {

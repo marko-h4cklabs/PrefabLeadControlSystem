@@ -4,9 +4,7 @@
  */
 
 const logger = require('../src/lib/logger');
-const Anthropic = require('@anthropic-ai/sdk');
 const { claudeWithRetry } = require('../src/utils/claudeWithRetry');
-// OPENAI_API_KEY=your_openai_key (optional fallback)
 const { pool } = require('../db');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -211,10 +209,35 @@ async function generateConversationSummary(leadId, messages) {
   }
 }
 
+// Trivial messages that don't warrant a Claude API call for intelligence analysis.
+// Normalized: lowercase, stripped of punctuation/whitespace.
+const SIMPLE_MESSAGES = new Set([
+  'hi', 'hey', 'hello', 'yo', 'sup', 'hola', 'hii', 'heyy', 'heyyy',
+  'yes', 'yeah', 'yep', 'yup', 'ya', 'ye',
+  'no', 'nah', 'nope',
+  'ok', 'okay', 'k', 'kk', 'sure', 'cool', 'alright', 'bet',
+  'thanks', 'thankyou', 'thx', 'ty',
+  'lol', 'haha', 'hahaha', 'lmao',
+  '👍', '🙏', '❤️', '😊', '😂', '🔥', '💯',
+]);
+
+function isSimpleMessage(messages) {
+  const lastUserMsg = [...(messages || [])].reverse().find((m) => m.role === 'user');
+  if (!lastUserMsg) return false;
+  const text = (lastUserMsg.content || '').trim().toLowerCase().replace(/[.!?,\s]+/g, '');
+  return text.length <= 20 && SIMPLE_MESSAGES.has(text);
+}
+
 /**
  * Main entry: run after every inbound message. Runs intent scoring, then summary every 3rd user message or when lead just became hot.
  */
 async function analyzeInboundMessage(leadId, conversationId, companyId, messages) {
+  // Skip Claude call for trivial messages (greetings, yes/no, emoji) — saves ~1 API call each
+  if (isSimpleMessage(messages)) {
+    logger.info({ leadId }, '[leadIntelligence] Simple message, skipping analysis');
+    return;
+  }
+
   const { justBecameHotLead } = await runIntentScoring(leadId, companyId, messages);
   const userMessageCount = (messages || []).filter((m) => m.role === 'user').length;
   const runSummary = userMessageCount % 3 === 0 || justBecameHotLead;

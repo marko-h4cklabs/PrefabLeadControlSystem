@@ -1,5 +1,5 @@
 const logger = require('../lib/logger');
-const Anthropic = require('@anthropic-ai/sdk');
+const { claudeWithRetry } = require('../utils/claudeWithRetry');
 const { dimensionsToDisplayString } = require('./dimensionsFormat');
 
 const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -64,16 +64,13 @@ async function extractFieldsWithClaude(userMessage, quoteFields) {
     return { extracted: [], missing_required: [] };
   }
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const systemPrompt = buildExtractionPrompt(quoteFields);
-    const response = await client.messages.create({
+    const { content: raw } = await claudeWithRetry({
       model,
       max_tokens: 512,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
     });
-    const textBlock = response.content?.find((b) => b.type === 'text');
-    const raw = (textBlock?.text ?? '').trim();
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     const jsonStr = jsonMatch ? jsonMatch[0] : raw;
     const parsed = JSON.parse(jsonStr);
