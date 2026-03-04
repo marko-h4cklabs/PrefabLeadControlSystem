@@ -223,10 +223,16 @@ async function processManyChatPayload(payload, overrideCompany) {
 
   try {
   // --- Duplicate webhook protection: Redis-backed dedup (survives redeploy) ---
-  if (messageId) {
-    const isDuplicate = await isMessageProcessed(messageId, 3600);
+  // Dedup by subscriber + message content hash (not payload.id which may not be unique per message).
+  // This catches actual ManyChat webhook retries while allowing distinct rapid messages through.
+  const msgText = (message.text ?? extracted?.content ?? '').toString().trim();
+  const dedupKey = msgText
+    ? `${subscriberId}:${msgText.slice(0, 200)}`
+    : (messageId ? String(messageId) : null);
+  if (dedupKey) {
+    const isDuplicate = await isMessageProcessed(dedupKey, 60); // 60s window for true retries
     if (isDuplicate) {
-      logger.info({ messageId }, 'Duplicate messageId skipped');
+      logger.info({ dedupKey: dedupKey.slice(0, 80) }, 'Duplicate webhook skipped (same subscriber + content within 60s)');
       return;
     }
   }

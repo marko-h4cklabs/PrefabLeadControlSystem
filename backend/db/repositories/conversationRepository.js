@@ -72,30 +72,34 @@ async function getByLeadId(leadId) {
 }
 
 async function appendMessage(leadId, role, content, meta = {}) {
-  // Dedup: skip if the last message has the same role + content (prevents double-send)
-  const existing = await pool.query(
-    'SELECT messages FROM conversations WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1',
-    [leadId]
-  );
-  const msgs = existing.rows[0]?.messages ?? [];
-  const last = msgs[msgs.length - 1];
-  if (last && last.role === role && last.content === (content ?? '')) {
-    return toPlainConversation(existing.rows[0]);
-  }
-
   const message = {
     role,
     content: content ?? '',
     timestamp: new Date().toISOString(),
     ...meta,
   };
+  // Atomic append with built-in dedup: skip if the last message has the same role + content.
+  // Single query eliminates the TOCTOU race that existed with separate READ + WRITE.
   const result = await pool.query(
     `UPDATE conversations
      SET messages = messages || $1::jsonb, last_updated = NOW()
      WHERE lead_id = $2
+       AND NOT (
+         messages != '[]'::jsonb
+         AND messages->-1->>'role' = $3
+         AND messages->-1->>'content' = $4
+       )
      RETURNING *`,
-    [JSON.stringify([message]), leadId]
+    [JSON.stringify([message]), leadId, role, content ?? '']
   );
+  // If no rows updated, the dedup condition matched — return existing conversation
+  if (!result.rows[0]) {
+    const existing = await pool.query(
+      'SELECT * FROM conversations WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [leadId]
+    );
+    return toPlainConversation(existing.rows[0]);
+  }
   return toPlainConversation(result.rows[0]);
 }
 
