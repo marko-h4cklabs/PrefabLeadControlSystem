@@ -2245,7 +2245,12 @@ router.post('/voice/generate', async (req, res) => {
       return errorJson(res, 503, 'SERVICE_UNAVAILABLE', 'ElevenLabs API key not configured');
     }
 
-    const company = await companyRepository.findById(companyId);
+    // Query voice fields directly (companyRepository.findById strips them)
+    const companyRow = await pool.query(
+      'SELECT voice_selected_id, voice_model, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost FROM companies WHERE id = $1',
+      [companyId]
+    );
+    const company = companyRow.rows[0];
     if (!company) return errorJson(res, 404, 'NOT_FOUND', 'Company not found');
     if (!company.voice_selected_id) {
       return errorJson(res, 400, 'VOICE_NOT_CONFIGURED', 'No voice selected. Configure a voice in Copilot Settings > Voice Messages.');
