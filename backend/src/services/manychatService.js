@@ -100,7 +100,6 @@ async function sendManyChatFile(subscriberId, fileUrl, apiKey) {
           ],
         },
       },
-      message_tag: 'ACCOUNT_UPDATE',
     },
     {
       headers: {
