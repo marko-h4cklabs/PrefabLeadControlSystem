@@ -234,8 +234,15 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     business_description: companyInfo?.business_description ?? '',
     additional_notes: companyInfo?.additional_notes ?? '',
   };
+  // Combine persona-level + company-level knowledge bases
   const personaKnowledge = rawBehavior?._active_ai_persona?.knowledge_base || '';
-  const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow, [], personaKnowledge);
+  let companyKnowledge = '';
+  try {
+    const kbRow = await pool.query('SELECT knowledge_base FROM companies WHERE id = $1', [companyId]);
+    companyKnowledge = kbRow.rows[0]?.knowledge_base || '';
+  } catch (_) { /* column may not exist yet */ }
+  const combinedKnowledge = [companyKnowledge, personaKnowledge].filter(Boolean).join('\n\n');
+  const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow, [], combinedKnowledge);
 
   // Inject any custom rules the user added to this AI persona
   const additionalInstructions = effectiveBehavior?.additional_instructions;

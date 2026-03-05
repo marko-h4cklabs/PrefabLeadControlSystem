@@ -2275,4 +2275,57 @@ router.post('/voice/generate', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Company Knowledge Base
+// ---------------------------------------------------------------------------
+const { parseDocument } = require('../../utils/documentParser');
+const companyKbUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+
+router.get('/settings/knowledge', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT knowledge_base FROM companies WHERE id = $1', [req.tenantId]);
+    res.json({ knowledge_base: result.rows[0]?.knowledge_base || '' });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.put('/settings/knowledge', async (req, res) => {
+  try {
+    const { knowledge_base } = req.body || {};
+    if (typeof knowledge_base !== 'string') {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'knowledge_base must be a string');
+    }
+    await pool.query('UPDATE companies SET knowledge_base = $1 WHERE id = $2', [knowledge_base, req.tenantId]);
+    res.json({ success: true });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+router.post('/settings/knowledge/upload', (req, res, next) => {
+  companyKbUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return errorJson(res, 400, 'FILE_TOO_LARGE', 'File too large. Maximum 10MB.');
+      return errorJson(res, 400, 'UPLOAD_ERROR', err.message || 'File upload failed');
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file) return errorJson(res, 400, 'VALIDATION_ERROR', 'No file uploaded');
+    const ext = (req.file.originalname || '').split('.').pop()?.toLowerCase();
+    let text;
+    if (ext === 'txt') {
+      text = req.file.buffer.toString('utf-8').trim();
+    } else {
+      text = await parseDocument(req.file.buffer, req.file.mimetype, req.file.originalname);
+    }
+    if (!text) return errorJson(res, 400, 'PARSE_ERROR', 'Could not extract text from file');
+    res.json({ text });
+  } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
 module.exports = router;

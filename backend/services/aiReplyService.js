@@ -276,8 +276,15 @@ async function generateAiReply(companyId, leadId) {
     const suffix = topMissing.units ? ` (in ${topMissing.units})` : '';
     assistantMessage = `What's your ${displayName}${suffix}?`;
   } else {
+    // Combine persona-level + company-level knowledge bases
     const personaKnowledge = behavior?._active_ai_persona?.knowledge_base || '';
-    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages, personaKnowledge);
+    let companyKnowledge = '';
+    try {
+      const kbRow = await pool.query('SELECT knowledge_base FROM companies WHERE id = $1', [company.id || companyId]);
+      companyKnowledge = kbRow.rows[0]?.knowledge_base || '';
+    } catch (_) { /* column may not exist yet */ }
+    const combinedKnowledge = [companyKnowledge, personaKnowledge].filter(Boolean).join('\n\n');
+    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages, combinedKnowledge);
     const leadContext = await buildLeadContext(leadForContext);
     systemPrompt += leadContext;
 
