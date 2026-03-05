@@ -38,7 +38,7 @@ router.get('/settings', async (req, res) => {
     const result = await pool.query(
       `SELECT voice_enabled, voice_mode, voice_model, voice_selected_id,
               voice_selected_name, voice_stability, voice_similarity_boost,
-              voice_style, voice_speaker_boost
+              voice_style, voice_speaker_boost, voice_style_prompt
        FROM companies WHERE id = $1`,
       [req.tenantId]
     );
@@ -53,6 +53,7 @@ router.get('/settings', async (req, res) => {
       similarity_boost: parseFloat(row.voice_similarity_boost) ?? 0.75,
       style: parseFloat(row.voice_style) ?? 0,
       speaker_boost: row.voice_speaker_boost !== false,
+      voice_style_prompt: row.voice_style_prompt || '',
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -71,6 +72,7 @@ router.put('/settings', async (req, res) => {
       similarity_boost,
       style,
       speaker_boost,
+      voice_style_prompt,
     } = req.body ?? {};
 
     const setParts = [];
@@ -91,6 +93,7 @@ router.put('/settings', async (req, res) => {
     addField('voice_similarity_boost', similarity_boost);
     addField('voice_style', style);
     addField('voice_speaker_boost', speaker_boost);
+    addField('voice_style_prompt', voice_style_prompt);
 
     if (setParts.length === 0) return res.json({ success: true });
 
