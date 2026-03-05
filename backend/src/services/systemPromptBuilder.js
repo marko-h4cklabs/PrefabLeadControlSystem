@@ -32,7 +32,7 @@ function getLanguageName(code) {
   return languages[code] || code;
 }
 
-async function buildSystemPrompt(company, behavior, quoteFields, activePersona, socialProofImages = []) {
+async function buildSystemPrompt(company, behavior, quoteFields, activePersona, socialProofImages = [], knowledgeBase = '') {
   const personaBase = activePersona?.system_prompt || null;
 
   const agentName = behavior?.agent_name || activePersona?.agent_name || 'Alex';
@@ -222,6 +222,7 @@ ADDITIONAL CONTEXT:
 Company: ${companyName}
 ${businessDesc ? `Business: ${businessDesc}` : ''}
 ${additionalContext ? `Context: ${additionalContext}` : ''}
+${knowledgeBase ? `KNOWLEDGE BASE:\n${knowledgeBase}` : ''}
 Tone: ${toneInstructions}
 Length: ${lengthInstructions}
 ${emojis ? 'You MAY use emojis sparingly and naturally — never more than 1-2 per message.' : 'Do NOT use emojis.'}
@@ -242,6 +243,7 @@ You are ${agentName}, a sales representative for ${companyName}.
 ${agentBackstory ? `Your background: ${agentBackstory}` : ''}
 ${businessDesc ? `\nAbout the business:\n${businessDesc}` : ''}
 ${additionalContext ? `\nAdditional context:\n${additionalContext}` : ''}
+${knowledgeBase ? `\nKNOWLEDGE BASE (use this information to answer questions accurately):\n${knowledgeBase}` : ''}
 
 YOUR PRIMARY GOAL:
 ${conversationGoal}

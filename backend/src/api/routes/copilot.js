@@ -1046,12 +1046,12 @@ router.post('/settings/ai-personas', requireRole('owner', 'admin', 'setter'), as
 
 /**
  * PUT /api/copilot/settings/ai-personas/:id
- * Update a saved AI persona (name, snapshot fields, style_summary).
+ * Update a saved AI persona (name, snapshot fields, style_summary, knowledge_base).
  */
 router.put('/settings/ai-personas/:id', requireRole('owner', 'admin', 'setter'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, snapshot, style_summary } = req.body ?? {};
+    const { name, snapshot, style_summary, knowledge_base } = req.body ?? {};
 
     // Verify ownership
     const check = await pool.query(
@@ -1070,13 +1070,64 @@ router.put('/settings/ai-personas/:id', requireRole('owner', 'admin', 'setter'),
        SET name = COALESCE($3, name),
            snapshot = $4,
            style_summary = COALESCE($5, style_summary),
+           knowledge_base = COALESCE($6, knowledge_base),
            updated_at = NOW()
        WHERE id = $1 AND company_id = $2
-       RETURNING id, name, style_summary, snapshot, created_at, updated_at`,
-      [id, req.tenantId, name ? name.trim() : null, JSON.stringify(mergedSnapshot), style_summary || null]
+       RETURNING id, name, style_summary, knowledge_base, snapshot, created_at, updated_at`,
+      [id, req.tenantId, name ? name.trim() : null, JSON.stringify(mergedSnapshot), style_summary || null, knowledge_base != null ? knowledge_base : null]
     );
     res.json(result.rows[0]);
   } catch (err) {
+    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+  }
+});
+
+/**
+ * POST /api/copilot/settings/ai-personas/:id/upload-knowledge
+ * Upload a document (.docx, .txt, .xlsx) and extract text for the knowledge base.
+ * Returns extracted text — does NOT auto-save (frontend appends + user reviews).
+ */
+const knowledgeUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+router.post('/settings/ai-personas/:id/upload-knowledge', requireRole('owner', 'admin', 'setter'), (req, res, next) => {
+  knowledgeUpload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'File too large (max 10MB).' });
+      return res.status(400).json({ error: err.message || 'Upload failed' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Verify ownership
+    const check = await pool.query(
+      'SELECT id FROM copilot_ai_personas WHERE id = $1 AND company_id = $2',
+      [id, req.tenantId]
+    );
+    if (!check.rows[0]) return errorJson(res, 404, 'NOT_FOUND', 'Persona not found');
+
+    if (!req.file) return errorJson(res, 400, 'VALIDATION_ERROR', 'No file uploaded');
+
+    const { buffer, mimetype, originalname } = req.file;
+    const ext = (originalname || '').split('.').pop()?.toLowerCase();
+
+    let text = '';
+    if (ext === 'txt' || mimetype === 'text/plain') {
+      text = buffer.toString('utf-8').trim();
+    } else if (ext === 'docx' || ext === 'xlsx' || ext === 'xls') {
+      const { parseDocument } = require('../../services/documentParser');
+      text = await parseDocument(buffer, mimetype, originalname);
+    } else {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'Unsupported file type. Use .docx, .txt, or .xlsx');
+    }
+
+    if (!text.trim()) {
+      return errorJson(res, 400, 'VALIDATION_ERROR', 'No text content found in file');
+    }
+
+    res.json({ text: text.trim().slice(0, 50000) });
+  } catch (err) {
+    logger.error({ err: err.message }, '[copilot/upload-knowledge] Error');
     errorJson(res, 500, 'INTERNAL_ERROR', err.message);
   }
 });

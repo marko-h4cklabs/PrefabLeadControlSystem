@@ -234,7 +234,8 @@ async function generateSuggestions(leadId, conversationId, companyId, messages, 
     business_description: companyInfo?.business_description ?? '',
     additional_notes: companyInfo?.additional_notes ?? '',
   };
-  const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow);
+  const personaKnowledge = rawBehavior?._active_ai_persona?.knowledge_base || '';
+  const baseSystemPrompt = await buildSystemPrompt(company, effectiveBehavior, orderedQuoteFields, personaRow, [], personaKnowledge);
 
   // Inject any custom rules the user added to this AI persona
   const additionalInstructions = effectiveBehavior?.additional_instructions;

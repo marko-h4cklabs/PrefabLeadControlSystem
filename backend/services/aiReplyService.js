@@ -276,7 +276,8 @@ async function generateAiReply(companyId, leadId) {
     const suffix = topMissing.units ? ` (in ${topMissing.units})` : '';
     assistantMessage = `What's your ${displayName}${suffix}?`;
   } else {
-    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages);
+    const personaKnowledge = behavior?._active_ai_persona?.knowledge_base || '';
+    let systemPrompt = await buildSystemPrompt(company, behavior, orderedQuoteFields, activePersona, socialProofImages, personaKnowledge);
     const leadContext = await buildLeadContext(leadForContext);
     systemPrompt += leadContext;
 

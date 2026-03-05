@@ -155,7 +155,8 @@ async function get(companyId, mode = 'autopilot') {
             cap.id          AS _ai_persona_id,
             cap.name        AS _ai_persona_name,
             cap.snapshot    AS _ai_persona_snapshot,
-            cap.style_summary AS _ai_persona_style_summary
+            cap.style_summary AS _ai_persona_style_summary,
+            cap.knowledge_base AS _ai_persona_knowledge_base
      FROM chatbot_behavior cb
      LEFT JOIN copilot_ai_personas cap ON cb.active_ai_persona_id = cap.id
      WHERE cb.company_id = $1`,
@@ -174,6 +175,7 @@ async function get(companyId, mode = 'autopilot') {
         name: row._ai_persona_name,
         style_summary: row._ai_persona_style_summary,
         snapshot: row._ai_persona_snapshot ?? null,
+        knowledge_base: row._ai_persona_knowledge_base ?? null,
       }
     : null;
 
