@@ -433,8 +433,12 @@ router.post('/:conversationId/send-voice', async (req, res) => {
       }
     }
 
-    // Append text to conversation history
-    await conversationRepository.appendMessage(leadId, 'assistant', text.trim());
+    // Append text to conversation history (with voice metadata so it persists across reloads)
+    await conversationRepository.appendMessage(leadId, 'assistant', text.trim(), {
+      is_voice: true,
+      type: 'audio',
+      audio_url: audioPublicUrl,
+    });
 
     // Emit SSE event
     publishEvent(companyId, {
@@ -446,6 +450,7 @@ router.post('/:conversationId/send-voice', async (req, res) => {
       content: text.trim(),
       messageTimestamp: new Date().toISOString(),
       is_voice: true,
+      audio_url: audioPublicUrl,
     }).catch(() => {});
 
     res.json({ success: true, message_sent: text.trim(), audio_url: audioPublicUrl, is_voice: true });
