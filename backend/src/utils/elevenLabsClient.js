@@ -63,7 +63,7 @@ async function textToSpeech(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const speed = Math.min(4.0, Math.max(0.25, numOrDefault(settings.speed, 1.0)));
+  const speed = Math.min(1.2, Math.max(0.7, numOrDefault(settings.speed, 1.0)));
   const data = {
     text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
@@ -386,7 +386,7 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const speed = Math.min(4.0, Math.max(0.25, numOrDefault(settings.speed, 1.0)));
+  const speed = Math.min(1.2, Math.max(0.7, numOrDefault(settings.speed, 1.0)));
   const data = {
     text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
