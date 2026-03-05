@@ -2278,7 +2278,7 @@ router.post('/voice/generate', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Company Knowledge Base
 // ---------------------------------------------------------------------------
-const { parseDocument } = require('../../utils/documentParser');
+const { parseDocument } = require('../../services/documentParser');
 const companyKbUpload = require('multer')({ storage: require('multer').memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
 
 router.get('/settings/knowledge', async (req, res) => {
