@@ -1074,7 +1074,8 @@ router.put('/settings/ai-personas/:id', requireRole('owner', 'admin', 'setter'),
            updated_at = NOW()
        WHERE id = $1 AND company_id = $2
        RETURNING id, name, style_summary, knowledge_base, snapshot, created_at, updated_at`,
-      [id, req.tenantId, name ? name.trim() : null, JSON.stringify(mergedSnapshot), style_summary || null, knowledge_base != null ? knowledge_base : null]
+      // Only update knowledge_base when explicitly provided (not undefined) — prevents accidental wipes
+      [id, req.tenantId, name ? name.trim() : null, JSON.stringify(mergedSnapshot), style_summary || null, knowledge_base !== undefined ? knowledge_base : null]
     );
     res.json(result.rows[0]);
   } catch (err) {
