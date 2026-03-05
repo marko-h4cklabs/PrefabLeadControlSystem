@@ -262,7 +262,7 @@ async function processManyChatPayload(payload, overrideCompany) {
       `SELECT id, manychat_api_key, operating_mode, bot_enabled,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
               voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
-              voice_speed, voice_ambient_noise, voice_ambient_level,
+              voice_speed, voice_ambient_noise, voice_ambient_level, voice_style_prompt,
               meta_page_access_token, instagram_account_id
        FROM companies WHERE manychat_page_id = $1`,
       [pageId]
@@ -663,12 +663,15 @@ async function processManyChatPayload(payload, overrideCompany) {
           // If voice reply is needed, try voice FIRST (don't send text yet)
           if (shouldSendVoice) {
             try {
-              const { textToSpeechWav } = require('../../utils/elevenLabsClient');
+              const { textToSpeechWav, humanizeTextForTTS } = require('../../utils/elevenLabsClient');
               const chatAttachmentRepository = require('../../../db/repositories/chatAttachmentRepository');
+
+              // Step 0: Humanize text for natural speech (filler words, pauses)
+              const humanizedText = await humanizeTextForTTS(result.assistant_message, companyRow.voice_style_prompt || null);
 
               // Step 1: Generate TTS audio via ElevenLabs (WAV format)
               logger.info({ voiceId: companyRow.voice_selected_id }, '[manychat/voice] Step 1: ElevenLabs TTS (WAV)');
-              const ttsResult = await textToSpeechWav(companyRow.voice_selected_id, result.assistant_message, {
+              const ttsResult = await textToSpeechWav(companyRow.voice_selected_id, humanizedText, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
                 stability: parseFloat(companyRow.voice_stability) || 0.5,
                 similarity_boost: parseFloat(companyRow.voice_similarity_boost) || 0.75,

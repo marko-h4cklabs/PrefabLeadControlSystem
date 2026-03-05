@@ -2224,7 +2224,7 @@ router.delete('/settings/templates/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Voice note generation (ElevenLabs TTS preview)
 // ---------------------------------------------------------------------------
-const { isElevenLabsConfigured, textToSpeechWav } = require('../../utils/elevenLabsClient');
+const { isElevenLabsConfigured, textToSpeechWav, humanizeTextForTTS } = require('../../utils/elevenLabsClient');
 
 /**
  * POST /api/copilot/voice/generate
@@ -2233,7 +2233,7 @@ const { isElevenLabsConfigured, textToSpeechWav } = require('../../utils/elevenL
 router.post('/voice/generate', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const { text } = req.body || {};
+    const { text, ambient_noise, ambient_level, humanize } = req.body || {};
 
     if (!text || typeof text !== 'string' || !text.trim()) {
       return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
@@ -2256,15 +2256,25 @@ router.post('/voice/generate', async (req, res) => {
       return errorJson(res, 400, 'VOICE_NOT_CONFIGURED', 'No voice selected. Configure a voice in Copilot Settings > Voice Messages.');
     }
 
-    const ttsResult = await textToSpeechWav(company.voice_selected_id, text.trim(), {
+    // Humanize text if requested (adds filler words for natural speech)
+    let finalText = text.trim();
+    if (humanize !== false) {
+      finalText = await humanizeTextForTTS(finalText, company.voice_style_prompt || null);
+    }
+
+    // Per-message overrides fall back to company defaults
+    const effectiveNoise = ambient_noise !== undefined ? ambient_noise : (company.voice_ambient_noise || null);
+    const effectiveLevel = ambient_level !== undefined ? ambient_level : (parseInt(company.voice_ambient_level) || 5);
+
+    const ttsResult = await textToSpeechWav(company.voice_selected_id, finalText, {
       model: company.voice_model || 'eleven_turbo_v2_5',
       stability: parseFloat(company.voice_stability) || 0.5,
       similarity_boost: parseFloat(company.voice_similarity_boost) || 0.75,
       style: parseFloat(company.voice_style) || 0,
       speaker_boost: company.voice_speaker_boost !== false,
       speed: parseFloat(company.voice_speed) || 1.0,
-      ambientNoise: company.voice_ambient_noise || null,
-      ambientLevel: parseInt(company.voice_ambient_level) || 5,
+      ambientNoise: effectiveNoise,
+      ambientLevel: effectiveLevel,
     });
 
     res.json({
