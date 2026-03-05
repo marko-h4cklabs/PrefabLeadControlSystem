@@ -152,7 +152,7 @@ app.use('/api/webhook/manychat', webhookLimiter, express.raw({ type: 'applicatio
 const billingWebhookRouter = require('./api/routes/billingWebhook');
 app.use('/api/billing/webhook', express.raw({ type: 'application/json' }), billingWebhookRouter);
 
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 
 // SSE endpoint for real-time events (uses own JWT auth via query param)
