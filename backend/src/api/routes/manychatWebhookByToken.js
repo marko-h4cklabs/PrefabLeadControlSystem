@@ -68,10 +68,21 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
 
     // If message text was passed as a query param (to avoid ManyChat JSON template failures
     // on multi-line messages), inject it into the payload before processing.
+    // Skip if ManyChat sent the unresolved template variable literally (e.g. from non-DM triggers).
     const queryMsg = req.query?.msg;
-    if (queryMsg && typeof queryMsg === 'string' && queryMsg.trim().length > 0) {
+    const isUnresolved = (v) => typeof v === 'string' && /^\{\{.*\}\}$/.test(v.trim());
+    if (queryMsg && typeof queryMsg === 'string' && queryMsg.trim().length > 0 && !isUnresolved(queryMsg)) {
       if (!payload.message) payload.message = {};
       if (!payload.message.text) payload.message.text = queryMsg.trim();
+    }
+
+    // Clean up unresolved ManyChat template variables in subscriber data
+    if (payload.subscriber) {
+      for (const key of Object.keys(payload.subscriber)) {
+        if (isUnresolved(payload.subscriber[key])) {
+          payload.subscriber[key] = null;
+        }
+      }
     }
 
     // Enqueue for async processing via BullMQ (persistent, retryable, concurrency-limited).

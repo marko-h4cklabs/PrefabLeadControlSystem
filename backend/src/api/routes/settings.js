@@ -231,8 +231,30 @@ router.put('/manychat', requireRole('owner', 'admin'), async (req, res) => {
     const apiKey = body.manychat_api_key != null ? String(body.manychat_api_key).trim() : null;
     const pageId = body.manychat_page_id != null ? String(body.manychat_page_id).trim() : null;
 
+    // If no new API key provided, allow updating just the page_id (key stays unchanged)
     if (!apiKey) {
-      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'manychat_api_key is required' } });
+      // Verify the company already has a key stored
+      const existing = await pool.query('SELECT manychat_api_key FROM companies WHERE id = $1', [companyId]);
+      if (!existing.rows[0]?.manychat_api_key) {
+        return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'manychat_api_key is required' } });
+      }
+      // Use existing key for validation
+      const existingKey = decrypt(existing.rows[0].manychat_api_key);
+      let pageName = null;
+      let resolvedPageId = pageId;
+      try {
+        const pageInfo = await manychatService.getPageInfo(existingKey);
+        if (pageInfo?.data?.name) pageName = pageInfo.data.name;
+        if (pageInfo?.data?.id) resolvedPageId = String(pageInfo.data.id);
+      } catch (_) { /* keep page_id as-is if validation fails */ }
+
+      if (pageId) {
+        await pool.query(
+          'UPDATE companies SET manychat_page_id = $2, manychat_connected = true WHERE id = $1',
+          [companyId, resolvedPageId || pageId]
+        );
+      }
+      return res.json({ success: true, page_name: pageName ?? null, page_id: resolvedPageId ?? pageId ?? null });
     }
 
     let pageName = null;
