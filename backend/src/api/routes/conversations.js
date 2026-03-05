@@ -360,7 +360,6 @@ router.post('/:conversationId/send-direct', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Send voice note to Instagram via ManyChat
 // ---------------------------------------------------------------------------
-const { sendManyChatFile } = require('../../services/manychatService');
 const { chatAttachmentRepository } = require('../../../db/repositories');
 
 /**
@@ -415,26 +414,20 @@ router.post('/:conversationId/send-voice', async (req, res) => {
     const baseUrl = (process.env.BACKEND_URL || 'https://api.eightpath.dev').replace(/\/+$/, '');
     const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-note.wav`;
 
-    // Send to Instagram via ManyChat (with flow-based fallback)
+    // Send to Instagram via ManyChat Voice Reply flow
+    // Direct sendManyChatFile with type:'audio' is unreliable for Instagram DMs,
+    // so we always use the flow-based approach: store URL → trigger flow → ManyChat
+    // calls back to /api/manychat/voice-reply-content to fetch the audio.
     const manychatApiKey = decrypt(lead.manychat_api_key);
-    try {
-      await sendManyChatFile(lead.external_id, audioPublicUrl, manychatApiKey);
-      logger.info('[conversations/send-voice] Audio sent via sendContent');
-    } catch (mcErr) {
-      logger.warn({ status: mcErr.response?.status, err: mcErr.message }, '[conversations/send-voice] sendContent failed, trying flow fallback');
-      // Fallback: trigger ManyChat Voice Reply flow (same as autopilot path)
-      const { sendFlow } = require('../../services/manychatService');
-      const voiceReplyStore = require('../../services/voiceReplyStore');
-      const flowNs = process.env.MANYCHAT_VOICE_REPLY_FLOW_NS;
-      if (flowNs) {
-        await voiceReplyStore.set(lead.external_id, audioPublicUrl);
-        await sendFlow(lead.external_id, flowNs, manychatApiKey);
-        logger.info('[conversations/send-voice] Audio sent via flow fallback');
-      } else {
-        // No flow configured — re-throw so the error surfaces
-        throw mcErr;
-      }
+    const { sendFlow } = require('../../services/manychatService');
+    const voiceReplyStore = require('../../services/voiceReplyStore');
+    const flowNs = process.env.MANYCHAT_VOICE_REPLY_FLOW_NS;
+    if (!flowNs) {
+      return errorJson(res, 503, 'CONFIG_ERROR', 'MANYCHAT_VOICE_REPLY_FLOW_NS not configured');
     }
+    await voiceReplyStore.set(lead.external_id, audioPublicUrl);
+    await sendFlow(lead.external_id, flowNs, manychatApiKey);
+    logger.info({ subscriberId: lead.external_id }, '[conversations/send-voice] Voice sent via ManyChat flow');
 
     // Append text to conversation history
     await conversationRepository.appendMessage(leadId, 'assistant', text.trim());
