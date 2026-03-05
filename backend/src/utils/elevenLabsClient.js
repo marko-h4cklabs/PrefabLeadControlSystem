@@ -93,7 +93,7 @@ async function textToSpeech(voiceId, text, settings = {}) {
 /**
  * Convert raw PCM buffer to WAV format by prepending a 44-byte header.
  */
-function pcmToWav(pcmBuffer, sampleRate = 44100, numChannels = 1, bitsPerSample = 16) {
+function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample = 16) {
   const byteRate = sampleRate * numChannels * bitsPerSample / 8;
   const blockAlign = numChannels * bitsPerSample / 8;
   const dataSize = pcmBuffer.length;
@@ -118,7 +118,7 @@ function pcmToWav(pcmBuffer, sampleRate = 44100, numChannels = 1, bitsPerSample 
  * Generate procedural restaurant ambient noise (crowd murmur + subtle clatter).
  * Returns a PCM 16-bit mono buffer of the requested length.
  */
-function generateRestaurantAmbience(numSamples, sampleRate = 44100, level = 5) {
+function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.06;
@@ -141,40 +141,9 @@ function generateRestaurantAmbience(numSamples, sampleRate = 44100, level = 5) {
 }
 
 /**
- * Cafe ambience — brighter than restaurant with higher cutoffs + occasional transient clicks.
+ * Street/traffic noise — very low rumble with sporadic amplitude bursts (passing cars).
  */
-function generateCafeAmbience(numSamples, sampleRate = 44100, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
-  let lp1 = 0, lp2 = 0;
-  const alpha1 = 0.10;  // ~220Hz — brighter room tone
-  const alpha2 = 0.18;  // ~400Hz — more treble than restaurant
-  const baseVolume = 80 + level * 90;
-
-  for (let i = 0; i < numSamples; i++) {
-    const noise = (Math.random() * 2 - 1) * baseVolume;
-    lp1 += alpha1 * (noise - lp1);
-    lp2 += alpha2 * (lp1 - lp2);
-    const t = i / sampleRate;
-    // Faster modulation — café feels busier
-    const mod = 0.50
-      + 0.18 * Math.sin(2 * Math.PI * 0.55 * t)
-      + 0.15 * Math.sin(2 * Math.PI * 1.1 * t)
-      + 0.10 * Math.sin(2 * Math.PI * 2.3 * t);
-
-    let sample = lp2 * mod;
-    // Occasional short transient clicks (cup/plate clinks)
-    if (Math.random() < 0.0003) {
-      sample += (Math.random() * 2 - 1) * baseVolume * 3;
-    }
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, Math.round(sample))), i * 2);
-  }
-  return buffer;
-}
-
-/**
- * Traffic noise — very low rumble with sporadic amplitude bursts (passing cars).
- */
-function generateTrafficNoise(numSamples, sampleRate = 44100, level = 5) {
+function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.03;  // ~65Hz — deep road rumble
@@ -211,50 +180,9 @@ function generateTrafficNoise(numSamples, sampleRate = 44100, level = 5) {
 }
 
 /**
- * Office noise — subtle HVAC hum + occasional keyboard click bursts.
- */
-function generateOfficeNoise(numSamples, sampleRate = 44100, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
-  const baseVolume = 60 + level * 70;
-
-  // Pre-generate keyboard burst events
-  const keyBursts = [];
-  let pos = Math.floor(Math.random() * sampleRate * 4);
-  while (pos < numSamples) {
-    keyBursts.push({ start: pos, length: Math.floor(sampleRate * (0.3 + Math.random() * 1.2)) });
-    pos += Math.floor(sampleRate * (2 + Math.random() * 5));
-  }
-
-  let lp = 0;
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate;
-    // HVAC hum — 50Hz sine + harmonic
-    const hvac = (Math.sin(2 * Math.PI * 50 * t) * 0.6 + Math.sin(2 * Math.PI * 100 * t) * 0.2) * baseVolume * 0.4;
-
-    // Subtle broadband air noise
-    const airNoise = (Math.random() * 2 - 1) * baseVolume * 0.3;
-    lp += 0.04 * (airNoise - lp);
-
-    // Keyboard clicks
-    let keyClick = 0;
-    for (const burst of keyBursts) {
-      if (i >= burst.start && i < burst.start + burst.length) {
-        if (Math.random() < 0.008) {
-          keyClick = (Math.random() * 2 - 1) * baseVolume * 2;
-        }
-      }
-    }
-
-    const sample = Math.round(hvac + lp + keyClick);
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
-  }
-  return buffer;
-}
-
-/**
  * White noise — flat-spectrum hiss at consistent volume.
  */
-function generateWhiteNoise(numSamples, sampleRate = 44100, level = 5) {
+function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   const baseVolume = 60 + level * 80;
 
@@ -266,52 +194,18 @@ function generateWhiteNoise(numSamples, sampleRate = 44100, level = 5) {
 }
 
 /**
- * TV noise — mid-frequency band-pass (speech band) with faster amplitude modulation.
- */
-function generateTvNoise(numSamples, sampleRate = 44100, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
-  let lp = 0, hp = 0, prevSample = 0;
-  const lpAlpha = 0.35;  // ~3000Hz — speech band upper
-  const hpAlpha = 0.02;  // ~300Hz — speech band lower (high-pass via subtraction)
-  const baseVolume = 80 + level * 90;
-
-  for (let i = 0; i < numSamples; i++) {
-    const noise = (Math.random() * 2 - 1) * baseVolume;
-    // Low-pass
-    lp += lpAlpha * (noise - lp);
-    // High-pass via subtraction
-    hp = lp - prevSample + 0.98 * hp;
-    prevSample = lp;
-
-    const t = i / sampleRate;
-    // Fast amplitude modulation — simulates changing TV dialogue
-    const mod = 0.45
-      + 0.25 * Math.sin(2 * Math.PI * 1.8 * t)
-      + 0.15 * Math.sin(2 * Math.PI * 3.5 * t)
-      + 0.10 * Math.sin(2 * Math.PI * 0.4 * t);
-
-    const sample = Math.round(hp * mod);
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
-  }
-  return buffer;
-}
-
-/**
  * Dispatcher — returns PCM ambient noise buffer for the given type.
- * @param {string} type - One of: restaurant, cafe, traffic, office, white_noise, tv
+ * @param {string} type - One of: restaurant, street, white_noise
  * @param {number} numSamples
  * @param {number} sampleRate
  * @param {number} level - 1-10
  * @returns {Buffer|null} PCM 16-bit mono buffer, or null if type is unknown/null
  */
-function generateAmbientNoise(type, numSamples, sampleRate = 44100, level = 5) {
+function generateAmbientNoise(type, numSamples, sampleRate = 22050, level = 5) {
   switch (type) {
     case 'restaurant': return generateRestaurantAmbience(numSamples, sampleRate, level);
-    case 'cafe':       return generateCafeAmbience(numSamples, sampleRate, level);
-    case 'traffic':    return generateTrafficNoise(numSamples, sampleRate, level);
-    case 'office':     return generateOfficeNoise(numSamples, sampleRate, level);
+    case 'street':     return generateTrafficNoise(numSamples, sampleRate, level);
     case 'white_noise': return generateWhiteNoise(numSamples, sampleRate, level);
-    case 'tv':         return generateTvNoise(numSamples, sampleRate, level);
     default:           return null;
   }
 }
@@ -327,7 +221,7 @@ function generateAmbientNoise(type, numSamples, sampleRate = 44100, level = 5) {
  * 3. Appends ~400ms silence so the last word isn't clipped
  * 4. (Optional) Mixes restaurant ambient noise throughout
  */
-function processVoiceAudio(pcmBuffer, sampleRate = 44100, ambientNoise = null, ambientLevel = 5) {
+function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null, ambientLevel = 5) {
   const bytesPerSample = 2; // 16-bit PCM
 
   // 1. Silence padding
@@ -403,7 +297,7 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
     method: 'POST',
     url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
     headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-    params: { output_format: 'pcm_44100' },
+    params: { output_format: 'pcm_22050' },
     data,
     responseType: 'arraybuffer',
     timeout: 30000,
@@ -412,8 +306,8 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   const pcmBuffer = Buffer.from(response.data);
 
   // Apply silence padding (prevents first/last word cutoff), natural fade-out, and optional ambient noise
-  const processedPcm = processVoiceAudio(pcmBuffer, 44100, settings.ambientNoise || null, intOrDefault(settings.ambientLevel, 5));
-  const wavBuffer = pcmToWav(processedPcm, 44100);
+  const processedPcm = processVoiceAudio(pcmBuffer, 22050, settings.ambientNoise || null, intOrDefault(settings.ambientLevel, 5));
+  const wavBuffer = pcmToWav(processedPcm, 22050);
 
   return {
     audio_base64: wavBuffer.toString('base64'),
