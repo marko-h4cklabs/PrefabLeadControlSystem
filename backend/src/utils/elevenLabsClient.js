@@ -46,32 +46,51 @@ async function textToSpeech(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const response = await axios({
-    method: 'POST',
-    url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-    headers: {
-      'xi-api-key': key,
-      'Content-Type': 'application/json',
+  const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
+  const data = {
+    text,
+    model_id: settings.model || 'eleven_turbo_v2_5',
+    voice_settings: {
+      stability: settings.stability ?? 0.5,
+      similarity_boost: settings.similarity_boost ?? 0.75,
+      style: settings.style ?? 0,
+      use_speaker_boost: settings.speaker_boost ?? true,
     },
-    data: {
-      text,
-      model_id: settings.model || 'eleven_turbo_v2_5',
-      voice_settings: {
-        stability: settings.stability ?? 0.5,
-        similarity_boost: settings.similarity_boost ?? 0.75,
-        style: settings.style ?? 0,
-        use_speaker_boost: settings.speaker_boost ?? true,
-      },
-      speed: settings.speed ?? 1.0,
-    },
-    responseType: 'arraybuffer',
-    timeout: 30000,
-  });
-
-  return {
-    audio_base64: Buffer.from(response.data).toString('base64'),
-    content_type: 'audio/mpeg',
   };
+  if (speed !== 1.0) data.speed = speed;
+
+  try {
+    const response = await axios({
+      method: 'POST',
+      url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+      data,
+      responseType: 'arraybuffer',
+      timeout: 30000,
+    });
+    return {
+      audio_base64: Buffer.from(response.data).toString('base64'),
+      content_type: 'audio/mpeg',
+    };
+  } catch (err) {
+    // If speed param caused the error, retry without it
+    if (err.response?.status === 400 && speed !== 1.0) {
+      delete data.speed;
+      const response = await axios({
+        method: 'POST',
+        url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+        headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+        data,
+        responseType: 'arraybuffer',
+        timeout: 30000,
+      });
+      return {
+        audio_base64: Buffer.from(response.data).toString('base64'),
+        content_type: 'audio/mpeg',
+      };
+    }
+    throw err;
+  }
 }
 
 /**
@@ -149,30 +168,41 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const response = await axios({
+  const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
+  const data = {
+    text,
+    model_id: settings.model || 'eleven_turbo_v2_5',
+    voice_settings: {
+      stability: settings.stability ?? 0.5,
+      similarity_boost: settings.similarity_boost ?? 0.75,
+      style: settings.style ?? 0,
+      use_speaker_boost: settings.speaker_boost ?? true,
+    },
+  };
+  if (speed !== 1.0) data.speed = speed;
+
+  const makeRequest = (reqData) => axios({
     method: 'POST',
     url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-    headers: {
-      'xi-api-key': key,
-      'Content-Type': 'application/json',
-    },
-    params: {
-      output_format: 'pcm_22050',
-    },
-    data: {
-      text,
-      model_id: settings.model || 'eleven_turbo_v2_5',
-      voice_settings: {
-        stability: settings.stability ?? 0.5,
-        similarity_boost: settings.similarity_boost ?? 0.75,
-        style: settings.style ?? 0,
-        use_speaker_boost: settings.speaker_boost ?? true,
-      },
-      speed: settings.speed ?? 1.0,
-    },
+    headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+    params: { output_format: 'pcm_22050' },
+    data: reqData,
     responseType: 'arraybuffer',
     timeout: 30000,
   });
+
+  let response;
+  try {
+    response = await makeRequest(data);
+  } catch (err) {
+    // If speed param caused the error, retry without it
+    if (err.response?.status === 400 && speed !== 1.0) {
+      delete data.speed;
+      response = await makeRequest(data);
+    } else {
+      throw err;
+    }
+  }
 
   const pcmBuffer = Buffer.from(response.data);
 
