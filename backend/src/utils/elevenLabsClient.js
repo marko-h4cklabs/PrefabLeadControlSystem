@@ -115,44 +115,44 @@ function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample 
 }
 
 /**
- * Generate procedural restaurant ambient noise (crowd murmur + subtle clatter).
- * Returns a PCM 16-bit mono buffer of the requested length.
+ * Generate procedural restaurant ambient noise (crowd murmur).
+ * Low-pass filtered noise with slow amplitude modulation = distant crowd chatter.
+ * Returns raw (un-normalized) Float64Array — normalized in generateAmbientNoise().
  */
-function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
+function generateRestaurantAmbience(numSamples, sampleRate = 22050) {
+  const samples = new Float64Array(numSamples);
   let lp1 = 0, lp2 = 0;
-  const alpha1 = 0.06;
-  const alpha2 = 0.12;
-  const baseVolume = 800 + level * 1200;
+  const alpha1 = 0.06;  // ~200Hz murmur band
+  const alpha2 = 0.12;  // ~400Hz upper murmur
 
   for (let i = 0; i < numSamples; i++) {
-    const noise = (Math.random() * 2 - 1) * baseVolume;
+    const noise = Math.random() * 2 - 1;
     lp1 += alpha1 * (noise - lp1);
     lp2 += alpha2 * (lp1 - lp2);
     const t = i / sampleRate;
+    // Slow amplitude modulation — mimics waves of crowd chatter
     const mod = 0.55
       + 0.20 * Math.sin(2 * Math.PI * 0.35 * t)
       + 0.13 * Math.sin(2 * Math.PI * 0.73 * t)
       + 0.08 * Math.sin(2 * Math.PI * 1.4 * t);
-    const sample = Math.round(lp2 * mod);
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
+    samples[i] = lp2 * mod;
   }
-  return buffer;
+  return samples;
 }
 
 /**
- * Street/traffic noise — very low rumble with sporadic amplitude bursts (passing cars).
+ * Street/traffic noise — deep rumble with sporadic bursts (passing cars).
+ * Returns raw (un-normalized) Float64Array.
  */
-function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
+function generateTrafficNoise(numSamples, sampleRate = 22050) {
+  const samples = new Float64Array(numSamples);
   let lp1 = 0, lp2 = 0;
-  const alpha1 = 0.03;  // ~65Hz — deep road rumble
-  const alpha2 = 0.05;  // ~110Hz — engine drone layer
-  const baseVolume = 1000 + level * 1400;
+  const alpha1 = 0.02;  // ~45Hz — very deep road rumble
+  const alpha2 = 0.04;  // ~90Hz — engine drone
 
   // Pre-generate random "car pass" events
   const carPasses = [];
-  const avgGap = sampleRate * 3; // ~3 sec between cars
+  const avgGap = sampleRate * 3;
   let pos = Math.floor(Math.random() * avgGap);
   while (pos < numSamples) {
     carPasses.push({ center: pos, width: sampleRate * (0.8 + Math.random() * 1.5) });
@@ -160,11 +160,10 @@ function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
   }
 
   for (let i = 0; i < numSamples; i++) {
-    const noise = (Math.random() * 2 - 1) * baseVolume;
+    const noise = Math.random() * 2 - 1;
     lp1 += alpha1 * (noise - lp1);
     lp2 += alpha2 * (lp1 - lp2);
 
-    // Check car pass boost
     let carBoost = 0;
     for (const car of carPasses) {
       const dist = Math.abs(i - car.center);
@@ -173,28 +172,44 @@ function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
       }
     }
 
-    const sample = Math.round(lp2 * (0.6 + 0.4 * Math.sin(2 * Math.PI * 0.15 * (i / sampleRate)) + carBoost));
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
+    samples[i] = lp2 * (0.6 + 0.4 * Math.sin(2 * Math.PI * 0.15 * (i / sampleRate)) + carBoost);
   }
-  return buffer;
+  return samples;
 }
 
 /**
- * White noise — flat-spectrum hiss at consistent volume.
+ * White noise — flat-spectrum hiss.
+ * Returns raw (un-normalized) Float64Array.
  */
-function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
-  const buffer = Buffer.alloc(numSamples * 2);
-  const baseVolume = 600 + level * 1000;
-
+function generateWhiteNoise(numSamples) {
+  const samples = new Float64Array(numSamples);
   for (let i = 0; i < numSamples; i++) {
-    const sample = Math.round((Math.random() * 2 - 1) * baseVolume);
-    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
+    samples[i] = Math.random() * 2 - 1;
+  }
+  return samples;
+}
+
+/**
+ * Normalize a Float64Array to a target RMS, then write to 16-bit PCM buffer.
+ * This ensures ALL noise types are equally loud regardless of their filter characteristics.
+ */
+function normalizeToBuffer(samples, targetRms) {
+  // Calculate current RMS
+  let sumSq = 0;
+  for (let i = 0; i < samples.length; i++) sumSq += samples[i] * samples[i];
+  const currentRms = Math.sqrt(sumSq / samples.length);
+
+  const scale = currentRms > 0 ? targetRms / currentRms : 0;
+  const buffer = Buffer.alloc(samples.length * 2);
+  for (let i = 0; i < samples.length; i++) {
+    const val = Math.round(samples[i] * scale);
+    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, val)), i * 2);
   }
   return buffer;
 }
 
 /**
- * Dispatcher — returns PCM ambient noise buffer for the given type.
+ * Dispatcher — generates ambient noise, normalizes all types to consistent volume.
  * @param {string} type - One of: restaurant, street, white_noise
  * @param {number} numSamples
  * @param {number} sampleRate
@@ -202,12 +217,17 @@ function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
  * @returns {Buffer|null} PCM 16-bit mono buffer, or null if type is unknown/null
  */
 function generateAmbientNoise(type, numSamples, sampleRate = 22050, level = 5) {
+  let rawSamples;
   switch (type) {
-    case 'restaurant': return generateRestaurantAmbience(numSamples, sampleRate, level);
-    case 'street':     return generateTrafficNoise(numSamples, sampleRate, level);
-    case 'white_noise': return generateWhiteNoise(numSamples, sampleRate, level);
+    case 'restaurant': rawSamples = generateRestaurantAmbience(numSamples, sampleRate); break;
+    case 'street':     rawSamples = generateTrafficNoise(numSamples, sampleRate); break;
+    case 'white_noise': rawSamples = generateWhiteNoise(numSamples); break;
     default:           return null;
   }
+  // Target RMS: level 1 = 400, level 10 = 5000 (out of 32767 max)
+  // This gives noise that's clearly audible but not overwhelming at high levels
+  const targetRms = 400 + (level - 1) * 510;
+  return normalizeToBuffer(rawSamples, targetRms);
 }
 
 /**

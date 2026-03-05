@@ -436,9 +436,12 @@ router.post('/:conversationId/send-voice', async (req, res) => {
 
     res.json({ success: true, message_sent: text.trim(), audio_url: audioPublicUrl, is_voice: true });
   } catch (err) {
-    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    logger.error({ err: err.message, status: err.response?.status, detail }, '[conversations/send-voice] Error');
-    errorJson(res, 500, 'INTERNAL_ERROR', detail);
+    const mcData = err.response?.data;
+    const detail = mcData ? JSON.stringify(mcData) : err.message;
+    logger.error({ err: err.message, status: err.response?.status, detail, stack: err.stack?.split('\n').slice(0, 3).join(' | ') }, '[conversations/send-voice] Error');
+    // Surface a useful message to the frontend
+    const userMsg = mcData?.message || mcData?.error || err.message || 'Unknown error';
+    errorJson(res, err.response?.status || 500, 'SEND_FAILED', userMsg);
   }
 });
 
