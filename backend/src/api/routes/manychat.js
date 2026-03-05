@@ -671,13 +671,14 @@ async function processManyChatPayload(payload, overrideCompany) {
 
               // Step 1: Generate TTS audio via ElevenLabs (WAV format)
               logger.info({ voiceId: companyRow.voice_selected_id }, '[manychat/voice] Step 1: ElevenLabs TTS (WAV)');
+              const numOrDefault = (val, fb) => { const n = parseFloat(val); return Number.isFinite(n) ? n : fb; };
               const ttsResult = await textToSpeechWav(companyRow.voice_selected_id, humanizedText, {
                 model: companyRow.voice_model || 'eleven_turbo_v2_5',
-                stability: parseFloat(companyRow.voice_stability) || 0.5,
-                similarity_boost: parseFloat(companyRow.voice_similarity_boost) || 0.75,
-                style: parseFloat(companyRow.voice_style) || 0,
-                speaker_boost: companyRow.voice_speaker_boost !== false,
-                speed: parseFloat(companyRow.voice_speed) || 1.0,
+                stability: numOrDefault(companyRow.voice_stability, 0.5),
+                similarity_boost: numOrDefault(companyRow.voice_similarity_boost, 0.75),
+                style: numOrDefault(companyRow.voice_style, 0),
+                speaker_boost: companyRow.voice_speaker_boost === true,
+                speed: numOrDefault(companyRow.voice_speed, 1.0),
                 ambientNoise: companyRow.voice_ambient_noise || null,
                 ambientLevel: parseInt(companyRow.voice_ambient_level) || 5,
               });

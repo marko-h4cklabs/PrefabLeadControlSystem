@@ -9,6 +9,9 @@ const { isElevenLabsConfigured, getElevenLabsKey, getUsage, getVoices, textToSpe
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
+const numOrDefault = (val, fb) => { const n = parseFloat(val); return Number.isFinite(n) ? n : fb; };
+const intOrDefault = (val, fb) => { const n = parseInt(val, 10); return Number.isFinite(n) ? n : fb; };
+
 const PREMADE_VOICES = [
   {
     voice_id: 'EXAVITQu4vr4xnSDxMaL',
@@ -50,14 +53,14 @@ router.get('/settings', async (req, res) => {
       voice_model: row.voice_model || 'eleven_turbo_v2_5',
       selected_voice_id: row.voice_selected_id || null,
       selected_voice_name: row.voice_selected_name || null,
-      stability: parseFloat(row.voice_stability) ?? 0.5,
-      similarity_boost: parseFloat(row.voice_similarity_boost) ?? 0.75,
-      style: parseFloat(row.voice_style) ?? 0,
-      speaker_boost: row.voice_speaker_boost !== false,
+      stability: numOrDefault(row.voice_stability, 0.5),
+      similarity_boost: numOrDefault(row.voice_similarity_boost, 0.75),
+      style: numOrDefault(row.voice_style, 0),
+      speaker_boost: row.voice_speaker_boost === true,
       voice_style_prompt: row.voice_style_prompt || '',
-      voice_speed: parseFloat(row.voice_speed) || 1.0,
+      voice_speed: numOrDefault(row.voice_speed, 1.0),
       voice_ambient_noise: row.voice_ambient_noise || null,
-      voice_ambient_level: parseInt(row.voice_ambient_level) || 5,
+      voice_ambient_level: intOrDefault(row.voice_ambient_level, 5),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -245,7 +248,7 @@ router.post('/test', async (req, res) => {
       similarity_boost: c.voice_similarity_boost,
       style: c.voice_style,
       speaker_boost: c.voice_speaker_boost,
-      speed: parseFloat(c.voice_speed) || 1.0,
+      speed: numOrDefault(c.voice_speed, 1.0),
     });
     res.json(audio);
   } catch (err) {

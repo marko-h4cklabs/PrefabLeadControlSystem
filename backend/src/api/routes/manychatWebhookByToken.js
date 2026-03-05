@@ -54,6 +54,7 @@ router.post('/:webhookToken', express.raw({ type: 'application/json' }), async (
       `SELECT id, manychat_api_key, operating_mode, bot_enabled,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
               voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
+              voice_speed, voice_ambient_noise, voice_ambient_level, voice_style_prompt,
               meta_page_access_token, instagram_account_id
        FROM companies WHERE webhook_token = $1`,
       [webhookToken]

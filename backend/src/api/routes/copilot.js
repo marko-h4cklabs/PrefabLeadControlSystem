@@ -2264,16 +2264,19 @@ router.post('/voice/generate', async (req, res) => {
     }
 
     // Per-message overrides fall back to company defaults
-    const effectiveNoise = ambient_noise !== undefined ? ambient_noise : (company.voice_ambient_noise || null);
+    const effectiveNoise = ambient_noise !== undefined
+      ? (ambient_noise === 'none' ? null : ambient_noise)
+      : (company.voice_ambient_noise || null);
     const effectiveLevel = ambient_level !== undefined ? ambient_level : (parseInt(company.voice_ambient_level) || 5);
 
+    const numOrDefault = (val, fb) => { const n = parseFloat(val); return Number.isFinite(n) ? n : fb; };
     const ttsResult = await textToSpeechWav(company.voice_selected_id, finalText, {
       model: company.voice_model || 'eleven_turbo_v2_5',
-      stability: parseFloat(company.voice_stability) || 0.5,
-      similarity_boost: parseFloat(company.voice_similarity_boost) || 0.75,
-      style: parseFloat(company.voice_style) || 0,
-      speaker_boost: company.voice_speaker_boost !== false,
-      speed: parseFloat(company.voice_speed) || 1.0,
+      stability: numOrDefault(company.voice_stability, 0.5),
+      similarity_boost: numOrDefault(company.voice_similarity_boost, 0.75),
+      style: numOrDefault(company.voice_style, 0),
+      speaker_boost: company.voice_speaker_boost === true,
+      speed: numOrDefault(company.voice_speed, 1.0),
       ambientNoise: effectiveNoise,
       ambientLevel: effectiveLevel,
     });

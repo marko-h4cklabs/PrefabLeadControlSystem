@@ -1,5 +1,9 @@
 const axios = require('axios');
 
+/** Safe numeric parsing — returns fallback for null, undefined, NaN */
+const numOrDefault = (val, fallback) => { const n = parseFloat(val); return Number.isFinite(n) ? n : fallback; };
+const intOrDefault = (val, fallback) => { const n = parseInt(val, 10); return Number.isFinite(n) ? n : fallback; };
+
 function getElevenLabsKey() {
   const key = (process.env.ELEVENLABS_API_KEY || '').trim();
   if (!key || key.length < 10) return null;
@@ -43,16 +47,14 @@ async function getVoices() {
 }
 
 /**
- * Preprocess text so ElevenLabs produces natural pauses and breaths.
- * "..." → sentence-ending period + pause word that forces a break.
+ * Preprocess text for ElevenLabs TTS.
+ * Converts informal pause markers to SSML <break> tags.
+ * Supported on eleven_turbo_v2_5 and eleven_flash_v2_5 models.
  */
 function preprocessForTTS(text) {
   return text
-    // "..." or "…" → period + soft breath pause (ElevenLabs reliably pauses on sentence boundaries)
-    .replace(/\.{3,}|…/g, '. —')
-    // Double dash "--" also gets a pause
-    .replace(/--/g, ', —')
-    // Clean up any resulting double spaces
+    .replace(/\.{3,}|…/g, '. <break time="0.6s" />')
+    .replace(/--/g, ' <break time="0.4s" /> ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -61,7 +63,7 @@ async function textToSpeech(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
+  const speed = Math.min(4.0, Math.max(0.25, numOrDefault(settings.speed, 1.0)));
   const data = {
     text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
@@ -69,49 +71,29 @@ async function textToSpeech(voiceId, text, settings = {}) {
       stability: settings.stability ?? 0.5,
       similarity_boost: settings.similarity_boost ?? 0.75,
       style: settings.style ?? 0,
-      use_speaker_boost: settings.speaker_boost ?? true,
+      use_speaker_boost: settings.speaker_boost === true,
+      speed,
     },
   };
-  if (speed !== 1.0) data.speed = speed;
 
-  try {
-    const response = await axios({
-      method: 'POST',
-      url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-      data,
-      responseType: 'arraybuffer',
-      timeout: 30000,
-    });
-    return {
-      audio_base64: Buffer.from(response.data).toString('base64'),
-      content_type: 'audio/mpeg',
-    };
-  } catch (err) {
-    // If speed param caused the error, retry without it
-    if (err.response?.status === 400 && speed !== 1.0) {
-      delete data.speed;
-      const response = await axios({
-        method: 'POST',
-        url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-        headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-        data,
-        responseType: 'arraybuffer',
-        timeout: 30000,
-      });
-      return {
-        audio_base64: Buffer.from(response.data).toString('base64'),
-        content_type: 'audio/mpeg',
-      };
-    }
-    throw err;
-  }
+  const response = await axios({
+    method: 'POST',
+    url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+    headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+    data,
+    responseType: 'arraybuffer',
+    timeout: 30000,
+  });
+  return {
+    audio_base64: Buffer.from(response.data).toString('base64'),
+    content_type: 'audio/mpeg',
+  };
 }
 
 /**
  * Convert raw PCM buffer to WAV format by prepending a 44-byte header.
  */
-function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample = 16) {
+function pcmToWav(pcmBuffer, sampleRate = 44100, numChannels = 1, bitsPerSample = 16) {
   const byteRate = sampleRate * numChannels * bitsPerSample / 8;
   const blockAlign = numChannels * bitsPerSample / 8;
   const dataSize = pcmBuffer.length;
@@ -136,7 +118,7 @@ function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample 
  * Generate procedural restaurant ambient noise (crowd murmur + subtle clatter).
  * Returns a PCM 16-bit mono buffer of the requested length.
  */
-function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
+function generateRestaurantAmbience(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.06;
@@ -161,7 +143,7 @@ function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
 /**
  * Cafe ambience — brighter than restaurant with higher cutoffs + occasional transient clicks.
  */
-function generateCafeAmbience(numSamples, sampleRate = 22050, level = 5) {
+function generateCafeAmbience(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.10;  // ~220Hz — brighter room tone
@@ -192,7 +174,7 @@ function generateCafeAmbience(numSamples, sampleRate = 22050, level = 5) {
 /**
  * Traffic noise — very low rumble with sporadic amplitude bursts (passing cars).
  */
-function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
+function generateTrafficNoise(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.03;  // ~65Hz — deep road rumble
@@ -231,7 +213,7 @@ function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
 /**
  * Office noise — subtle HVAC hum + occasional keyboard click bursts.
  */
-function generateOfficeNoise(numSamples, sampleRate = 22050, level = 5) {
+function generateOfficeNoise(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   const baseVolume = 60 + level * 70;
 
@@ -272,7 +254,7 @@ function generateOfficeNoise(numSamples, sampleRate = 22050, level = 5) {
 /**
  * White noise — flat-spectrum hiss at consistent volume.
  */
-function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
+function generateWhiteNoise(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   const baseVolume = 60 + level * 80;
 
@@ -286,7 +268,7 @@ function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
 /**
  * TV noise — mid-frequency band-pass (speech band) with faster amplitude modulation.
  */
-function generateTvNoise(numSamples, sampleRate = 22050, level = 5) {
+function generateTvNoise(numSamples, sampleRate = 44100, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
   let lp = 0, hp = 0, prevSample = 0;
   const lpAlpha = 0.35;  // ~3000Hz — speech band upper
@@ -322,7 +304,7 @@ function generateTvNoise(numSamples, sampleRate = 22050, level = 5) {
  * @param {number} level - 1-10
  * @returns {Buffer|null} PCM 16-bit mono buffer, or null if type is unknown/null
  */
-function generateAmbientNoise(type, numSamples, sampleRate = 22050, level = 5) {
+function generateAmbientNoise(type, numSamples, sampleRate = 44100, level = 5) {
   switch (type) {
     case 'restaurant': return generateRestaurantAmbience(numSamples, sampleRate, level);
     case 'cafe':       return generateCafeAmbience(numSamples, sampleRate, level);
@@ -345,7 +327,7 @@ function generateAmbientNoise(type, numSamples, sampleRate = 22050, level = 5) {
  * 3. Appends ~400ms silence so the last word isn't clipped
  * 4. (Optional) Mixes restaurant ambient noise throughout
  */
-function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null, ambientLevel = 5) {
+function processVoiceAudio(pcmBuffer, sampleRate = 44100, ambientNoise = null, ambientLevel = 5) {
   const bytesPerSample = 2; // 16-bit PCM
 
   // 1. Silence padding
@@ -404,7 +386,7 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
-  const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
+  const speed = Math.min(4.0, Math.max(0.25, numOrDefault(settings.speed, 1.0)));
   const data = {
     text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
@@ -412,39 +394,26 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
       stability: settings.stability ?? 0.5,
       similarity_boost: settings.similarity_boost ?? 0.75,
       style: settings.style ?? 0,
-      use_speaker_boost: settings.speaker_boost ?? true,
+      use_speaker_boost: settings.speaker_boost === true,
+      speed,
     },
   };
-  if (speed !== 1.0) data.speed = speed;
 
-  const makeRequest = (reqData) => axios({
+  const response = await axios({
     method: 'POST',
     url: `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
     headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
-    params: { output_format: 'pcm_22050' },
-    data: reqData,
+    params: { output_format: 'pcm_44100' },
+    data,
     responseType: 'arraybuffer',
     timeout: 30000,
   });
 
-  let response;
-  try {
-    response = await makeRequest(data);
-  } catch (err) {
-    // If speed param caused the error, retry without it
-    if (err.response?.status === 400 && speed !== 1.0) {
-      delete data.speed;
-      response = await makeRequest(data);
-    } else {
-      throw err;
-    }
-  }
-
   const pcmBuffer = Buffer.from(response.data);
 
   // Apply silence padding (prevents first/last word cutoff), natural fade-out, and optional ambient noise
-  const processedPcm = processVoiceAudio(pcmBuffer, 22050, settings.ambientNoise || null, settings.ambientLevel || 5);
-  const wavBuffer = pcmToWav(processedPcm);
+  const processedPcm = processVoiceAudio(pcmBuffer, 44100, settings.ambientNoise || null, intOrDefault(settings.ambientLevel, 5));
+  const wavBuffer = pcmToWav(processedPcm, 44100);
 
   return {
     audio_base64: wavBuffer.toString('base64'),
@@ -462,37 +431,45 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
  * @returns {Promise<string>} Humanized text
  */
 async function humanizeTextForTTS(text, stylePrompt = null) {
+  const logger = require('../lib/logger');
   try {
     const { anthropic } = require('./claudeWithRetry');
 
     const systemParts = [
-      'You rewrite text to sound like natural human speech for text-to-speech.',
-      'Add filler words like "um", "uh", "like", "you know", "I mean" sparingly — 1-3 per message.',
-      'Add occasional self-corrections (e.g. "we can — well, we could").',
-      'Use ellipsis "..." for natural pauses.',
-      'For short messages (under 15 words), expand into slightly longer, more conversational phrasing.',
-      'Make it sound like someone casually talking, not reading a script.',
-      'DO NOT change the meaning, facts, names, numbers, or intent.',
-      'DO NOT add greetings or sign-offs that weren\'t there.',
-      'Return ONLY the rewritten text, nothing else.',
+      'You are a speech writer for text-to-speech voice messages. Your job is to rewrite text so it sounds like a real human speaking naturally into their phone — not reading from a script.',
+      '',
+      'CONTEXT: This text is an Instagram DM reply from a business to a potential customer. It should sound warm, conversational, and authentic — like a real person casually voice-messaging someone back.',
+      '',
+      'RULES:',
+      '- Add 1-3 filler words per message ("um", "uh", "like", "you know", "I mean", "so", "honestly", "actually") — but ONLY where a real person would naturally pause or think.',
+      '- Add occasional self-corrections that sound natural (e.g. "we can — well, actually we could").',
+      '- Use SSML break tags for natural pauses: <break time="0.4s" /> for short pauses, <break time="0.8s" /> for longer thinking pauses. Use 2-4 per message.',
+      '- For short messages (under 15 words), expand slightly into warmer, more conversational phrasing. Don\'t let it sound curt.',
+      '- Vary sentence length. Mix short punchy sentences with longer flowing ones.',
+      '- DO NOT change the meaning, facts, names, numbers, prices, or intent.',
+      '- DO NOT add greetings or sign-offs that weren\'t in the original.',
+      '- DO NOT use ellipsis "..." — use <break> tags instead.',
+      '- DO NOT wrap output in quotes or add any explanation.',
+      '- Return ONLY the rewritten text with SSML break tags.',
     ];
     if (stylePrompt) {
-      systemParts.push(`Voice style guidance: ${stylePrompt}`);
+      systemParts.push('', `VOICE STYLE: ${stylePrompt}`);
     }
 
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251022',
-      max_tokens: 500,
+      max_tokens: 600,
       system: systemParts.join('\n'),
       messages: [{ role: 'user', content: text }],
     });
 
     const result = (response.content?.[0]?.text ?? '').trim();
+    if (result) {
+      logger.info({ original: text.substring(0, 100), humanized: result.substring(0, 100) }, '[humanize] Text humanized for TTS');
+    }
     return result || text;
   } catch (err) {
-    // Silent fallback — voice still generates with original text
-    const logger = require('../lib/logger');
-    logger.warn('[humanize] Failed to humanize text, using original:', err.message);
+    logger.warn({ err: err.message }, '[humanize] Failed to humanize text, using original');
     return text;
   }
 }
