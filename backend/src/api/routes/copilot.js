@@ -2225,17 +2225,15 @@ router.delete('/settings/templates/:id', async (req, res) => {
 // Voice note generation (ElevenLabs TTS preview)
 // ---------------------------------------------------------------------------
 const { isElevenLabsConfigured, textToSpeechWav } = require('../../utils/elevenLabsClient');
-const claudeWithRetry = require('../../utils/claudeWithRetry');
 
 /**
  * POST /api/copilot/voice/generate
  * Generate a voice note from text using the company's ElevenLabs voice settings.
- * Optionally rewrites text via Claude using voice_style_prompt and/or feedback.
  */
 router.post('/voice/generate', async (req, res) => {
   try {
     const companyId = req.tenantId;
-    const { text, feedback } = req.body || {};
+    const { text } = req.body || {};
 
     if (!text || typeof text !== 'string' || !text.trim()) {
       return errorJson(res, 400, 'VALIDATION_ERROR', 'text is required');
@@ -2258,43 +2256,7 @@ router.post('/voice/generate', async (req, res) => {
       return errorJson(res, 400, 'VOICE_NOT_CONFIGURED', 'No voice selected. Configure a voice in Copilot Settings > Voice Messages.');
     }
 
-    // Rewrite text via Claude if voice_style_prompt or feedback is provided
-    let voiceText = text.trim();
-    const stylePrompt = (company.voice_style_prompt || '').trim();
-    const feedbackText = (feedback || '').trim();
-
-    if (stylePrompt || feedbackText) {
-      try {
-        const systemParts = [
-          'You are a voice message text rewriter. Your job is to take a plain text message and rewrite it so it sounds natural when spoken aloud via text-to-speech.',
-          'Add natural speech patterns: pauses (using "..." or commas), emphasis, conversational filler where appropriate.',
-          'Keep the same meaning and information — just make it sound like a real person talking, not reading.',
-          'Output ONLY the rewritten text. No explanations, no quotes, no prefixes.',
-        ];
-        if (stylePrompt) {
-          systemParts.push(`\nVOICE STYLE INSTRUCTIONS (follow these closely):\n${stylePrompt}`);
-        }
-
-        const userParts = [`Original message:\n${voiceText}`];
-        if (feedbackText) {
-          userParts.push(`\nFEEDBACK (apply these improvements):\n${feedbackText}`);
-        }
-
-        const result = await claudeWithRetry({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2000,
-          system: systemParts.join('\n'),
-          messages: [{ role: 'user', content: userParts.join('\n') }],
-        });
-        if (result.content && result.content.trim()) {
-          voiceText = result.content.trim();
-        }
-      } catch (rewriteErr) {
-        logger.warn({ err: rewriteErr.message }, '[copilot/voice/generate] Claude rewrite failed, using original text');
-      }
-    }
-
-    const ttsResult = await textToSpeechWav(company.voice_selected_id, voiceText, {
+    const ttsResult = await textToSpeechWav(company.voice_selected_id, text.trim(), {
       model: company.voice_model || 'eleven_turbo_v2_5',
       stability: parseFloat(company.voice_stability) || 0.5,
       similarity_boost: parseFloat(company.voice_similarity_boost) || 0.75,
