@@ -133,15 +133,51 @@ function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample 
 }
 
 /**
+ * Generate procedural restaurant ambient noise (crowd murmur + subtle clatter).
+ * Returns a PCM 16-bit mono buffer of the requested length.
+ */
+function generateRestaurantAmbience(numSamples, sampleRate = 22050) {
+  const buffer = Buffer.alloc(numSamples * 2);
+
+  // Two cascaded low-pass filters create smooth crowd murmur
+  let lp1 = 0, lp2 = 0;
+  const alpha1 = 0.06;  // ~130Hz equivalent — deep room rumble
+  const alpha2 = 0.12;  // ~260Hz — conversational murmur layer
+  const baseVolume = 450; // Very subtle (~1.4% of max amplitude)
+
+  for (let i = 0; i < numSamples; i++) {
+    const noise = (Math.random() * 2 - 1) * baseVolume;
+
+    // Cascaded low-pass for warm murmur
+    lp1 += alpha1 * (noise - lp1);
+    lp2 += alpha2 * (lp1 - lp2);
+
+    // Slow amplitude modulation — simulates ebb and flow of crowd chatter
+    const t = i / sampleRate;
+    const mod = 0.55
+      + 0.20 * Math.sin(2 * Math.PI * 0.35 * t)
+      + 0.13 * Math.sin(2 * Math.PI * 0.73 * t)
+      + 0.08 * Math.sin(2 * Math.PI * 1.4 * t);
+
+    const sample = Math.round(lp2 * mod);
+    buffer.writeInt16LE(Math.max(-32767, Math.min(32767, sample)), i * 2);
+  }
+
+  return buffer;
+}
+
+/**
  * Add silence padding and natural fade-out to PCM audio.
+ * Optionally mixes in ambient background noise (e.g. restaurant ambience).
  *
  * Fixes:
  * 1. Prepends ~250ms silence so the first words aren't cut off by the player
  * 2. Applies a gradual volume fade-out over the last ~1s so the voice
  *    trails off naturally (like real human speech)
  * 3. Appends ~400ms silence so the last word isn't clipped
+ * 4. (Optional) Mixes restaurant ambient noise throughout
  */
-function processVoiceAudio(pcmBuffer, sampleRate = 22050) {
+function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null) {
   const bytesPerSample = 2; // 16-bit PCM
 
   // 1. Silence padding
@@ -172,7 +208,21 @@ function processVoiceAudio(pcmBuffer, sampleRate = 22050) {
     }
   }
 
-  return Buffer.concat([leadSilence, audioData, trailSilence]);
+  // 3. Combine lead silence + voice + trail silence
+  const combined = Buffer.concat([leadSilence, audioData, trailSilence]);
+
+  // 4. Mix ambient noise if requested
+  if (ambientNoise === 'restaurant') {
+    const totalCombinedSamples = Math.floor(combined.length / bytesPerSample);
+    const ambient = generateRestaurantAmbience(totalCombinedSamples, sampleRate);
+    for (let i = 0; i < combined.length - 1; i += bytesPerSample) {
+      const voice = combined.readInt16LE(i);
+      const noise = ambient.readInt16LE(i);
+      combined.writeInt16LE(Math.max(-32767, Math.min(32767, voice + noise)), i);
+    }
+  }
+
+  return combined;
 }
 
 /**
@@ -221,8 +271,8 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
 
   const pcmBuffer = Buffer.from(response.data);
 
-  // Apply silence padding (prevents first/last word cutoff) and natural fade-out
-  const processedPcm = processVoiceAudio(pcmBuffer, 22050);
+  // Apply silence padding (prevents first/last word cutoff), natural fade-out, and optional ambient noise
+  const processedPcm = processVoiceAudio(pcmBuffer, 22050, settings.ambientNoise || null);
   const wavBuffer = pcmToWav(processedPcm);
 
   return {
