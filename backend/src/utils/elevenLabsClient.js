@@ -42,13 +42,28 @@ async function getVoices() {
   return data.voices || [];
 }
 
+/**
+ * Preprocess text so ElevenLabs produces natural pauses and breaths.
+ * "..." → sentence-ending period + pause word that forces a break.
+ */
+function preprocessForTTS(text) {
+  return text
+    // "..." or "…" → period + soft breath pause (ElevenLabs reliably pauses on sentence boundaries)
+    .replace(/\.{3,}|…/g, '. —')
+    // Double dash "--" also gets a pause
+    .replace(/--/g, ', —')
+    // Clean up any resulting double spaces
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 async function textToSpeech(voiceId, text, settings = {}) {
   const key = getElevenLabsKey();
   if (!key) throw new Error('ElevenLabs API key not configured');
 
   const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
   const data = {
-    text,
+    text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
     voice_settings: {
       stability: settings.stability ?? 0.5,
@@ -170,7 +185,7 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
 
   const speed = Math.min(4.0, Math.max(0.25, parseFloat(settings.speed) || 1.0));
   const data = {
-    text,
+    text: preprocessForTTS(text),
     model_id: settings.model || 'eleven_turbo_v2_5',
     voice_settings: {
       stability: settings.stability ?? 0.5,
