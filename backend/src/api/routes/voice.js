@@ -7,7 +7,7 @@ const axios = require('axios');
 const { pool } = require('../../../db');
 const { isElevenLabsConfigured, getElevenLabsKey, getUsage, getVoices, textToSpeech } = require('../../utils/elevenLabsClient');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 const PREMADE_VOICES = [
   {
@@ -138,7 +138,17 @@ router.get('/clones', async (req, res) => {
   }
 });
 
-router.post('/clone', upload.array('samples', 5), async (req, res) => {
+router.post('/clone', (req, res, next) => {
+  upload.array('samples', 5)(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File too large. Maximum 25MB per file.' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!isElevenLabsConfigured()) {
     return res.status(503).json({
       error: 'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to your Railway environment variables.',
