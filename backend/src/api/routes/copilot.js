@@ -2247,7 +2247,7 @@ router.post('/voice/generate', async (req, res) => {
 
     // Query voice fields directly (companyRepository.findById strips them)
     const companyRow = await pool.query(
-      'SELECT voice_selected_id, voice_model, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost, voice_style_prompt, voice_speed, voice_ambient_noise FROM companies WHERE id = $1',
+      'SELECT voice_selected_id, voice_model, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost, voice_style_prompt, voice_speed, voice_ambient_noise, voice_ambient_level FROM companies WHERE id = $1',
       [companyId]
     );
     const company = companyRow.rows[0];
@@ -2264,6 +2264,7 @@ router.post('/voice/generate', async (req, res) => {
       speaker_boost: company.voice_speaker_boost !== false,
       speed: parseFloat(company.voice_speed) || 1.0,
       ambientNoise: company.voice_ambient_noise || null,
+      ambientLevel: parseInt(company.voice_ambient_level) || 5,
     });
 
     res.json({

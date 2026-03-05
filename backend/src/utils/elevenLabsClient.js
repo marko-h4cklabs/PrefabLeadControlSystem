@@ -134,16 +134,20 @@ function pcmToWav(pcmBuffer, sampleRate = 22050, numChannels = 1, bitsPerSample 
 
 /**
  * Generate procedural restaurant ambient noise (crowd murmur + subtle clatter).
+ * @param {number} numSamples - Number of PCM samples to generate
+ * @param {number} sampleRate
+ * @param {number} level - Volume level 1-10 (1 = barely audible, 10 = loud café)
  * Returns a PCM 16-bit mono buffer of the requested length.
  */
-function generateRestaurantAmbience(numSamples, sampleRate = 22050) {
+function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
 
   // Two cascaded low-pass filters create smooth crowd murmur
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.06;  // ~130Hz equivalent — deep room rumble
   const alpha2 = 0.12;  // ~260Hz — conversational murmur layer
-  const baseVolume = 450; // Very subtle (~1.4% of max amplitude)
+  // Scale volume by level: level 1 = 200, level 5 = 600, level 10 = 1100
+  const baseVolume = 100 + level * 100;
 
   for (let i = 0; i < numSamples; i++) {
     const noise = (Math.random() * 2 - 1) * baseVolume;
@@ -177,7 +181,7 @@ function generateRestaurantAmbience(numSamples, sampleRate = 22050) {
  * 3. Appends ~400ms silence so the last word isn't clipped
  * 4. (Optional) Mixes restaurant ambient noise throughout
  */
-function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null) {
+function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null, ambientLevel = 5) {
   const bytesPerSample = 2; // 16-bit PCM
 
   // 1. Silence padding
@@ -214,7 +218,8 @@ function processVoiceAudio(pcmBuffer, sampleRate = 22050, ambientNoise = null) {
   // 4. Mix ambient noise if requested
   if (ambientNoise === 'restaurant') {
     const totalCombinedSamples = Math.floor(combined.length / bytesPerSample);
-    const ambient = generateRestaurantAmbience(totalCombinedSamples, sampleRate);
+    const clampedLevel = Math.max(1, Math.min(10, parseInt(ambientLevel) || 5));
+    const ambient = generateRestaurantAmbience(totalCombinedSamples, sampleRate, clampedLevel);
     for (let i = 0; i < combined.length - 1; i += bytesPerSample) {
       const voice = combined.readInt16LE(i);
       const noise = ambient.readInt16LE(i);
@@ -272,7 +277,7 @@ async function textToSpeechWav(voiceId, text, settings = {}) {
   const pcmBuffer = Buffer.from(response.data);
 
   // Apply silence padding (prevents first/last word cutoff), natural fade-out, and optional ambient noise
-  const processedPcm = processVoiceAudio(pcmBuffer, 22050, settings.ambientNoise || null);
+  const processedPcm = processVoiceAudio(pcmBuffer, 22050, settings.ambientNoise || null, settings.ambientLevel || 5);
   const wavBuffer = pcmToWav(processedPcm);
 
   return {

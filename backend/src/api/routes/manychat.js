@@ -262,7 +262,7 @@ async function processManyChatPayload(payload, overrideCompany) {
       `SELECT id, manychat_api_key, operating_mode, bot_enabled,
               voice_enabled, voice_mode, voice_selected_id, voice_model,
               voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost,
-              voice_speed, voice_ambient_noise,
+              voice_speed, voice_ambient_noise, voice_ambient_level,
               meta_page_access_token, instagram_account_id
        FROM companies WHERE manychat_page_id = $1`,
       [pageId]
@@ -676,6 +676,7 @@ async function processManyChatPayload(payload, overrideCompany) {
                 speaker_boost: companyRow.voice_speaker_boost !== false,
                 speed: parseFloat(companyRow.voice_speed) || 1.0,
                 ambientNoise: companyRow.voice_ambient_noise || null,
+                ambientLevel: parseInt(companyRow.voice_ambient_level) || 5,
               });
               logger.info({ base64Length: ttsResult.audio_base64.length }, '[manychat/voice] Step 1 OK: WAV audio generated');
 

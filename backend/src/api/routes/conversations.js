@@ -412,7 +412,7 @@ router.post('/:conversationId/send-voice', async (req, res) => {
     });
 
     // Build public URL
-    const baseUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
+    const baseUrl = (process.env.BACKEND_URL || 'https://api.eightpath.dev').replace(/\/+$/, '');
     const audioPublicUrl = `${baseUrl}/public/attachments/${attachment.id}/${attachment.public_token}/voice-note.wav`;
 
     // Send to Instagram via ManyChat
@@ -436,8 +436,9 @@ router.post('/:conversationId/send-voice', async (req, res) => {
 
     res.json({ success: true, message_sent: text.trim(), audio_url: audioPublicUrl, is_voice: true });
   } catch (err) {
-    logger.error({ err: err.message }, '[conversations/send-voice] Error');
-    errorJson(res, 500, 'INTERNAL_ERROR', err.message);
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    logger.error({ err: err.message, status: err.response?.status, detail }, '[conversations/send-voice] Error');
+    errorJson(res, 500, 'INTERNAL_ERROR', detail);
   }
 });
 
