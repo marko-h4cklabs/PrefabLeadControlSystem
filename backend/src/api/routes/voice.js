@@ -38,7 +38,7 @@ router.get('/settings', async (req, res) => {
     const result = await pool.query(
       `SELECT voice_enabled, voice_mode, voice_model, voice_selected_id,
               voice_selected_name, voice_stability, voice_similarity_boost,
-              voice_style, voice_speaker_boost, voice_style_prompt
+              voice_style, voice_speaker_boost, voice_style_prompt, voice_speed
        FROM companies WHERE id = $1`,
       [req.tenantId]
     );
@@ -54,6 +54,7 @@ router.get('/settings', async (req, res) => {
       style: parseFloat(row.voice_style) ?? 0,
       speaker_boost: row.voice_speaker_boost !== false,
       voice_style_prompt: row.voice_style_prompt || '',
+      voice_speed: parseFloat(row.voice_speed) || 1.0,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -73,6 +74,7 @@ router.put('/settings', async (req, res) => {
       style,
       speaker_boost,
       voice_style_prompt,
+      voice_speed,
     } = req.body ?? {};
 
     const setParts = [];
@@ -94,6 +96,7 @@ router.put('/settings', async (req, res) => {
     addField('voice_style', style);
     addField('voice_speaker_boost', speaker_boost);
     addField('voice_style_prompt', voice_style_prompt);
+    addField('voice_speed', voice_speed);
 
     if (setParts.length === 0) return res.json({ success: true });
 
@@ -224,7 +227,7 @@ router.post('/test', async (req, res) => {
   try {
     const { text } = req.body ?? {};
     const companyRow = await pool.query(
-      'SELECT voice_selected_id, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost, voice_model FROM companies WHERE id = $1',
+      'SELECT voice_selected_id, voice_stability, voice_similarity_boost, voice_style, voice_speaker_boost, voice_model, voice_speed FROM companies WHERE id = $1',
       [req.tenantId]
     );
     const c = companyRow.rows[0] || {};
@@ -235,6 +238,7 @@ router.post('/test', async (req, res) => {
       similarity_boost: c.voice_similarity_boost,
       style: c.voice_style,
       speaker_boost: c.voice_speaker_boost,
+      speed: parseFloat(c.voice_speed) || 1.0,
     });
     res.json(audio);
   } catch (err) {
