@@ -123,7 +123,7 @@ function generateRestaurantAmbience(numSamples, sampleRate = 22050, level = 5) {
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.06;
   const alpha2 = 0.12;
-  const baseVolume = 100 + level * 100;
+  const baseVolume = 800 + level * 1200;
 
   for (let i = 0; i < numSamples; i++) {
     const noise = (Math.random() * 2 - 1) * baseVolume;
@@ -148,7 +148,7 @@ function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
   let lp1 = 0, lp2 = 0;
   const alpha1 = 0.03;  // ~65Hz — deep road rumble
   const alpha2 = 0.05;  // ~110Hz — engine drone layer
-  const baseVolume = 120 + level * 110;
+  const baseVolume = 1000 + level * 1400;
 
   // Pre-generate random "car pass" events
   const carPasses = [];
@@ -184,7 +184,7 @@ function generateTrafficNoise(numSamples, sampleRate = 22050, level = 5) {
  */
 function generateWhiteNoise(numSamples, sampleRate = 22050, level = 5) {
   const buffer = Buffer.alloc(numSamples * 2);
-  const baseVolume = 60 + level * 80;
+  const baseVolume = 600 + level * 1000;
 
   for (let i = 0; i < numSamples; i++) {
     const sample = Math.round((Math.random() * 2 - 1) * baseVolume);
